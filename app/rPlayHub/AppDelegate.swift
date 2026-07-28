@@ -355,9 +355,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if usbAttempts < 6 {
                 usbAttempts += 1
                 AppBuild.log("USB capture not ready (attempt \(usbAttempts)) — \(mirror.status)")
+                // Retry only the capture, not the whole connection. Calling reconnect() here
+                // tore down and rebuilt the CoreDevice viewer on every attempt, which showed up
+                // as a burst of "viewer connected" churn in the engine and had each new viewer
+                // arriving mid-stream.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
                     guard let self, self.usb == nil else { return }
-                    self.reconnect()
+                    if self.startUSBMirror() {
+                        // Capture took over, so stop pulling the engine's stream.
+                        self.stream?.stop()
+                        self.stream = nil
+                    }
                 }
                 return false
             }

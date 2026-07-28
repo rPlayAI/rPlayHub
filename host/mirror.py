@@ -541,14 +541,14 @@ class MirrorCore:
         # all. Restarting therefore turns "this viewer is blind" into "nobody gets video", which
         # is strictly worse. Say so instead.
         if self.video.irap_count > 0:
-            print("  viewer joined an already-running stream, so it missed the only keyframe the "
-                  "device sends. It cannot decode. Restart the engine to give it a fresh stream.")
+            print("  viewer joined an already-running stream — requesting a keyframe for it")
 
         rtcp = self.stream.get("rtcp") if self.stream else None
         if rtcp is None:
             return
-        # Already running, so this viewer missed the IDR. Ask anyway — it costs nothing — but the
-        # retry loop will report honestly that the device ignores it.
+        # This viewer missed the last keyframe, so ask for another. The device answers PLI once the
+        # request carries the SSRC it registered, so this now genuinely recovers a late joiner
+        # rather than being a hopeful no-op.
         threading.Thread(target=self._keyframe_retry_loop, args=(rtcp,),
                          name="keyframe-request", daemon=True).start()
 
