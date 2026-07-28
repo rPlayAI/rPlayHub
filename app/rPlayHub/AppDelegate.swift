@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hevc: HEVCStream?
     private var usb: USBMirror?
     private var usbAttempts = 0
+    private var idleFlush: Timer?
 
     private var recordItem: NSMenuItem?
     private var isRecording = false
@@ -416,6 +417,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.applySizing()
         }
         hevc = decoder
+
+        // Release a finished picture once the stream goes quiet, rather than leaving it to wait
+        // for the next one. Without this the newest frame is always one behind, and the moment
+        // motion stops the final frame is never displayed at all.
+        idleFlush?.invalidate()
+        idleFlush = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak decoder] _ in
+            decoder?.flushPendingIfIdle()
+        }
 
         let s = StreamClient(port: videoPort)
         s.onNAL = { [weak decoder] nal in decoder?.handle(nal: nal) }

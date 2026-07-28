@@ -134,6 +134,9 @@ final class HEVCStream {
     private(set) var awaitingKeyframe = true
 
     private var framesSubmitted: Int64 = 0
+    /// When the last NAL arrived, so a finished picture can be released once the stream goes quiet.
+    private var lastNALAt = CFAbsoluteTimeGetCurrent()
+    private let lock = NSLock()
     let decoder: VideoDecoder
 
     init(decoder: VideoDecoder) {
@@ -142,6 +145,9 @@ final class HEVCStream {
 
     func handle(nal: Data) {
         guard nal.count > codec.headerLength else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        lastNALAt = CFAbsoluteTimeGetCurrent()
         nalsSeen += 1
         let type = codec.nalType(nal)
 
@@ -170,6 +176,25 @@ final class HEVCStream {
             return
         }
         accessUnit.append(nal)
+    }
+
+    /// Release a finished picture that is only waiting for the next one to arrive.
+    ///
+    /// A picture is assembled when its first slice appears and submitted when the FOLLOWING
+    /// picture's first slice appears — which means the newest frame is always held back, and once
+    /// motion stops the last frame is never shown at all. On this device that is a whole frame of
+    /// latency during movement and a stale screen the moment it ends.
+    ///
+    /// Waiting for the stream to go quiet is what makes this safe: flushing the instant a slice
+    /// arrives would submit half of any multi-slice picture. This device sends exactly one slice
+    /// per picture (measured: 601 pictures, 601 first-slice NALs, no continuation slices), but the
+    /// idle test costs nothing and keeps the code honest for encoders that do not.
+    func flushPendingIfIdle(after seconds: Double = 0.02) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !accessUnit.isEmpty,
+              CFAbsoluteTimeGetCurrent() - lastNALAt >= seconds else { return }
+        flushAccessUnit()
     }
 
     /// Hold every parameter set as a C pointer for the duration of one call. Copying into owned

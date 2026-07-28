@@ -150,8 +150,12 @@ var decoded = 0
 var written = 0
 vt.onFrame = { picture in
     decoded += 1
-    // A handful spread through the clip: the first, then every 60th.
-    guard decoded == 1 || decoded % 60 == 0, written < 8 else { return }
+    // How many frames to write. The default is a spot check — the first, then every 60th, up to
+    // eight — because that is enough to see whether a stream is healthy. Set RPLAYHUB_FRAME_STRIDE=1
+    // to dump every frame when the whole sequence matters.
+    let every = Int(ProcessInfo.processInfo.environment["RPLAYHUB_FRAME_STRIDE"] ?? "") ?? 60
+    let cap = Int(ProcessInfo.processInfo.environment["RPLAYHUB_FRAME_LIMIT"] ?? "") ?? 8
+    guard decoded == 1 || decoded % every == 0, written < cap else { return }
     let lockRC = CVPixelBufferLockBaseAddress(picture, .readOnly)
     defer { CVPixelBufferUnlockBaseAddress(picture, .readOnly) }
     let w = CVPixelBufferGetWidth(picture)
