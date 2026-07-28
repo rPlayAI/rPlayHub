@@ -139,3 +139,50 @@ was portable.
 * Replaying the capture's video RTP through the engine's ack logic reproduces **all 594** of the
   frames Apple acknowledged and misses none (it adds 7 leading frames, which Apple skips only
   because its decoder had not started yet).
+
+---
+
+# Correction: PLI and FIR are NOT ignored — one bug was hiding three
+
+Earlier sections of this document state that this device ignores PLI and FIR, and that a stream
+carries exactly one IDR which can never be refreshed. **That is wrong**, and a lot of design was
+built on top of it. The record is corrected here rather than edited above, so the mistake and its
+consequences stay visible.
+
+The device discards RTCP that arrives from an SSRC it has not associated with the stream. Field 5.1
+of the offer is the receiver's SSRC — the device echoes it back in its answer as `RemoteSSRC` — and
+we were generating that field and our RTCP SSRC as two independent random numbers. So everything we
+sent was thrown away silently:
+
+| we sent | what we concluded | what was actually happening |
+|---|---|---|
+| PLI, FIR | "the device ignores RTCP feedback" | discarded: unregistered SSRC |
+| LTR-ACK | "acks are working" (`ltr_acked` was climbing) | discarded: same cause |
+
+`ltr_acked` counting up proved only that we were *sending*. That was the assumption worth checking
+and it went unchecked for a long time.
+
+With one SSRC used in both the offer and every RTCP packet, a keyframe now arrives after a single
+request:
+
+    keyframe arrived after 1 request(s) (pli=3 fir=3)
+
+## What that changes
+
+* **The stream is refreshable.** "One IDR per session" was a symptom, not a property. The engine now
+  requests a keyframe every few seconds (`RPLAY_KEYFRAME_EVERY_S`, default 3), so corruption from
+  the encoder's tight bitrate is flushed instead of persisting for the rest of the session. Measured
+  effect: a swipe still artefacts, then recovers, rather than staying broken.
+* **A late-joining viewer can recover.** Previously terminal — it had missed the only keyframe.
+* **The bitrate ceiling is unchanged.** This makes the picture *repair*, not become sharp. The
+  device still negotiates 1184×2544 at ~4 Mbps whatever we ask, and Device Hub gets the same. For a
+  genuinely clean picture the CoreMediaIO capture path (`app/rPlayHub/USBMirror.swift`) is the
+  answer, since it carries no such budget.
+
+## The lesson worth keeping
+
+Three separate mechanisms appeared broken in three different ways, and all three were one wire-level
+identity bug. Each apparent failure produced a plausible explanation that was wrong, and those
+explanations then drove real design decisions. What eventually found it was reading Apple's own
+captured answer field by field and noticing the same number in three places — not reasoning about
+behaviour.
