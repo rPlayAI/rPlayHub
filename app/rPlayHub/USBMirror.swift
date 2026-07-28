@@ -88,12 +88,25 @@ final class USBMirror: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     /// enumeration returns zero devices no matter what permissions or entitlements are granted.
     /// Must run before any device discovery.
     ///
-    /// Deliberately not setting AllowWirelessScreenCaptureDevices: that also enumerates any
-    /// iPhone the Mac is paired with over wifi, which can take precedence over the cabled one.
+    /// Wireless capture is opt-in via RPLAYHUB_WIRELESS_CAPTURE=1.
+    ///
+    /// The same plug-in can expose a wirelessly-connected device, which is the only way to get
+    /// this quality without a cable — the CoreDevice path is capped at 6 Mbps and garbles under
+    /// motion, cable or no cable. It is off by default because it also enumerates any iPhone the
+    /// Mac is merely paired with, which can take precedence over the tethered one. The muxed-only
+    /// filter is what keeps that safe: Continuity Camera is video-only, so it can never be picked
+    /// by mistake.
     private static func enableScreenCaptureDevices() {
+        setCMIOFlag(kCMIOHardwarePropertyAllowScreenCaptureDevices)
+        if ProcessInfo.processInfo.environment["RPLAYHUB_WIRELESS_CAPTURE"] == "1" {
+            setCMIOFlag(kCMIOHardwarePropertyAllowWirelessScreenCaptureDevices)
+        }
+    }
+
+    private static func setCMIOFlag(_ selector: Int) {
         var allow: UInt32 = 1
         var address = CMIOObjectPropertyAddress(
-            mSelector: CMIOObjectPropertySelector(kCMIOHardwarePropertyAllowScreenCaptureDevices),
+            mSelector: CMIOObjectPropertySelector(selector),
             mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
             mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain))
         CMIOObjectSetPropertyData(CMIOObjectID(kCMIOObjectSystemObject), &address,
