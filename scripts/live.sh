@@ -107,9 +107,16 @@ fi
 # revoked and valid, and xcodebuild picking a revoked one by name fails the whole build.
 SIGN_ID="${RPLAYHUB_SIGN_IDENTITY:-}"
 if [[ -z "$SIGN_ID" ]]; then
-    SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null \
-        | grep -v "CSSMERR_TP_CERT_REVOKED" \
-        | grep -oE "[0-9A-F]{40}" | head -1)
+    # As the invoking user, not root. This script runs under sudo, and root sees a different
+    # keychain -- which is how a revoked certificate got picked despite the filter: the marker
+    # that identifies it as revoked simply was not there in root's view.
+    _find_ids() { security find-identity -v -p codesigning 2>/dev/null; }
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        SIGN_ID=$(sudo -u "$SUDO_USER" security find-identity -v -p codesigning 2>/dev/null \
+            | grep -v "CSSMERR_TP_CERT_REVOKED" | grep -oE "[0-9A-F]{40}" | head -1)
+    else
+        SIGN_ID=$(_find_ids | grep -v "CSSMERR_TP_CERT_REVOKED" | grep -oE "[0-9A-F]{40}" | head -1)
+    fi
 fi
 if [[ -n "$SIGN_ID" ]]; then
     say "signing with identity $SIGN_ID (stable, so the camera grant survives rebuilds)"

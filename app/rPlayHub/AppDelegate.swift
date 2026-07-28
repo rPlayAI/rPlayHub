@@ -371,25 +371,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func connect() {
+        // The picture first, and independently of the engine.
+        //
+        // USB capture goes straight to the cable and needs nothing from the engine — but it used
+        // to sit behind the control connection, so an engine that failed to start took the video
+        // with it even though the two share nothing. That is exactly what happened when a tunnel
+        // died on startup: capture was never attempted at all.
+        //
+        // Preferred over the CoreDevice stream because that stream is capped by the device at
+        // 1184x2544 / 6 Mbps -- about 0.03 bits per pixel, which visibly falls apart the moment
+        // anything moves. Apple's Device Hub negotiates identical numbers and shows identical
+        // artefacting, so it is a property of that transport rather than something to fix.
+        let usbRunning = usb != nil || startUSBMirror()
+
         let c = ControlClient(port: controlPort)
         do {
             try c.connect()
         } catch {
+            // Control is how taps reach the phone, so its absence still deserves a retry — but
+            // not at the cost of a picture that is already working.
             scheduleRetry(because: "engine not reachable on port \(controlPort)")
             return
         }
         control = c
         view.control = c
 
-        // Prefer the USB capture path when a cable is present. Both paths end at the same layer,
-        // so this is purely about which produces the picture.
-        //
-        // The CoreDevice stream is capped by the device at 1184x2544 / 6 Mbps, which is about
-        // 0.03 bits per pixel and visibly falls apart the moment anything moves. Apple's own
-        // Device Hub negotiates the identical numbers and shows the identical artefacting, so it
-        // is a property of that transport rather than something to fix. The capture plug-in is
-        // built for screen recording and carries no such budget.
-        if startUSBMirror() { return }
+        if usbRunning { return }
 
         // Decode is explicit and unconditional; the layer only ever shows the newest picture.
         let vt = VideoDecoder()
