@@ -17,9 +17,15 @@
 #include <signal.h>
 
 #include "../core/rp_coredevice.h"
+#include "media.h"
 #include "../core/rp_xpc.h"
 
 static api_session *g_session;
+
+/* The live stream and its viewers. Declared here because stream_info reports on them and is
+ * defined above the fan-out that owns them. */
+static media_session *g_media;
+static int viewer_count;
 
 /* ------------------------------------------------------------------ tiny JSON helpers
  *
@@ -393,13 +399,106 @@ static void method_stream_info(int fd, long id)
     const api_session *s = g_session;
     /* Honest zeros. The media stream is not implemented in C yet, and reporting plausible
      * numbers for a stream that does not exist would make the app look connected to nothing. */
+    uint64_t packets = 0, nals = 0, keys = 0, lost = 0, acks = 0;
+    double mbps = 0;
+    media_stats(g_media, &packets, &nals, &keys, &lost, &acks, &mbps);
+    double loss_pct = (packets + lost) ? 100.0 * (double)lost / (double)(packets + lost) : 0.0;
     send_line(fd,
               "{\"id\":%ld,\"ok\":true,\"result\":{"
-              "\"port\":%d,\"codec\":\"hevc\",\"container\":\"annexb\",\"viewers\":0,"
-              "\"nals\":0,\"rtp_packets\":0,\"keyframes\":0,\"loss_pct\":0.0,\"mbps\":0.0,"
-              "\"engine\":\"cdhostd\",\"streaming\":false,"
+              "\"port\":%d,\"codec\":\"hevc\",\"container\":\"annexb\",\"viewers\":%d,"
+              "\"nals\":%llu,\"rtp_packets\":%llu,\"keyframes\":%llu,\"rtp_lost\":%llu,"
+              "\"loss_pct\":%.2f,\"mbps\":%.2f,\"ltr_acked\":%llu,"
+              "\"engine\":\"cdhostd\",\"streaming\":%s,"
               "\"display_service_port\":%ld,\"hid_service_port\":%ld}}",
-              id, STREAM_PORT, s->display_port, s->hid_port);
+              id, STREAM_PORT, viewer_count,
+              (unsigned long long)nals, (unsigned long long)packets,
+              (unsigned long long)keys, (unsigned long long)lost,
+              loss_pct, mbps, (unsigned long long)acks,
+              g_media ? "true" : "false", s->display_port, s->hid_port);
+}
+
+/* ------------------------------------------------------------------ video fan-out
+ *
+ * Viewers get the cached parameter sets and the most recent keyframe first, then the live NALs.
+ * Without that a viewer joining mid-stream has nothing to configure a decoder with and shows
+ * nothing at all.
+ */
+#define MAX_VIEWERS 8
+
+static pthread_mutex_t viewers_lock = PTHREAD_MUTEX_INITIALIZER;
+static int viewers[MAX_VIEWERS];
+
+/* Cached so a late viewer can start decoding. */
+static uint8_t param_cache[4096];
+static size_t  param_len;
+static uint8_t keyframe_cache[RP_RTP_MAX_NAL + 4];
+static size_t  keyframe_len;
+
+static void viewers_write(const uint8_t *data, size_t len)
+{
+    pthread_mutex_lock(&viewers_lock);
+    for (int i = 0; i < viewer_count; ) {
+        size_t off = 0;
+        int dead = 0;
+        while (off < len) {
+            ssize_t w = send(viewers[i], data + off, len - off, 0);
+            if (w <= 0) { dead = 1; break; }
+            off += (size_t)w;
+        }
+        if (dead) {
+            close(viewers[i]);
+            viewers[i] = viewers[--viewer_count];
+        } else i++;
+    }
+    pthread_mutex_unlock(&viewers_lock);
+}
+
+static void on_media_nal(void *ctx, const uint8_t *annexb, size_t len,
+                         int is_parameter_set, int is_keyframe)
+{
+    (void)ctx;
+    if (is_parameter_set) {
+        /* Parameter sets accumulate: VPS, SPS and PPS are three separate NALs and a decoder
+         * needs all three. Reset when one repeats, which is how a new set is signalled. */
+        if (param_len + len > sizeof param_cache) param_len = 0;
+        memcpy(param_cache + param_len, annexb, len);
+        param_len += len;
+    } else if (is_keyframe && len <= sizeof keyframe_cache) {
+        memcpy(keyframe_cache, annexb, len);
+        keyframe_len = len;
+    }
+    viewers_write(annexb, len);
+}
+
+static void viewer_add(int fd)
+{
+    pthread_mutex_lock(&viewers_lock);
+    if (viewer_count >= MAX_VIEWERS) { pthread_mutex_unlock(&viewers_lock); close(fd); return; }
+    viewers[viewer_count++] = fd;
+    pthread_mutex_unlock(&viewers_lock);
+
+    /* Prime this viewer so it can decode from its first frame. */
+    if (param_len) send(fd, param_cache, param_len, 0);
+    if (keyframe_len) send(fd, keyframe_cache, keyframe_len, 0);
+}
+
+/* The stream is deferred until someone is watching, because the device sends its only unprompted
+ * IDR at stream start -- starting early means the first viewer misses it. */
+static void ensure_media(void)
+{
+    if (g_media) return;
+    const api_session *s = g_session;
+    if (!s->display_port) { printf("  no displayservice port; cannot stream\n"); return; }
+    media_config cfg = {
+        .device_addr = s->tunnel_addr,
+        .our_addr = s->our_addr,
+        .display_port = s->display_port,
+        .ssrc = s->ssrc,
+        .keyframe_every_s = s->keyframe_every_s,
+    };
+    printf("  starting the media stream (viewer connected)\n");
+    g_media = media_start(&cfg, on_media_nal, NULL);
+    if (!g_media) printf("  media stream failed to start\n");
 }
 
 /* ------------------------------------------------------------------ server */
@@ -502,7 +601,7 @@ int api_serve(api_session *session)
         return -1;
     }
     printf("  control: 127.0.0.1:%d (JSON lines)\n", API_PORT);
-    printf("  video:   127.0.0.1:%d (no stream yet -- media negotiation is still Python-only)\n",
+    printf("  video:   127.0.0.1:%d (Annex-B; the stream starts when a viewer connects)\n",
            STREAM_PORT);
 
     for (;;) {
@@ -529,7 +628,13 @@ int api_serve(api_session *session)
              * retries in a loop, so refusing would look like a broken engine rather than one
              * whose streaming is not written yet. */
             int fd = accept(video_fd, NULL, NULL);
-            if (fd >= 0) printf("  video viewer connected (nothing to send yet)\n");
+            if (fd >= 0) {
+                int one = 1;
+                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+                printf("  viewer connected (%d total)\n", viewer_count + 1);
+                ensure_media();
+                viewer_add(fd);
+            }
         }
     }
     close(api_fd);

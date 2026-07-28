@@ -639,7 +639,18 @@ int main(void) {
     session.device_name = devname;
     session.product_version = prodver;
     session.tunnel_addr = addr;
+    session.our_addr = ours;
     session.rsd_port = rsd;
+    /* ONE identity for this receiver. It goes into the offer as field 5.1, the device echoes it
+     * back as RemoteSSRC, and every RTCP packet must carry it. Deriving both from this single
+     * value is what stops them drifting apart -- when they did, the device silently discarded
+     * every ack, PLI and FIR we sent. */
+    session.ssrc = (uint32_t)(time(NULL) ^ (uintptr_t)&session);
+    if (!session.ssrc) session.ssrc = 1;
+    {
+        const char *k = getenv("RPLAY_KEYFRAME_EVERY_S");
+        session.keyframe_every_s = k ? atof(k) : 3.0;
+    }
     if (rsd_enumerate(addr, rsd, &session) < 0)
         fprintf(stderr, "  service discovery failed\n");
 

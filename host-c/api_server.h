@@ -31,6 +31,12 @@ typedef struct {
     long        screenshot_port;
     long        display_port;
     long        hid_port;
+
+    /* Needed to negotiate the media stream: the offer carries our address, and the SSRC in it
+     * must be the same value the RTCP session uses. */
+    const char *our_addr;
+    uint32_t    ssrc;
+    double      keyframe_every_s;
 } api_session;
 
 /* Serve until the process is killed. Returns non-zero if the listeners could not be created. */

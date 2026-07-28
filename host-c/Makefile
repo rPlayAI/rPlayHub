@@ -50,14 +50,15 @@ endif
 # no Apple headers -- which is what lets the same objects build on Linux and Windows.
 CORE_DIR := ../core
 CORE_SRC := $(CORE_DIR)/rp_xpc.c $(CORE_DIR)/rp_http2.c $(CORE_DIR)/rp_remotexpc.c \
-            $(CORE_DIR)/rp_coredevice.c
+            $(CORE_DIR)/rp_coredevice.c $(CORE_DIR)/rp_media_offer.c \
+            $(CORE_DIR)/rp_rtp.c $(CORE_DIR)/rp_rtcp.c
 CFLAGS   += -I$(CORE_DIR)
 
 all: cdhost
 
-cdhost: cdhost.c api_server.c $(CORE_SRC) $(TLS_SRC)
+cdhost: cdhost.c api_server.c media.c $(CORE_SRC) $(TLS_SRC)
 	@echo "  TLS backend: $(TLS)"
-	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c $(CORE_SRC) $(TLS_SRC) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c $(CORE_SRC) $(TLS_SRC) $(LDFLAGS) -lz
 
 clean:
 	rm -f cdhost
