@@ -19,8 +19,17 @@ LLDB=$(command -v lldb || echo /usr/bin/lldb)
 cat > /tmp/vt.lldb <<EOF
 process attach --pid $PID
 command script import $DIR/dump_vt.py
+
 breakpoint set -n VTDecompressionSessionDecodeFrame
 breakpoint command add -F dump_vt.on_decode
+breakpoint set -n VTDecompressionSessionDecodeFrameWithOutputHandler
+breakpoint command add -F dump_vt.on_decode
+
+breakpoint set -n "-[AVSampleBufferDisplayLayer enqueueSampleBuffer:]"
+breakpoint command add -F dump_vt.on_enqueue
+breakpoint set -n "-[AVSampleBufferVideoRenderer enqueueSampleBuffer:]"
+breakpoint command add -F dump_vt.on_enqueue
+
 continue
 EOF
 

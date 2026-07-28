@@ -39,9 +39,21 @@ def _u64(proc, addr):
 
 
 def on_decode(frame, loc, d):
-    sbuf = frame.FindRegister("x1").GetValueAsUnsigned()   # arg2 = CMSampleBufferRef
+    # C func VTDecompressionSessionDecodeFrame(session, sampleBuffer, ...) -> sbuf = x1
+    return _dump(frame, frame.FindRegister("x1").GetValueAsUnsigned(), "VTDecode")
+
+
+def on_enqueue(frame, loc, d):
+    # ObjC -[... enqueueSampleBuffer:] -> self=x0 _cmd=x1 sampleBuffer=x2
+    return _dump(frame, frame.FindRegister("x2").GetValueAsUnsigned(), "enqueue")
+
+
+def _dump(frame, sbuf, who):
     if not sbuf:
         return False
+    if not st.get("api"):
+        st["api"] = who
+        print(f"[vtdump] decode path = {who}")
     proc = frame.GetThread().GetProcess()
 
     # VPS/SPS/PPS from the format description — once
