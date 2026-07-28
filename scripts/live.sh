@@ -171,11 +171,11 @@ fi
 # Surface a recorded camera denial, because it is invisible otherwise: the app falls back to the
 # CoreDevice stream and simply looks worse, with nothing on screen to say why. The grant is what
 # unlocks the capture path, and TCC will not prompt again once a refusal is stored.
-if [[ -f "$ROOT/logs/app.log" ]] && tail -5 "$ROOT/logs/app.log" 2>/dev/null | grep -q "camera permission denied"; then
-    say "camera access is DENIED for rPlayHub, so USB capture cannot run."
-    printf '    the good picture needs it back:\n      tccutil reset Camera com.rplay.rplayhub\n'
-    printf '    then rerun this and grant the prompt.\n'
-fi
+# Start each run with a clean app log, so anything reported below is from THIS run. The previous
+# version warned about a stale denial from a run that had already been fixed.
+mkdir -p "$ROOT/logs"
+: > "$ROOT/logs/app.log" 2>/dev/null || true
+chown "${SUDO_USER:-root}" "$ROOT/logs/app.log" 2>/dev/null || true
 
 say "opening rPlayHub"
 # As the invoking user, never as root.
@@ -185,7 +185,11 @@ say "opening rPlayHub"
 # resetting the camera permission changed nothing and no dialog ever appeared: the request could
 # never reach the user. Same reason the build had to drop privileges to reach the keychain.
 if [[ -n "${SUDO_USER:-}" ]]; then
-    sudo -u "$SUDO_USER" open "$APP_BUILD"
+    # launchctl asuser, not just sudo -u. Dropping the uid is not sufficient: the process must be
+    # placed inside the user's GUI login session, and only there can TCC show a prompt. Launched
+    # any other way from a root script the app is simply denied, silently and permanently, which
+    # is exactly how the camera permission became impossible to grant.
+    launchctl asuser "$(id -u "$SUDO_USER")" sudo -u "$SUDO_USER" open "$APP_BUILD"
 else
     open "$APP_BUILD"
 fi
@@ -202,6 +206,14 @@ rplay_env() {
 if [[ -n "$(rplay_env)" ]]; then
     say "experiment knobs: $(rplay_env | sed 's/^env //')"
 fi
+( sleep 4
+  if grep -q "camera permission denied" "$ROOT/logs/app.log" 2>/dev/null; then
+      say "camera access is denied, so USB capture cannot run — the picture will be the capped one."
+      printf '    to fix:  tccutil reset Camera com.rplay.rplayhub   then rerun and grant the prompt\n'
+  elif grep -q "USB capture started" "$ROOT/logs/app.log" 2>/dev/null; then
+      say "USB capture is live — the picture is coming from the cable, not the capped stream"
+  fi ) &
+
 say "starting the engine as root (Ctrl-C to stop)"
 echo
 if [[ ${#ARGS[@]} -gt 0 ]]; then
