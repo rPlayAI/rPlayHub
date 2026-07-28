@@ -586,7 +586,6 @@ def describe_answer(answer):
         if fa == 4 and fb == 5 and 240 <= va <= 8192 and 240 <= vb <= 8192:
             size = (va, vb)
             break
-    ceiling = max((v for f, v in fields if 1_000_000 <= v <= 200_000_000), default=None)
 
     print(f"  device answer: {len(raw)} bytes of protobuf")
     if size:
@@ -597,8 +596,10 @@ def describe_answer(answer):
         print(f"    coded size: {w}x{h}   ~{bpp:.3f} bits/pixel at 4 Mbps/45fps"
               + ("   <- unchanged; the request did not take" if (w, h) == (1184, 2544) else
                  "   <- CHANGED"))
-    if ceiling:
-        print(f"    bitrate ceiling: {ceiling / 1e6:.0f} Mbps")
+    # Deliberately not reporting a "bitrate ceiling" here. The answer echoes part of our own tier
+    # table, so the largest value in it varies run to run (75 Mbps, then 100 Mbps) and reflects
+    # what we offered rather than what the device granted. The measured peak in the health line is
+    # the honest number; this one only looked authoritative.
     seen = [f"f{f}={v}" for f, v in fields
             if 200 <= v <= 4096 or 100_000 <= v <= 200_000_000]
     if seen:
