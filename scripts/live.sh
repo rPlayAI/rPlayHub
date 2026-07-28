@@ -168,6 +168,15 @@ if pgrep -x rPlayHub >/dev/null; then
     pkill -x rPlayHub || true
     sleep 1
 fi
+# Surface a recorded camera denial, because it is invisible otherwise: the app falls back to the
+# CoreDevice stream and simply looks worse, with nothing on screen to say why. The grant is what
+# unlocks the capture path, and TCC will not prompt again once a refusal is stored.
+if [[ -f "$ROOT/logs/app.log" ]] && tail -5 "$ROOT/logs/app.log" 2>/dev/null | grep -q "camera permission denied"; then
+    say "camera access is DENIED for rPlayHub, so USB capture cannot run."
+    printf '    the good picture needs it back:\n      tccutil reset Camera com.rplay.rplayhub\n'
+    printf '    then rerun this and grant the prompt.\n'
+fi
+
 say "opening rPlayHub"
 open "$APP_BUILD"
 
