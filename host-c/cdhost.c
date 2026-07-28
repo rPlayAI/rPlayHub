@@ -28,6 +28,7 @@
 #include <pthread.h>
 
 #include "../core/rp_remotexpc.h"
+#include "api_server.h"
 #include "../core/rp_xpc.h"
 
 #define USBMUXD_SOCKET "/var/run/usbmuxd"
@@ -486,7 +487,7 @@ static int rsd_connect(const char *addr, long port)
 }
 
 /* Ask RSD what the device offers, and print it. Returns the number of services, or -1. */
-static int rsd_enumerate(const char *addr, long port)
+static int rsd_enumerate(const char *addr, long port, api_session *out)
 {
     int fd = rsd_connect(addr, port);
     if (fd < 0) { fprintf(stderr, "  cannot connect to [%s]:%ld\n", addr, port); return -1; }
@@ -558,9 +559,16 @@ static int rsd_enumerate(const char *addr, long port)
         if (rp_xpc_dict_get(&services, want[i], &svc) == 0 &&
             rp_xpc_dict_get(&svc, "Port", &portv) == 0) {
             const char *ps = NULL;
-            if (rp_xpc_get_string(&portv, &ps) == 0) printf("    %-46s port %s\n", want[i], ps);
-            else if (rp_xpc_get_uint64(&portv, &p) == 0) printf("    %-46s port %llu\n",
-                                                                want[i], (unsigned long long)p);
+            long resolved = 0;
+            if (rp_xpc_get_string(&portv, &ps) == 0) { resolved = strtol(ps, NULL, 10);
+                printf("    %-46s port %s\n", want[i], ps); }
+            else if (rp_xpc_get_uint64(&portv, &p) == 0) { resolved = (long)p;
+                printf("    %-46s port %llu\n", want[i], (unsigned long long)p); }
+            if (out) {
+                if (i == 0) out->screenshot_port = resolved;
+                else if (i == 1) out->display_port = resolved;
+                else out->hid_port = resolved;
+            }
         } else {
             printf("    %-46s MISSING\n", want[i]);
         }
@@ -587,10 +595,13 @@ int main(void) {
     char type[128];
     lockdown_simple(&lk, "QueryType", NULL, NULL, "Type", type, sizeof type);
     printf("  QueryType: %s\n", type);
+    static char devname[256] = "?", prodver[64] = "?";
     const char *keys[] = {"DeviceName", "ProductType", "ProductVersion", "BuildVersion", "UniqueChipID"};
     for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
         char val[256] = "?"; lockdown_get_value(&lk, keys[i], val, sizeof val);
         printf("  %-15s = %s\n", keys[i], val);
+        if (!strcmp(keys[i], "DeviceName")) snprintf(devname, sizeof devname, "%s", val);
+        if (!strcmp(keys[i], "ProductVersion")) snprintf(prodver, sizeof prodver, "%s", val);
     }
 
     printf("\n== Layer 1.5: TLS session ==\n");
@@ -650,10 +661,21 @@ int main(void) {
                pump.failed ? pump.reason : strerror(errno));
 
     printf("\n== Layer 3b: RSD over RemoteXPC ==\n");
-    if (rsd_enumerate(addr, rsd) < 0)
+    static api_session session;
+    session.udid = udid;
+    session.device_name = devname;
+    session.product_version = prodver;
+    session.tunnel_addr = addr;
+    session.rsd_port = rsd;
+    if (rsd_enumerate(addr, rsd, &session) < 0)
         fprintf(stderr, "  service discovery failed\n");
 
-    printf("\n  Ctrl-C to tear down. tx/rx packets shown every 2s.\n");
+    printf("\n== Layer 4: daemon ==\n");
+    /* Same ports and same JSON contract as the Python engine, so the existing app connects to
+     * this without being told which engine it reached. That is what makes the port checkable a
+     * method at a time rather than all at once. */
+    api_serve(&session);
+
     while (!pump.failed) {
         sleep(2);
         printf("  pump: tx=%lu rx=%lu\n", pump.tx, pump.rx);

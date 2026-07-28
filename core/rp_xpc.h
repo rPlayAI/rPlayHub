@@ -87,6 +87,14 @@ void rp_xpc_data(rp_xpc_writer *w, const void *bytes, size_t n);
 void rp_xpc_uuid(rp_xpc_writer *w, const uint8_t uuid[16]);
 void rp_xpc_null(rp_xpc_writer *w);
 
+/* Splice an already-encoded object in as one value.
+ *
+ * Needed wherever a generic layer has to carry a payload whose shape it does not know: the
+ * CoreDevice envelope wraps each feature's arguments without understanding them, and re-encoding
+ * would mean that envelope having to know every feature. The bytes must be exactly one complete
+ * XPC object -- the writer counts it as a single entry and does not validate it. */
+void rp_xpc_raw(rp_xpc_writer *w, const uint8_t *object, size_t n);
+
 /* Convenience: key + value in one call. */
 void rp_xpc_set_string(rp_xpc_writer *w, const char *key, const char *value);
 void rp_xpc_set_uint64(rp_xpc_writer *w, const char *key, uint64_t value);

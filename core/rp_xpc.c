@@ -92,6 +92,14 @@ void rp_xpc_string(rp_xpc_writer *w, const char *value)
     pad4(w);
 }
 
+void rp_xpc_raw(rp_xpc_writer *w, const uint8_t *object, size_t n)
+{
+    bump(w);
+    put(w, object, n);
+    /* No pad4: a well-formed object is already aligned, and padding one that is not would only
+     * hide the corruption further downstream. */
+}
+
 void rp_xpc_uint64(rp_xpc_writer *w, uint64_t v)
 {
     bump(w); put_u32(w, RP_XPC_UINT64); put_u64(w, v);
