@@ -141,10 +141,11 @@ final class USBMirror: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 
     func start() -> Bool {
-        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
-            status = "camera permission \(Self.authorizationDescription)"
-            return false
-        }
+        // Deliberately NOT gating on the authorization status. The tethered phone arrives through
+        // the camera subsystem, so a refusal is expected to block it — but "expected" is not
+        // "verified", and refusing to try turns a guess into a dead end that reports the wrong
+        // reason. Attempt the capture and let the real failure speak; the status string carries
+        // the permission state either way, so a genuine TCC denial is still legible.
         guard let device = Self.availableDevice() else {
             let muxed = AVCaptureDevice.devices(for: .muxed).count
             status = muxed == 0
@@ -153,8 +154,12 @@ final class USBMirror: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
                 : "\(muxed) muxed device(s) present but none looked like an iPhone"
             return false
         }
-        guard let input = try? AVCaptureDeviceInput(device: device) else {
-            status = "could not open \(device.localizedName)"
+        let input: AVCaptureDeviceInput
+        do {
+            input = try AVCaptureDeviceInput(device: device)
+        } catch {
+            status = "could not open \(device.localizedName): \(error.localizedDescription) "
+                   + "[camera permission \(Self.authorizationDescription)]"
             return false
         }
 

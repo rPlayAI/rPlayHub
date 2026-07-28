@@ -329,12 +329,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // reconnect once the answer arrives and the next attempt will take the USB path.
         AppBuild.log("USB capture: camera permission is \(USBMirror.authorizationDescription); "
                      + "\(USBMirror.muxedDeviceSummary)")
+        // Ask if we have never asked, but do not wait for the answer or make it a precondition —
+        // try the capture regardless and report what actually fails.
         if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
             USBMirror.requestAuthorization { [weak self] granted in
                 AppBuild.log("camera permission \(granted ? "granted" : "refused")")
                 if granted { self?.reconnect() }
             }
-            return false
         }
         let mirror = USBMirror()
         mirror.onFrame = { [weak self] picture in self?.view.displayLayer.present(picture) }
