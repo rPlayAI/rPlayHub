@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var usb: USBMirror?
     private var usbAttempts = 0
     private var idleFlush: Timer?
+    private var askedForCamera = false
 
     private var recordItem: NSMenuItem?
     private var isRecording = false
@@ -328,16 +329,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startUSBMirror() -> Bool {
         // Prompt on first run. Asking is asynchronous, so a fresh grant cannot help this attempt —
         // reconnect once the answer arrives and the next attempt will take the USB path.
-        AppBuild.log("USB capture: camera permission is \(USBMirror.authorizationDescription); "
+        // Raw value, not my interpretation of it: 0 notDetermined, 1 restricted, 2 denied,
+        // 3 authorized. The friendly string said "denied" while TCC held no record for this
+        // bundle at all, and those cannot both be true — so log the number AVFoundation actually
+        // returns, and whether asking changes it.
+        let raw = AVCaptureDevice.authorizationStatus(for: .video).rawValue
+        AppBuild.log("USB capture: authorizationStatus raw=\(raw) "
+                     + "(0 notDetermined, 1 restricted, 2 denied, 3 authorized); "
                      + "\(USBMirror.muxedDeviceSummary)")
-        // Ask if we have never asked, but do not wait for the answer or make it a precondition —
-        // try the capture regardless and report what actually fails.
-        if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
-            USBMirror.requestAuthorization { [weak self] granted in
-                AppBuild.log("camera permission \(granted ? "granted" : "refused")")
-                if granted { self?.reconnect() }
+        // Ask ONCE per launch, and only when the answer is still open.
+        //
+        // Asking repeatedly is not free: a process with no GUI session to draw a prompt in gets an
+        // immediate denial, and that denial is recorded permanently. The retry loop below runs
+        // several times a second, so an unconditional request here burned the undecided state on
+        // the first attempt and left a denial that looked like the user had refused.
+        if raw == AVAuthorizationStatus.notDetermined.rawValue, !askedForCamera {
+            askedForCamera = true
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                AppBuild.log("requestAccess returned \(granted) "
+                             + "(status now \(AVCaptureDevice.authorizationStatus(for: .video).rawValue))")
+                if granted { DispatchQueue.main.async { self?.reconnect() } }
             }
         }
+        // Ask if we have never asked, but do not wait for the answer or make it a precondition —
+        // try the capture regardless and report what actually fails.
         let mirror = USBMirror()
         mirror.onFrame = { [weak self] picture in self?.view.displayLayer.present(picture) }
         mirror.onSize = { [weak self] size in

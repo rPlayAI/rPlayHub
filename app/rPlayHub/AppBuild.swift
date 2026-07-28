@@ -18,7 +18,12 @@ enum AppBuild {
     /// whether it was permission, no cable, or a bug. A file we control always works.
     static func log(_ message: String) {
         let line = "\(stampNow) \(message)\n"
-        FileManager.default.createFile(atPath: logPath, contents: nil)
+        // Create only if absent. createFile() truncates an existing file, so calling it on every
+        // write meant the log held exactly one line -- the most recent -- and every earlier line
+        // was destroyed. That hid the sequence this file exists to record.
+        if !FileManager.default.fileExists(atPath: logPath) {
+            FileManager.default.createFile(atPath: logPath, contents: nil)
+        }
         if let h = FileHandle(forWritingAtPath: logPath) {
             h.seekToEndOfFile()
             h.write(Data(line.utf8))
