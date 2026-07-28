@@ -14,7 +14,7 @@ committed to in C or Swift.
 |---|---|---|
 | 0 usbmux | ✅ `cdhost.c` | list devices, connect-to-port |
 | 1 lockdown | ✅ `cdhost.c` | QueryType, GetValue (real device info) |
-| 1.5 TLS session | ✅ `cdhost.c` | OpenSSL client-cert from the usbmuxd pair record |
+| 1.5 TLS session | ✅ `tls_openssl.c` | client-cert from the usbmuxd pair record; `tls_mbedtls.c` builds but see below |
 | 2 CoreDevice tunnel | ✅ `cdhost.c` | `CDTunnel` magic + u16 + JSON handshake |
 | 3a utun + packet pump | ✅ `cdhost.c` | needs root; RSD then reachable with an ordinary socket |
 | 3 RemoteXPC + XPC codec | ✅ `../core/rp_remotexpc.c` | handshake is **byte-identical** to the Python (195 bytes) |
@@ -53,3 +53,23 @@ Pair-Verify flow and the better primary crib.
 
 Same ground truth as `../host/README.md`: usbmux unix-socket plist framing, lockdown
 `<u32 be len><XML plist>`, usbmux `PortNumber` in network byte order.
+
+## TLS backend
+
+Selectable at build time, because the choice is not obvious and because swapping it is the way to
+*test* a suspicion rather than argue about it:
+
+    make                # OpenSSL (default)
+    make TLS=mbedtls    # vendored ../deps/mbedtls, built from source
+
+mbedtls is what `~/rplay` and `~/carplay-dev` use, and it is what makes the Linux and Windows ports
+tractable — no system library to find, no version skew, no shipping question.
+
+**It does not work yet for lockdown.** Measured against a real pair record, mbedtls rejects Apple's
+host certificate with `-0x23E0` = `X509_INVALID_NAME` + `ASN1_OUT_OF_DATA`; the private key parses
+fine. mbedtls is stricter than OpenSSL about the subject/issuer name encoding Apple uses. No config
+flag changes that — it needs a permissive parse or converting the identity before handing it over.
+So OpenSSL remains the default and mbedtls is a working skeleton with one known blocker.
+
+Worth knowing for the ports: this blocker is in the **lockdown** path only. The tunnel, RemoteXPC
+and every service call above it are plain sockets and carry no TLS of their own.

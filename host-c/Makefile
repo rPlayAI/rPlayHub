@@ -9,18 +9,40 @@
 
 UNAME := $(shell uname)
 
+# TLS backend: openssl (default) or mbedtls.
+#
+#   make TLS=mbedtls
+#
+# mbedtls is what ~/rplay and ~/carplay-dev use, vendored at ../deps/mbedtls, and it is what makes
+# the Linux and Windows ports tractable -- built from source, no system dependency to find. It is
+# also the swap to make if the transport is ever suspected of corrupting data, which is a
+# measurement rather than an argument.
+TLS ?= openssl
+MBEDTLS_ROOT ?= ../deps/mbedtls
+
 SDK_ROOT     ?= ../deps/AccessorySDK
 SDK_SUPPORT  := $(SDK_ROOT)/Support
 SDK_EXTERNAL := $(SDK_ROOT)/External
 
 CFLAGS  += -Wall -Wextra -O2
 ifeq ($(UNAME),Darwin)
-  OPENSSL ?= /opt/homebrew/opt/openssl@3
-  CFLAGS  += -I$(OPENSSL)/include
-  LDFLAGS += -framework CoreFoundation -L$(OPENSSL)/lib -lssl -lcrypto
+  LDFLAGS += -framework CoreFoundation
 else
   CFLAGS  += -I$(SDK_SUPPORT) -I$(SDK_EXTERNAL)
-  LDFLAGS += -lssl -lcrypto -lpthread
+  LDFLAGS += -lpthread
+endif
+
+ifeq ($(TLS),mbedtls)
+  # Compiled from the vendored source rather than linked against a system library, so the same
+  # command works on every platform.
+  MBEDTLS_SRC := $(wildcard $(MBEDTLS_ROOT)/library/*.c)
+  CFLAGS  += -I$(MBEDTLS_ROOT)/include -I$(MBEDTLS_ROOT)/library
+  TLS_SRC := tls_mbedtls.c $(MBEDTLS_SRC)
+else
+  OPENSSL ?= /opt/homebrew/opt/openssl@3
+  CFLAGS  += -I$(OPENSSL)/include
+  LDFLAGS += -L$(OPENSSL)/lib -lssl -lcrypto
+  TLS_SRC := tls_openssl.c
 endif
 
 # The protocol core is shared with the app and the ports, so it is compiled from ../core rather
@@ -33,8 +55,9 @@ CFLAGS   += -I$(CORE_DIR)
 
 all: cdhost
 
-cdhost: cdhost.c api_server.c $(CORE_SRC)
-	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c $(CORE_SRC) $(LDFLAGS)
+cdhost: cdhost.c api_server.c $(CORE_SRC) $(TLS_SRC)
+	@echo "  TLS backend: $(TLS)"
+	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c $(CORE_SRC) $(TLS_SRC) $(LDFLAGS)
 
 clean:
 	rm -f cdhost

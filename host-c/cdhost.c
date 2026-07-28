@@ -10,9 +10,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <arpa/inet.h>
-#include <openssl/err.h>
-#include <openssl/pem.h>
-#include <openssl/ssl.h>
+#include "tls.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,12 +36,12 @@
 #define CDTUNNEL_MAGIC "CDTunnel"
 
 // ============================ connection (raw fd or TLS) ============================
-typedef struct { int fd; SSL *ssl; } conn_t;
+typedef struct { int fd; rp_tls_conn *tls; } conn_t;
 
 static int cwrite(conn_t *c, const void *buf, size_t n) {
     size_t off = 0;
     while (off < n) {
-        ssize_t r = c->ssl ? SSL_write(c->ssl, (const char *)buf + off, (int)(n - off))
+        ssize_t r = c->tls ? rp_tls_write(c->tls, (const char *)buf + off, n - off)
                            : send(c->fd, (const char *)buf + off, n - off, 0);
         if (r <= 0) return -1;
         off += (size_t)r;
@@ -53,7 +51,7 @@ static int cwrite(conn_t *c, const void *buf, size_t n) {
 static int cread_n(conn_t *c, void *buf, size_t n) {
     size_t off = 0;
     while (off < n) {
-        ssize_t r = c->ssl ? SSL_read(c->ssl, (char *)buf + off, (int)(n - off))
+        ssize_t r = c->tls ? rp_tls_read(c->tls, (char *)buf + off, n - off)
                            : recv(c->fd, (char *)buf + off, n - off, 0);
         if (r <= 0) return -1;
         off += (size_t)r;
@@ -199,40 +197,16 @@ static CFDictionaryRef usbmux_read_pair_record(const char *udid) {
 }
 
 // ============================ Layer 1.5: TLS via OpenSSL ============================
-static SSL_CTX *ctx_from_pairrecord(CFDictionaryRef pr) {
+static rp_tls_ctx *ctx_from_pairrecord(CFDictionaryRef pr) {
     CFIndex clen = 0, klen = 0;
     const uint8_t *cert = dict_get_bytes(pr, "HostCertificate", &clen);
     const uint8_t *key = dict_get_bytes(pr, "HostPrivateKey", &klen);
     if (!cert || !key) { fprintf(stderr, "pair record missing host cert/key\n"); return NULL; }
-
-    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-    SSL_CTX_set_min_proto_version(ctx, TLS1_VERSION);   // lockdown speaks old TLS
-    SSL_CTX_set_security_level(ctx, 0);
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
-
-    BIO *cb = BIO_new_mem_buf(cert, (int)clen);
-    X509 *x = PEM_read_bio_X509(cb, NULL, NULL, NULL);
-    BIO *kb = BIO_new_mem_buf(key, (int)klen);
-    EVP_PKEY *pk = PEM_read_bio_PrivateKey(kb, NULL, NULL, NULL);
-    if (!x || !pk || SSL_CTX_use_certificate(ctx, x) != 1 || SSL_CTX_use_PrivateKey(ctx, pk) != 1) {
-        fprintf(stderr, "failed to load host identity into SSL_CTX\n");
-        ERR_print_errors_fp(stderr);
-        SSL_CTX_free(ctx); ctx = NULL;
-    }
-    if (x) X509_free(x);
-    if (pk) EVP_PKEY_free(pk);
-    BIO_free(cb); BIO_free(kb);
-    return ctx;
+    return rp_tls_ctx_new(cert, (size_t)clen, key, (size_t)klen);
 }
-static int tls_upgrade(conn_t *c, SSL_CTX *ctx) {
-    SSL *ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, c->fd);
-    if (SSL_connect(ssl) != 1) {
-        fprintf(stderr, "SSL_connect failed\n"); ERR_print_errors_fp(stderr);
-        SSL_free(ssl); return -1;
-    }
-    c->ssl = ssl;
-    return 0;
+static int tls_upgrade(conn_t *c, rp_tls_ctx *ctx) {
+    c->tls = rp_tls_connect(ctx, c->fd);
+    return c->tls ? 0 : -1;
 }
 
 // ============================ Layer 1: lockdown ============================
@@ -267,7 +241,7 @@ static int lockdown_simple(conn_t *c, const char *request, const char *key, cons
 static int lockdown_get_value(conn_t *c, const char *key, char *out, size_t outlen) {
     return lockdown_simple(c, "GetValue", "Key", key, "Value", out, outlen);
 }
-static int lockdown_start_session(conn_t *c, CFDictionaryRef pr, SSL_CTX *ctx) {
+static int lockdown_start_session(conn_t *c, CFDictionaryRef pr, rp_tls_ctx *ctx) {
     char hostid[128] = {0}, buid[128] = {0};
     dict_get_cstr(pr, "HostID", hostid, sizeof hostid);
     dict_get_cstr(pr, "SystemBUID", buid, sizeof buid);
@@ -579,7 +553,6 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
 }
 
 int main(void) {
-    SSL_library_init();
 
     printf("== Layer 0: usbmux ==\n");
     int mux = usbmux_connect();
@@ -607,9 +580,9 @@ int main(void) {
     printf("\n== Layer 1.5: TLS session ==\n");
     CFDictionaryRef pr = usbmux_read_pair_record(udid);
     if (!pr) { fprintf(stderr, "no pair record\n"); return 1; }
-    SSL_CTX *ctx = ctx_from_pairrecord(pr);
+    rp_tls_ctx *ctx = ctx_from_pairrecord(pr);
     if (!ctx || lockdown_start_session(&lk, pr, ctx) < 0) { fprintf(stderr, "session failed\n"); return 1; }
-    printf("  session up, TLS=%s\n", lk.ssl ? "yes" : "no");
+    printf("  session up, TLS=%s via %s\n", lk.tls ? "yes" : "no", rp_tls_backend());
 
     printf("\n== Layer 2: CoreDevice tunnel ==\n");
     int port = 0, ssl = 0;
