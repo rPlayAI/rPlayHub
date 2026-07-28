@@ -103,29 +103,42 @@ fi
 #
 # Override with RPLAYHUB_SIGN_IDENTITY. Falls back to ad-hoc, which still builds and runs — it just
 # cannot hold a camera grant across rebuilds.
+# Select by SHA-1 hash, never by name: the same certificate name can exist several times, both
+# revoked and valid, and xcodebuild picking a revoked one by name fails the whole build.
 SIGN_ID="${RPLAYHUB_SIGN_IDENTITY:-}"
 if [[ -z "$SIGN_ID" ]]; then
     SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null \
         | grep -v "CSSMERR_TP_CERT_REVOKED" \
-        | grep -oE '"Apple Development: [^"]+"' | head -1 | tr -d '"')
+        | grep -oE "[0-9A-F]{40}" | head -1)
 fi
 if [[ -n "$SIGN_ID" ]]; then
-    say "signing as $SIGN_ID (stable identity, so the camera grant survives rebuilds)"
+    say "signing with identity $SIGN_ID (stable, so the camera grant survives rebuilds)"
 else
     SIGN_ID="-"
-    say "no signing identity found — using ad-hoc; camera permission will not stick across rebuilds"
+    say "no valid signing identity — using ad-hoc; camera permission will not stick across rebuilds"
 fi
 
 say "building rPlayHub"
 LOG="$ROOT/build/xcodebuild.log"
 mkdir -p "$ROOT/build"
-if ! xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug \
+build_app() {
+    xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug \
         -derivedDataPath "$ROOT/build/DerivedData" \
-        CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$SIGN_ID" \
+        CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$1" \
         DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
-        build >"$LOG" 2>&1; then
-    grep -E "error:" "$LOG" | head -10 >&2 || true
-    die "app build failed — full log: $LOG"
+        build >"$LOG" 2>&1
+}
+if ! build_app "$SIGN_ID"; then
+    if [[ "$SIGN_ID" != "-" ]] && grep -q "Signing certificate is invalid\|not valid for code signing" "$LOG"; then
+        # A signing problem must not stop the app from running. Ad-hoc still builds and runs; it
+        # just cannot hold a camera grant across rebuilds, which is worth saying out loud.
+        say "that identity was rejected — falling back to ad-hoc (re-grant camera each rebuild)"
+        SIGN_ID="-"
+        build_app "$SIGN_ID" || { grep -E "error:" "$LOG" | head -10 >&2; die "app build failed — full log: $LOG"; }
+    else
+        grep -E "error:" "$LOG" | head -10 >&2 || true
+        die "app build failed — full log: $LOG"
+    fi
 fi
 [[ -d "$APP_BUILD" ]] || die "build produced no app at $APP_BUILD"
 
