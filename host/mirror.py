@@ -491,6 +491,17 @@ class MirrorCore:
                     print("    this will not succeed by retrying — not trying again")
                     return False
                 print(f"    media server status: {self._media_server_status()}")
+                # A timeout here is almost always one of two things, and neither is obvious from
+                # the word "timeout". Say them, because the fix differs and guessing wastes a
+                # reboot.
+                if "timed out" in message.lower():
+                    print("    a timeout starting the stream usually means one of:")
+                    print(f"      * the device's single media-stream slot is still held by an "
+                          f"earlier run that did not release it. It frees itself after the "
+                          f"negotiated lifetime ({screen.STREAM_TIMEOUT_S}s) — wait that long, or "
+                          f"set RPLAY_STREAM_TIMEOUT=20 so a crash costs 20s instead.")
+                    print("      * the device is reachable only over wifi. displayservice is "
+                          "unreliable there; a USB cable has fixed this every time so far.")
                 self._diagnose_services()
                 # A half-negotiated stream still occupies the device's single slot, so tear it
                 # down rather than leaving it to expire and block the next session.

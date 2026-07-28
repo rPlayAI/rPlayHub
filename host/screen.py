@@ -508,7 +508,14 @@ class RTCPSession:
 # So it wants to be long enough to be useful and short enough that a crash is not punishing.
 # Ten minutes, now that the engine releases the session on SIGTERM/SIGINT/SIGHUP and atexit,
 # which makes an abandoned stream the exception rather than the rule.
-STREAM_TIMEOUT_S = 600
+#
+# Worth revisiting: the Device Hub capture shows Apple sends timeout=20 and still mirrors for
+# minutes, because the device sustains the stream on RTCP (its answer carries RTCPSendInterval=1.0
+# and RTCPTimeoutInterval=20.0) rather than on this value. Our own 20 s measurement above predates
+# LTR-ACK, which we now send ~30/s alongside the 1/s receiver reports. If 20 no longer cuts video
+# off, it is strictly better: an abandoned session would lock the device for 20 s instead of 10
+# minutes. Set RPLAY_STREAM_TIMEOUT=20 to test that without editing code.
+STREAM_TIMEOUT_S = int(os.environ.get("RPLAY_STREAM_TIMEOUT", 600))
 
 
 def open_stream(dev_addr, our_addr, display_port, on_packet=None, codec="auto",
