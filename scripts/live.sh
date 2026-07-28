@@ -178,7 +178,17 @@ if [[ -f "$ROOT/logs/app.log" ]] && tail -5 "$ROOT/logs/app.log" 2>/dev/null | g
 fi
 
 say "opening rPlayHub"
-open "$APP_BUILD"
+# As the invoking user, never as root.
+#
+# This script runs under sudo because the engine needs a utun, but a GUI app launched by root is a
+# root process — and TCC does not prompt root processes, it denies them outright. That is why
+# resetting the camera permission changed nothing and no dialog ever appeared: the request could
+# never reach the user. Same reason the build had to drop privileges to reach the keychain.
+if [[ -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$SUDO_USER" open "$APP_BUILD"
+else
+    open "$APP_BUILD"
+fi
 
 # ---------------------------------------------------------------- engine
 # sudo drops the environment, so the RPLAY_* experiment knobs would silently never reach the
