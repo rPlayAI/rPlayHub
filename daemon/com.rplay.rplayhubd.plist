@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  rplayhubd — the privileged engine, as a launchd system daemon.
+
+  This is the same shape Apple uses: `remoted` runs as root and owns the device session, while
+  DeviceHub runs as the logged-in user and talks to it. Our GUI is likewise an ordinary
+  unprivileged process; only this daemon needs root, and only to create the utun.
+
+  A daemon also fixes a real operational problem: the device allows ONE media stream, and an
+  engine that dies without calling stopmediastream leaves that slot occupied for the whole
+  negotiated timeout. launchd gives us a defined lifecycle and a clean SIGTERM on unload, which
+  the engine now handles by releasing the session.
+
+  Install with scripts/install-daemon.sh — do not copy this by hand, the paths are rewritten.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.rplay.rplayhubd</string>
+
+	<!-- Rewritten by the installer to absolute paths. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>__PYTHON__</string>
+		<string>-u</string>
+		<string>__ROOT__/host/mirror.py</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>__ROOT__</string>
+
+	<!-- Runs as root: creating the utun is privileged. Everything above the tunnel is not. -->
+	<key>UserName</key>
+	<string>root</string>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Restart if it exits, but not in a tight loop: a device that is asleep or unplugged will
+	     fail repeatedly, and hammering it helps nobody. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>StandardOutPath</key>
+	<string>__ROOT__/logs/rplayhubd.log</string>
+	<key>StandardErrorPath</key>
+	<string>__ROOT__/logs/rplayhubd.log</string>
+
+	<!-- The engine binds 127.0.0.1:9876 and :9877 for the GUI. Nothing is exposed off-machine. -->
+	<key>ProcessType</key>
+	<string>Interactive</string>
+</dict>
+</plist>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Not sandboxed. The App Store would require the sandbox, but the engine this app talks to
+	  needs to create a utun interface, which needs root — impossible for a sandboxed MAS app.
+	  Distribution is therefore a Developer ID signed, notarized DMG, which allows this.
+
+	  If a Mac App Store build ever matters, the route is a userspace TCP/IP stack over the
+	  tunnel plus the RemotePairing transport: no root, no usbmuxd, and then the sandbox only
+	  needs the network client entitlement below. See app/DISTRIBUTION.md.
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

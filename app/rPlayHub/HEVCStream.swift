@@ -1,0 +1,308 @@
+//
+//  HEVCStream.swift
+//  Annex-B byte stream → NAL units → access units → CMSampleBuffer.
+//
+//  The engine sends a bare Annex-B byte stream: start codes, no container, no timestamps, with
+//  the cached VPS/SPS/PPS sent first so a viewer joining mid-stream can configure a decoder.
+//  This turns that into access units and hands each one to VideoDecoder.
+//
+//  It used to hand them to an AVSampleBufferDisplayLayer instead, which decoded them itself. That
+//  is the shorter path and it is wrong here: the layer drops frames it judges late, and it drops
+//  them before decoding. See VideoDecoder.swift for why that is fatal on this particular stream.
+//
+
+import AVFoundation
+import CoreMedia
+import Foundation
+
+/// Splits an Annex-B byte stream into NAL units, tolerating reads that land anywhere.
+final class AnnexBParser {
+    private var buf = Data()
+
+    func feed(_ chunk: Data, onNAL: (Data) -> Void) {
+        buf.append(chunk)
+        guard buf.count > 4 else { return }
+
+        var starts: [Int] = []
+        var i = buf.startIndex
+        let end = buf.endIndex
+        while i + 3 <= end {
+            if buf[i] == 0, buf[i + 1] == 0 {
+                if i + 3 <= end, buf[i + 2] == 1 {
+                    starts.append(i)
+                    i += 3
+                    continue
+                }
+                if i + 4 <= end, buf[i + 2] == 0, buf[i + 3] == 1 {
+                    starts.append(i)
+                    i += 4
+                    continue
+                }
+            }
+            i += 1
+        }
+        guard let last = starts.last else {
+            // No start code yet. Keep a small tail so a code split across reads survives.
+            if buf.count > 1 << 20 { buf.removeFirst(buf.count - 3) }
+            return
+        }
+
+        for (idx, s) in starts.enumerated() where idx + 1 < starts.count {
+            let codeLen = codeLength(at: s)
+            var nal = buf.subdata(in: (s + codeLen)..<starts[idx + 1])
+            while nal.last == 0 { nal.removeLast() }      // trailing_zero_8bits
+            if !nal.isEmpty { onNAL(nal) }
+        }
+        // Everything from the final start code onward is still incomplete.
+        buf = buf.subdata(in: last..<end)
+    }
+
+    private func codeLength(at i: Int) -> Int {
+        (i + 3 < buf.endIndex && buf[i + 2] == 0 && buf[i + 3] == 1) ? 4 : 3
+    }
+}
+
+/// Which codec the engine negotiated. The device picks from the banks we offer, so this is told
+/// to us by the engine (`stream_info`) rather than assumed.
+enum VideoCodec: String {
+    case hevc
+    case h264
+
+    /// HEVC has a 2-byte NAL header with the type in bits 1-6; H.264 a 1-byte header, bits 0-4.
+    var headerLength: Int { self == .h264 ? 1 : 2 }
+
+    func nalType(_ nal: Data) -> Int {
+        guard let first = nal.first else { return -1 }
+        return self == .h264 ? Int(first & 0x1F) : Int((first >> 1) & 0x3F)
+    }
+
+    func isParameterSet(_ type: Int) -> Bool {
+        self == .h264 ? (type == 7 || type == 8) : (32...34).contains(type)
+    }
+
+    func isVCL(_ type: Int) -> Bool {
+        self == .h264 ? (1...5).contains(type) : type < 32
+    }
+
+    func isKeyframe(_ type: Int) -> Bool {
+        self == .h264 ? type == 5 : (16...23).contains(type)
+    }
+
+    /// The parameter sets a format description needs, in order.
+    var parameterSetTypes: [Int] { self == .h264 ? [7, 8] : [32, 33, 34] }
+}
+
+/// Assembles NAL units into access units and hands them to a display layer.
+final class HEVCStream {
+    /// Set from the engine's `stream_info` before frames arrive. Changing it resets the decoder.
+    var codec: VideoCodec = .hevc {
+        didSet {
+            guard codec != oldValue else { return }
+            NSLog("rPlayHub: codec is \(codec.rawValue)")
+            parameterSets.removeAll()
+            format = nil
+            accessUnit.removeAll()
+            awaitingKeyframe = true
+        }
+    }
+
+    private var parameterSets: [Int: Data] = [:]
+    private var format: CMVideoFormatDescription?
+    private var accessUnit: [Data] = []
+
+    /// Frame dimensions, once the parameter sets have told us. Reported on the main queue.
+    var onFormat: ((CGSize) -> Void)?
+    /// Every assembled access unit, as its list of NAL units, before it becomes a sample buffer.
+    /// Only the offline decode-check harness sets this; it exists so the access units this class
+    /// builds can be compared against the byte stream they came from.
+    var onAccessUnit: (([Data]) -> Void)?
+    /// Counters, for the status line.
+    private(set) var framesEnqueued = 0
+    private(set) var nalsSeen = 0
+    /// Frames discarded because no keyframe has arrived to anchor them yet.
+    private(set) var framesBeforeKeyframe = 0
+    var decodeFailures: Int { decoder.decodeFailures }
+    var lastError: String? { decoder.lastError }
+    var framesDecoded: Int { decoder.framesDecoded }
+
+    /// True while we are throwing away frames for lack of a keyframe.
+    ///
+    /// Parameter sets are not enough to start decoding: without an IRAP every P-frame references
+    /// pictures the decoder never saw. Feeding it those produces a *black window with no error*,
+    /// which is exactly how the first live run failed — so we drop them deliberately and say so
+    /// instead, and the engine is asked for a fresh keyframe when a viewer connects.
+    private(set) var awaitingKeyframe = true
+
+    private var framesSubmitted: Int64 = 0
+    let decoder: VideoDecoder
+
+    init(decoder: VideoDecoder) {
+        self.decoder = decoder
+    }
+
+    func handle(nal: Data) {
+        guard nal.count > codec.headerLength else { return }
+        nalsSeen += 1
+        let type = codec.nalType(nal)
+
+        if codec.isParameterSet(type) {
+            flushAccessUnit()
+            parameterSets[type] = nal
+            rebuildFormatIfPossible()
+            return
+        }
+
+        guard codec.isVCL(type) else {
+            return      // SEI, AUD, end-of-sequence — nothing to display
+        }
+
+        // A new picture starts when the first slice does. HEVC signals it with
+        // first_slice_segment_in_pic_flag; H.264 with first_mb_in_slice == 0, which as ue(v) is
+        // also a leading 1 bit. Both therefore reduce to the top bit of the byte after the header.
+        let flagIndex = nal.startIndex + codec.headerLength
+        let isFirstSlice = flagIndex < nal.endIndex && (nal[flagIndex] & 0x80) != 0
+        if isFirstSlice { flushAccessUnit() }
+
+        if codec.isKeyframe(type) {
+            awaitingKeyframe = false
+        } else if awaitingKeyframe {
+            framesBeforeKeyframe += 1
+            return
+        }
+        accessUnit.append(nal)
+    }
+
+    /// Hold every parameter set as a C pointer for the duration of one call. Copying into owned
+    /// buffers keeps this readable for any number of sets, rather than nesting withUnsafeBytes.
+    private func withParameterSets<R>(
+        _ sets: [Data],
+        _ body: (UnsafePointer<UnsafePointer<UInt8>>, UnsafePointer<Int>) -> R) -> R {
+        var owned: [UnsafeMutablePointer<UInt8>] = []
+        var pointers: [UnsafePointer<UInt8>] = []
+        var sizes: [Int] = []
+        for set in sets {
+            let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: set.count)
+            set.copyBytes(to: buf, count: set.count)
+            owned.append(buf)
+            pointers.append(UnsafePointer(buf))
+            sizes.append(set.count)
+        }
+        defer { owned.forEach { $0.deallocate() } }
+        return pointers.withUnsafeBufferPointer { pp in
+            sizes.withUnsafeBufferPointer { ss in
+                body(pp.baseAddress!, ss.baseAddress!)
+            }
+        }
+    }
+
+    private func rebuildFormatIfPossible() {
+        guard format == nil else { return }
+        let wanted = codec.parameterSetTypes
+        let sets = wanted.compactMap { parameterSets[$0] }
+        guard sets.count == wanted.count else { return }     // still waiting for one
+
+        var desc: CMVideoFormatDescription?
+        let status: OSStatus = withParameterSets(sets) { pointers, sizes in
+            switch codec {
+            case .hevc:
+                return CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                    allocator: kCFAllocatorDefault,
+                    parameterSetCount: sets.count,
+                    parameterSetPointers: pointers,
+                    parameterSetSizes: sizes,
+                    nalUnitHeaderLength: 4,
+                    extensions: nil,
+                    formatDescriptionOut: &desc)
+            case .h264:
+                return CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                    allocator: kCFAllocatorDefault,
+                    parameterSetCount: sets.count,
+                    parameterSetPointers: pointers,
+                    parameterSetSizes: sizes,
+                    nalUnitHeaderLength: 4,
+                    formatDescriptionOut: &desc)
+            }
+        }
+        guard status == noErr, let desc else {
+            NSLog("rPlayHub: could not build \(codec.rawValue) format description (status \(status))")
+            return
+        }
+        format = desc
+        let dims = CMVideoFormatDescriptionGetDimensions(desc)
+        let size = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+        DispatchQueue.main.async { [weak self] in self?.onFormat?(size) }
+    }
+
+    private func flushAccessUnit() {
+        defer { accessUnit.removeAll(keepingCapacity: true) }
+        guard !accessUnit.isEmpty else { return }
+        onAccessUnit?(accessUnit)
+        guard let format else { return }
+
+        // Length-prefixed (HVCC-style) is what the format description declares.
+        var payload = Data()
+        payload.reserveCapacity(accessUnit.reduce(0) { $0 + $1.count + 4 })
+        for nal in accessUnit {
+            var be = UInt32(nal.count).bigEndian
+            withUnsafeBytes(of: &be) { payload.append(contentsOf: $0) }
+            payload.append(nal)
+        }
+
+        guard let sample = makeSampleBuffer(payload, format: format) else { return }
+
+        // Every access unit is decoded, unconditionally and in order. Nothing is dropped here:
+        // the device sends one IDR per session and never another, so a skipped frame would
+        // corrupt the reference chain for good. Whether the picture then reaches the screen is
+        // the display layer's business, and skipping *there* is free.
+        decoder.decode(sample)
+        framesEnqueued += 1
+    }
+
+    private func makeSampleBuffer(_ payload: Data,
+                                  format: CMVideoFormatDescription) -> CMSampleBuffer? {
+        var block: CMBlockBuffer?
+        var status = CMBlockBufferCreateWithMemoryBlock(
+            allocator: kCFAllocatorDefault,
+            memoryBlock: nil,
+            blockLength: payload.count,
+            blockAllocator: kCFAllocatorDefault,
+            customBlockSource: nil,
+            offsetToData: 0,
+            dataLength: payload.count,
+            flags: kCMBlockBufferAssureMemoryNowFlag,
+            blockBufferOut: &block)
+        guard status == noErr, let block else { return nil }
+
+        status = payload.withUnsafeBytes { raw in
+            CMBlockBufferReplaceDataBytes(with: raw.baseAddress!,
+                                          blockBuffer: block,
+                                          offsetIntoDestination: 0,
+                                          dataLength: payload.count)
+        }
+        guard status == noErr else { return nil }
+
+        var sample: CMSampleBuffer?
+        var size = payload.count
+        // Simple monotonic timestamps. Nothing schedules on these any more — we decode each
+        // access unit ourselves the moment it is assembled and show the picture as soon as it
+        // comes back — but VideoToolbox still wants timing that strictly increases.
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: 60),
+            presentationTimeStamp: CMTime(value: framesSubmitted, timescale: 60),
+            decodeTimeStamp: .invalid)
+        framesSubmitted += 1
+        status = CMSampleBufferCreateReady(
+            allocator: kCFAllocatorDefault,
+            dataBuffer: block,
+            formatDescription: format,
+            sampleCount: 1,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleSizeEntryCount: 1,
+            sampleSizeArray: &size,
+            sampleBufferOut: &sample)
+        guard status == noErr, let sample else { return nil }
+
+        return sample
+    }
+}

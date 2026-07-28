@@ -1,0 +1,52 @@
+# build output
+build/
+DerivedData/
+*.xcuserdatastate
+xcuserdata/
+__pycache__/
+*.pyc
+*.dSYM/
+
+# capture artifacts — these are pictures and video of a real phone's screen
+*.h265
+*.h264
+*.png
+!doc/**/*.png
+*.pcap
+
+# recordings and run logs (logs/ also holds device UDIDs)
+recordings/
+logs/
+replay-recording.h265
+
+.DS_Store
+
+# ---------------------------------------------------------------------------------------------
+# Deliberately untracked: material that is either huge or not ours to redistribute.
+#
+# These stay on disk and everything still works — they are only kept out of git history, which is
+# the part that is painful to undo later. If this ever becomes a public repository, nothing here
+# has to be scrubbed retroactively.
+#
+#   reference/  ~300 MB of extracted Apple binaries (CoreDevice, RemotePairing, AVConference,
+#               DeviceKit) plus packet captures of a real device. Copyrighted, and it would
+#               dominate the repository.
+#   deps/       Apple's MFi Accessory SDK source. Licensed, not redistributable. Nothing compiles
+#               against it today — host-c/Makefile only points SDK_ROOT at it.
+#   refs/       Adopted source from the sibling ~/rplay and ~/carplay-dev projects, which are
+#               separate products.
+#
+# To track any of them anyway, delete its line.
+reference/
+deps/
+refs/
+
+# compiled output that lives next to its source rather than in build/
+*.o
+*.a
+*.so
+*.dylib
+host-c/cdhost
+core/test_rp_xpc
+core/test_rp_video_stream
+core/test_rp_http2
