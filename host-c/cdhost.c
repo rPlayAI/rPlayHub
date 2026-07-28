@@ -153,6 +153,7 @@ static int usbmux_list_devices(int fd, char *udid_out, size_t udid_len) {
     if (!reply) return -1;
     CFArrayRef list = dict_get(reply, "DeviceList");
     int first_id = -1;
+    int chose_usb = 0;
     for (CFIndex i = 0; list && i < CFArrayGetCount(list); i++) {
         CFDictionaryRef dev = CFArrayGetValueAtIndex(list, i);
         CFDictionaryRef props = dict_get(dev, "Properties");
@@ -161,11 +162,22 @@ static int usbmux_list_devices(int fd, char *udid_out, size_t udid_len) {
         dict_get_cstr(props, "SerialNumber", ser, sizeof ser);
         dict_get_cstr(props, "ConnectionType", conn, sizeof conn);
         printf("  DeviceID=%s udid=%s conn=%s\n", id, ser, conn);
-        if (first_id < 0) {
+        /* Prefer USB when the same phone appears twice.
+         *
+         * usbmuxd lists a device once per connection type and proxies both identically, so either
+         * works -- but not equally well. Over wifi displayservice is unreliable: it times out
+         * starting a media stream far more often, and a tunnel that dies mid-session is common.
+         * Taking whichever entry happened to be first made that luck rather than a choice. */
+        int is_usb = strcmp(conn, "USB") == 0;
+        if (first_id < 0 || (is_usb && !chose_usb)) {
             long long v = 0; CFNumberGetValue(dict_get(dev, "DeviceID"), kCFNumberLongLongType, &v);
-            first_id = (int)v; strncpy(udid_out, ser, udid_len - 1);
+            first_id = (int)v;
+            strncpy(udid_out, ser, udid_len - 1);
+            chose_usb = is_usb;
         }
     }
+    if (first_id >= 0)
+        printf("  -> using the %s entry\n", chose_usb ? "USB" : "Network");
     CFRelease(reply);
     return first_id;
 }
