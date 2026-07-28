@@ -20,6 +20,9 @@
 #include "media.h"
 #include "../core/rp_xpc.h"
 
+/* Big enough for the largest reply we ask for, which is a full-screen PNG. */
+#define SVC_REASSEMBLY (8u << 20)
+
 static api_session *g_session;
 
 /* The live stream and its viewers. Declared here because stream_info reports on them and is
@@ -122,7 +125,10 @@ typedef struct {
 static int svc_open(svc_conn *c, const char *addr, long port)
 {
     c->fd = -1;
-    c->reassembly = malloc(1 << 20);
+    /* 8 MB, not 1 MB. rp_rxpc_recv splits this in half (one accumulator per HTTP/2 stream), and
+     * a screenshot of a 1170x2532 screen is a multi-megabyte PNG -- it simply did not fit, and
+     * the overflow path discarded it without a word. */
+    c->reassembly = malloc(SVC_REASSEMBLY);
     c->raw = malloc(1 << 16);
     if (!c->reassembly || !c->raw) { free(c->reassembly); free(c->raw); return -1; }
 
@@ -156,7 +162,7 @@ static int svc_open(svc_conn *c, const char *addr, long port)
     setsockopt(c->fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof rtv);
 
     rp_rxpc_io io = { svc_read, svc_write, &c->fd };
-    rp_rxpc_init(&c->s, io, c->reassembly, 1 << 20, c->raw, 1 << 16);
+    rp_rxpc_init(&c->s, io, c->reassembly, SVC_REASSEMBLY, c->raw, 1 << 16);
     if (rp_rxpc_handshake(&c->s) != 0) goto fail;
     return 0;
 
@@ -236,8 +242,11 @@ static void method_screenshot(int fd, long id)
     rp_xpc_obj out;
     if (rp_cd_invoke(&c.s, RP_CD_FEATURE_SCREENSHOT, RP_CD_ACTION_SCREENSHOT,
                      input, w.len, ua, ub, &out) != 0) {
+        int over = c.s.overflowed;
         svc_close(&c);
-        reply_error(fd, id, "device_error", "screenshot invocation returned no output");
+        reply_error(fd, id, "device_error", over
+            ? "the screenshot was larger than the reassembly buffer"
+            : "screenshot invocation returned no output");
         return;
     }
 

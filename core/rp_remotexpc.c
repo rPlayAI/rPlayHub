@@ -159,7 +159,14 @@ int rp_rxpc_recv(rp_rxpc_session *s, rp_xpc_obj *obj)
         size_t half = s->buf_cap / 2;
         uint8_t *buf = s->buf + (size_t)slot * half;
 
-        if (s->buf_len[slot] + f.length > half) { s->buf_len[slot] = 0; continue; }
+        if (s->buf_len[slot] + f.length > half) {
+            /* The reply is larger than the caller's buffer. Dropping it silently makes a service
+             * look like it answered nothing, which is indistinguishable from a protocol fault --
+             * so report it instead of discarding it quietly. */
+            s->buf_len[slot] = 0;
+            s->overflowed = 1;
+            return -1;
+        }
         memcpy(buf + s->buf_len[slot], f.payload, f.length);
         s->buf_len[slot] += f.length;
 

@@ -58,6 +58,8 @@ typedef struct {
     /* Bytes of the frame handed out last call, consumed at the start of the next one so the
      * payload pointer stays valid in between. */
     size_t     pending_consume;
+    /* Set when a reply exceeded the reassembly buffer, so the caller can say so. */
+    int        overflowed;
 } rp_rxpc_session;
 
 /* Bind a session to a transport. The two buffers are caller-owned and must outlive the session;
