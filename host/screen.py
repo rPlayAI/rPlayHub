@@ -576,13 +576,33 @@ def describe_answer(answer):
     # The answer is protobuf we have not fully mapped. Rather than guess field names, surface the
     # values that plausibly are the ones that matter: any varint that looks like a dimension, a
     # frame rate or a bitrate. Wrong labels would be worse than none, so they are marked unsure.
+    fields = list(_varint_fields(raw))
+
+    # The coded size is the number that decides picture quality, so pull it out by name rather
+    # than leaving it in a list of unlabelled fields. Identified from a real answer: fields 4 and 5
+    # of the same submessage carry width and height (1184 x 2544 for this panel).
+    size = None
+    for (fa, va), (fb, vb) in zip(fields, fields[1:]):
+        if fa == 4 and fb == 5 and 240 <= va <= 8192 and 240 <= vb <= 8192:
+            size = (va, vb)
+            break
+    ceiling = max((v for f, v in fields if 1_000_000 <= v <= 200_000_000), default=None)
+
     print(f"  device answer: {len(raw)} bytes of protobuf")
-    seen = []
-    for fno, val in _varint_fields(raw):
-        if 200 <= val <= 4096 or 100_000 <= val <= 200_000_000:
-            seen.append(f"f{fno}={val}")
+    if size:
+        w, h = size
+        # A bitrate only means something per pixel. Roughly 0.10 bits/pixel is where UI content
+        # stops falling apart in motion; this device grants about 4 Mbps whatever we ask for.
+        bpp = 4.0e6 / (w * h * 45)
+        print(f"    coded size: {w}x{h}   ~{bpp:.3f} bits/pixel at 4 Mbps/45fps"
+              + ("   <- unchanged; the request did not take" if (w, h) == (1184, 2544) else
+                 "   <- CHANGED"))
+    if ceiling:
+        print(f"    bitrate ceiling: {ceiling / 1e6:.0f} Mbps")
+    seen = [f"f{f}={v}" for f, v in fields
+            if 200 <= v <= 4096 or 100_000 <= v <= 200_000_000]
     if seen:
-        print(f"    notable values (unmapped fields): {' '.join(seen[:16])}")
+        print(f"    other values (unmapped): {' '.join(seen[:14])}")
 
 
 def _walk(obj):
