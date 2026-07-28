@@ -239,9 +239,26 @@ static void method_screenshot(int fd, long id)
 
     char ua[37], ub[37];
     make_uuid(ua); make_uuid(ub);
-    rp_xpc_obj out;
+    rp_xpc_obj out, reply;
+    memset(&reply, 0, sizeof reply);
     if (rp_cd_invoke(&c.s, RP_CD_FEATURE_SCREENSHOT, RP_CD_ACTION_SCREENSHOT,
-                     input, w.len, ua, ub, &out) != 0) {
+                     input, w.len, ua, ub, &out, &reply) != 0) {
+        /* Say what came back. Every failure on this path so far has been diagnosed by the reply
+         * we were throwing away. */
+        if (reply.data) {
+            const char *k = NULL;
+            rp_xpc_obj v;
+            size_t cursor = 0;
+            fprintf(stderr, "  screenshot reply keys:");
+            while (rp_xpc_dict_next(&reply, &cursor, &k, &v) == 0 && cursor <= 12) {
+                fprintf(stderr, " %s", k);
+                const char *sv = NULL;
+                if (rp_xpc_get_string(&v, &sv) == 0) fprintf(stderr, "=%.80s", sv);
+            }
+            fprintf(stderr, "\n");
+        } else {
+            fprintf(stderr, "  screenshot: no reply object at all\n");
+        }
         int over = c.s.overflowed;
         svc_close(&c);
         reply_error(fd, id, "device_error", over

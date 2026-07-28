@@ -75,7 +75,7 @@ int rp_cd_invoke(rp_rxpc_session *s,
                  const char *action_identifier,
                  const uint8_t *input_body, size_t input_len,
                  const char uuid_a[37], const char uuid_b[37],
-                 rp_xpc_obj *output)
+                 rp_xpc_obj *output, rp_xpc_obj *reply_out)
 {
     static uint8_t req[8192];
     size_t n = rp_cd_build_request(feature_identifier, action_identifier,
@@ -85,6 +85,9 @@ int rp_cd_invoke(rp_rxpc_session *s,
 
     rp_xpc_obj reply;
     if (rp_rxpc_recv(s, &reply) != 0) return -1;
+    /* Hand the whole reply back too. A failure without it is untraceable: "no output" and "an
+     * error the device explained" look identical to the caller. */
+    if (reply_out) *reply_out = reply;
 
     /* No output key means the call failed, whatever else came back. Reporting that as an empty
      * success is how a caller ends up debugging the wrong layer. */

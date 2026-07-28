@@ -249,7 +249,7 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     char ub[37] = "8f1e2c40-0000-4000-8000-000000000002";
     rp_xpc_obj out;
     if (rp_cd_invoke(&m->rxpc, RP_CD_FEATURE_STARTSTREAM, RP_CD_ACTION_STARTSTREAM,
-                     input, w.len, ua, ub, &out) != 0) {
+                     input, w.len, ua, ub, &out, NULL) != 0) {
         fprintf(stderr, "  startmediastream returned no output\n");
         goto fail;
     }

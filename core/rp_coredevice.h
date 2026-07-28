@@ -56,7 +56,7 @@ int rp_cd_invoke(rp_rxpc_session *s,
                  const char *action_identifier,
                  const uint8_t *input_body, size_t input_len,
                  const char uuid_a[37], const char uuid_b[37],
-                 rp_xpc_obj *output);
+                 rp_xpc_obj *output, rp_xpc_obj *reply);
 
 #ifdef __cplusplus
 }
