@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var control: ControlClient?
     private var hevc: HEVCStream?
     private var usb: USBMirror?
+    private var usbAttempts = 0
 
     private var recordItem: NSMenuItem?
     private var isRecording = false
@@ -35,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let controlPort: UInt16 = 9876
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Load the capture plug-in now: it takes about a second to expose devices.
+        USBMirror.prime()
         buildMenu()
         buildWindow()
         connect()
@@ -324,9 +327,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startUSBMirror() -> Bool {
         // Prompt on first run. Asking is asynchronous, so a fresh grant cannot help this attempt —
         // reconnect once the answer arrives and the next attempt will take the USB path.
+        AppBuild.log("USB capture: camera permission is \(USBMirror.authorizationDescription); "
+                     + "\(USBMirror.muxedDeviceSummary)")
         if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
             USBMirror.requestAuthorization { [weak self] granted in
-                NSLog("rPlayHub: camera permission \(granted ? "granted" : "refused")")
+                AppBuild.log("camera permission \(granted ? "granted" : "refused")")
                 if granted { self?.reconnect() }
             }
             return false
@@ -342,7 +347,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.applySizing()
         }
         guard mirror.start() else {
-            NSLog("rPlayHub: USB capture unavailable — \(mirror.status); using the CoreDevice stream")
+            // The capture plug-in loads asynchronously, so "no device" a fraction of a second
+            // after launch is normal rather than final. Retry before settling for the CoreDevice
+            // stream: without this the USB path never engaged, because the first enumeration
+            // always lost the race and losing was indistinguishable from having no cable.
+            if usbAttempts < 6 {
+                usbAttempts += 1
+                AppBuild.log("USB capture not ready (attempt \(usbAttempts)) — \(mirror.status)")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+                    guard let self, self.usb == nil else { return }
+                    self.reconnect()
+                }
+                return false
+            }
+            AppBuild.log("USB capture unavailable — \(mirror.status); using the CoreDevice stream")
             return false
         }
         usb = mirror

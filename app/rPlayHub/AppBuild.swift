@@ -11,6 +11,41 @@
 import Foundation
 
 enum AppBuild {
+    /// Append a line to logs/app.log next to the engine's own logs.
+    ///
+    /// NSLog from an ad-hoc signed app does not reliably reach the unified log, which made the
+    /// USB-capture decision invisible: the app fell back silently and there was no way to tell
+    /// whether it was permission, no cable, or a bug. A file we control always works.
+    static func log(_ message: String) {
+        let line = "\(stampNow) \(message)\n"
+        FileManager.default.createFile(atPath: logPath, contents: nil)
+        if let h = FileHandle(forWritingAtPath: logPath) {
+            h.seekToEndOfFile()
+            h.write(Data(line.utf8))
+            try? h.close()
+        }
+        NSLog("rPlayHub: \(message)")
+    }
+
+    static let logPath: String = {
+        // Beside the engine's logs, so one directory holds both halves of a session.
+        let root = (Bundle.main.bundlePath as NSString)
+            .deletingLastPathComponent as NSString      // .../build/DerivedData/.../Debug
+        var dir = root as String
+        while !dir.isEmpty, dir != "/", !FileManager.default.fileExists(atPath: dir + "/scripts/live.sh") {
+            dir = (dir as NSString).deletingLastPathComponent
+        }
+        let logs = (dir == "/" || dir.isEmpty) ? NSTemporaryDirectory() : dir + "/logs"
+        try? FileManager.default.createDirectory(atPath: logs, withIntermediateDirectories: true)
+        return logs + "/app.log"
+    }()
+
+    private static var stampNow: String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: Date())
+    }
+
     /// The running executable's build time, as "MM-dd HH:mm:ss".
     static let stamp: String = {
         guard let url = Bundle.main.executableURL,

@@ -41,6 +41,17 @@ final class USBMirror: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var reportedSize = false
     private(set) var frames = 0
 
+    /// Opt in as early as possible, so the plug-in has loaded by the time anything enumerates.
+    ///
+    /// The DAL plug-in loads ASYNCHRONOUSLY after the opt-in is set. Measured on macOS 26.5:
+    /// enumerating immediately returns zero devices, and the tethered iPhone appears about a
+    /// second later. Calling this at launch removes the race for the common case; the retry in
+    /// the app covers the rest. Without it the USB path never engaged at all — the very first
+    /// enumeration always lost, and losing looked exactly like "no cable".
+    static func prime() {
+        enableScreenCaptureDevices()
+    }
+
     /// Is a USB-tethered iPhone available to capture from right now?
     static func availableDevice() -> AVCaptureDevice? {
         enableScreenCaptureDevices()
@@ -107,6 +118,18 @@ final class USBMirror: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         }
     }
 
+    /// Every capture device macOS is showing us, for the log. "No device" and "the wrong device"
+    /// look identical from the outside and need completely different fixes.
+    static var muxedDeviceSummary: String {
+        enableScreenCaptureDevices()
+        let muxed = AVCaptureDevice.devices(for: .muxed)
+        let video = AVCaptureDevice.devices(for: .video)
+        if muxed.isEmpty && video.isEmpty { return "no capture devices at all" }
+        let names = (muxed.map { "muxed:\($0.localizedName)" }
+                     + video.map { "video:\($0.localizedName)" }).joined(separator: ", ")
+        return "devices = [\(names)]"
+    }
+
     static var authorizationDescription: String {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:    return "granted"
@@ -125,7 +148,8 @@ final class USBMirror: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let device = Self.availableDevice() else {
             let muxed = AVCaptureDevice.devices(for: .muxed).count
             status = muxed == 0
-                ? "no USB-tethered iPhone — connect a data cable and trust this Mac"
+                ? "no USB-tethered iPhone yet — cable connected and trusted? (the capture "
+                  + "plug-in also takes about a second to load)"
                 : "\(muxed) muxed device(s) present but none looked like an iPhone"
             return false
         }
