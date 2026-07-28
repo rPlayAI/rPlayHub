@@ -80,16 +80,19 @@ int rp_cd_invoke(rp_rxpc_session *s,
     static uint8_t req[8192];
     size_t n = rp_cd_build_request(feature_identifier, action_identifier,
                                    input_body, input_len, uuid_a, uuid_b, req, sizeof req);
-    if (!n) return -1;
-    if (rp_rxpc_send(s, req, n, 1) != 0) return -1;
+    /* Distinct codes, because "could not send", "no answer" and "an answer without output" are
+     * three different faults that were all reported as -1 and therefore indistinguishable. */
+    if (!n) return RP_CD_ERR_BUILD;
+    if (rp_rxpc_send(s, req, n, 1) != 0) return RP_CD_ERR_SEND;
 
     rp_xpc_obj reply;
-    if (rp_rxpc_recv(s, &reply) != 0) return -1;
+    if (rp_rxpc_recv(s, &reply) != 0) return RP_CD_ERR_NO_REPLY;
     /* Hand the whole reply back too. A failure without it is untraceable: "no output" and "an
      * error the device explained" look identical to the caller. */
     if (reply_out) *reply_out = reply;
 
     /* No output key means the call failed, whatever else came back. Reporting that as an empty
      * success is how a caller ends up debugging the wrong layer. */
-    return rp_xpc_dict_get(&reply, "CoreDevice.output", output);
+    return rp_xpc_dict_get(&reply, "CoreDevice.output", output) == 0 ? 0
+                                                                    : RP_CD_ERR_NO_OUTPUT;
 }

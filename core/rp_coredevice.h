@@ -23,6 +23,13 @@ extern "C" {
 
 #define RP_CD_VERSION_STRING "629.3"
 
+/* Failure stages. All three used to be -1, which made them impossible to tell apart from the
+ * caller and cost a hardware round trip each time. */
+#define RP_CD_ERR_BUILD     (-1)
+#define RP_CD_ERR_SEND      (-2)
+#define RP_CD_ERR_NO_REPLY  (-3)
+#define RP_CD_ERR_NO_OUTPUT (-4)
+
 /* Feature and action identifiers we call. */
 #define RP_CD_FEATURE_SCREENSHOT  "com.apple.coredevice.feature.capturescreenshot"
 #define RP_CD_ACTION_SCREENSHOT   "com.apple.coredevice.action.capturescreenshot"

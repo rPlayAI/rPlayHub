@@ -158,7 +158,8 @@ static int svc_open(svc_conn *c, const char *addr, long port)
     }
     fcntl(c->fd, F_SETFL, flags);
 
-    struct timeval rtv = { .tv_sec = 8, .tv_usec = 0 };
+    /* A full-screen PNG takes the device time to render and push over wifi. */
+    struct timeval rtv = { .tv_sec = 30, .tv_usec = 0 };
     setsockopt(c->fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof rtv);
 
     rp_rxpc_io io = { svc_read, svc_write, &c->fd };
@@ -241,8 +242,14 @@ static void method_screenshot(int fd, long id)
     make_uuid(ua); make_uuid(ub);
     rp_xpc_obj out, reply;
     memset(&reply, 0, sizeof reply);
-    if (rp_cd_invoke(&c.s, RP_CD_FEATURE_SCREENSHOT, RP_CD_ACTION_SCREENSHOT,
-                     input, w.len, ua, ub, &out, &reply) != 0) {
+    int rc = rp_cd_invoke(&c.s, RP_CD_FEATURE_SCREENSHOT, RP_CD_ACTION_SCREENSHOT,
+                          input, w.len, ua, ub, &out, &reply);
+    if (rc != 0) {
+        const char *stage = rc == RP_CD_ERR_BUILD ? "could not build the request"
+                          : rc == RP_CD_ERR_SEND ? "could not send the request"
+                          : rc == RP_CD_ERR_NO_REPLY ? "the service never answered"
+                          : "the answer carried no CoreDevice.output";
+        fprintf(stderr, "  screenshot failed: %s\n", stage);
         /* Say what came back. Every failure on this path so far has been diagnosed by the reply
          * we were throwing away. */
         if (reply.data) {
@@ -262,8 +269,7 @@ static void method_screenshot(int fd, long id)
         int over = c.s.overflowed;
         svc_close(&c);
         reply_error(fd, id, "device_error", over
-            ? "the screenshot was larger than the reassembly buffer"
-            : "screenshot invocation returned no output");
+            ? "the screenshot was larger than the reassembly buffer" : stage);
         return;
     }
 
