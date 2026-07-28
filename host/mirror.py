@@ -297,6 +297,8 @@ class MirrorCore:
         self.rtcp_packets = 0
         self.mbps_peak = 0.0
         self._start_failures = 0
+        # How often to ask for a fresh keyframe. Zero disables it.
+        self.keyframe_every_s = float(os.environ.get("RPLAY_KEYFRAME_EVERY_S", 3))
 
         self.link = None
         self.tun = None
@@ -530,8 +532,10 @@ class MirrorCore:
             # IDR as the stream's first packets, which is the only reliable way in on this device.
             return
 
-        # A viewer that joins an already-running stream missed the one keyframe the device
-        # ever sends, and there is no way to make another: PLI and FIR are ignored, and
+        # A viewer that joins an already-running stream missed the keyframe it needed to start
+        # from. This used to be terminal — PLI and FIR appeared to be ignored — but they were
+        # simply being discarded for carrying an SSRC the device had not registered. With that
+        # corrected a keyframe now arrives after a single request, so a late joiner recovers.
         # restarting the media stream does not work — measured repeatedly, the FIRST
         # startmediastream of a session succeeds and later ones time out, leaving no stream at
         # all. Restarting therefore turns "this viewer is blind" into "nobody gets video", which
@@ -657,6 +661,24 @@ class MirrorCore:
             # useless for judging picture quality: the screen is static most of the time, so the
             # average tracks how long the session idled rather than what the encoder does when it
             # matters. Only the peak during motion is comparable to Device Hub's 3.96 Mbps.
+            # Periodic keyframes, now that the device honours PLI.
+            #
+            # It was ignoring PLI and FIR because our RTCP carried an SSRC it had never associated
+            # with the stream; once that was corrected, a keyframe arrives after a single request.
+            # That changes what is possible: the stream is no longer one IDR and then permanent
+            # decay, so corruption from the encoder's tight bitrate can be flushed out on a timer
+            # instead of persisting for the rest of the session.
+            #
+            # A keyframe costs roughly 100 kB, so at the default interval this spends a few
+            # hundred kbit/s of a ~4 Mbps budget — worth it, because the alternative is a picture
+            # that never recovers. RPLAY_KEYFRAME_EVERY_S=0 turns it off.
+            if self.keyframe_every_s > 0 and self.stream and self.video.viewers > 0:
+                age = time.monotonic() - self.video.last_irap_at if self.video.last_irap_at else 1e9
+                if age >= self.keyframe_every_s:
+                    rtcp = self.stream.get("rtcp")
+                    if rtcp is not None:
+                        rtcp.send_pli()
+
             cur_bytes = (self.stream["stats"].get("bytes", 0)
                          if self.stream and self.stream.get("stats") else 0)
             mbps_now = round((cur_bytes - prev_bytes) * 8 / period / 1e6, 2)
