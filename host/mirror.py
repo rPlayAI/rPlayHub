@@ -296,6 +296,7 @@ class MirrorCore:
         self._nal_types = {}
         self.rtcp_packets = 0
         self.mbps_peak = 0.0
+        self._start_failures = 0
 
         self.link = None
         self.tun = None
@@ -480,8 +481,10 @@ class MirrorCore:
             self._fu = bytearray()
             try:
                 self._open_media_stream()
+                self._start_failures = 0
                 return True
             except Exception as e:
+                self._start_failures += 1
                 message, code, permanent = _describe_device_error(e)
                 print(f"  ✗ could not start the media stream: {message}"
                       + (f" (code {code})" if code else ""))
@@ -631,7 +634,19 @@ class MirrorCore:
             if self._stop.is_set():
                 break
             if self.stream is None and self.video.viewers > 0 and not self.stream_unavailable:
-                # A failed start used to leave the engine permanently without a stream. Retry.
+                # A failed start used to leave the engine permanently without a stream, so retry —
+                # but only a few times. A start that TIMES OUT has not been refused: the request
+                # reached the device and never came back, which leaves its single stream slot
+                # held. Retrying that on a 2-second heartbeat piles hung negotiations onto a
+                # service that is already stuck, and displayservice then wedges for every client
+                # on the machine, Device Hub included. Measured the hard way.
+                if self._start_failures >= 3:
+                    self.stream_unavailable = (
+                        "the device did not answer startmediastream after 3 attempts — its "
+                        "displayservice is most likely wedged, which a device reboot clears")
+                    print(f"  ✗ giving up: {self.stream_unavailable}")
+                    print("    not retrying, because repeated attempts are what wedge it further")
+                    continue
                 self._ensure_stream("retrying after a failed start")
             rtp = self.stream["stats"]["packets"] if self.stream else 0
             nals = self.video.nal_count

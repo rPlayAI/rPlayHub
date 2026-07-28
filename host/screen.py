@@ -515,7 +515,15 @@ class RTCPSession:
 # LTR-ACK, which we now send ~30/s alongside the 1/s receiver reports. If 20 no longer cuts video
 # off, it is strictly better: an abandoned session would lock the device for 20 s instead of 10
 # minutes. Set RPLAY_STREAM_TIMEOUT=20 to test that without editing code.
-STREAM_TIMEOUT_S = int(os.environ.get("RPLAY_STREAM_TIMEOUT", 600))
+# An experiment that the device does not understand can hang startmediastream outright, and the
+# slot then stays held for this whole lifetime — which is how a resolution experiment took Device
+# Hub down with it. So when any request-shape knob is in play, default to a short lifetime: a
+# failed experiment should cost a minute, not ten. An explicit RPLAY_STREAM_TIMEOUT still wins.
+_EXPERIMENTAL_KNOBS = ("RPLAY_WIDTH", "RPLAY_HEIGHT", "RPLAY_FPS", "RPLAY_VIDEO_RESOLUTION",
+                       "RPLAY_MAX_BITRATE", "RPLAY_MIN_BITRATE", "RPLAY_KEYFRAME_INTERVAL",
+                       "RPLAY_DISPLAY_SCALE", "RPLAY_VIRTUAL_DISPLAY")
+_DEFAULT_TIMEOUT = 60 if any(os.environ.get(k) for k in _EXPERIMENTAL_KNOBS) else 600
+STREAM_TIMEOUT_S = int(os.environ.get("RPLAY_STREAM_TIMEOUT", _DEFAULT_TIMEOUT))
 
 
 def _stream_config_from_env():
