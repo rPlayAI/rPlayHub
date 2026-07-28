@@ -94,12 +94,34 @@ fi
 # Always build. The previous version built only when the bundle was MISSING, so an existing
 # bundle was launched forever while the sources moved on — a stale app silently lacking every
 # recent fix (this is how a rebuilt sidebar failed to appear). Incremental builds cost seconds.
+# Sign with a real identity when one exists, not ad-hoc.
+#
+# This is not cosmetic. TCC keys camera permission on the app's code identity, and an ad-hoc
+# signature changes on every single build — so each rebuild looked like a brand-new app, the grant
+# never stuck, and macOS eventually recorded a refusal and stopped asking. That is exactly how USB
+# capture ended up permanently denied while appearing to be a cable problem.
+#
+# Override with RPLAYHUB_SIGN_IDENTITY. Falls back to ad-hoc, which still builds and runs — it just
+# cannot hold a camera grant across rebuilds.
+SIGN_ID="${RPLAYHUB_SIGN_IDENTITY:-}"
+if [[ -z "$SIGN_ID" ]]; then
+    SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep -v "CSSMERR_TP_CERT_REVOKED" \
+        | grep -oE '"Apple Development: [^"]+"' | head -1 | tr -d '"')
+fi
+if [[ -n "$SIGN_ID" ]]; then
+    say "signing as $SIGN_ID (stable identity, so the camera grant survives rebuilds)"
+else
+    SIGN_ID="-"
+    say "no signing identity found — using ad-hoc; camera permission will not stick across rebuilds"
+fi
+
 say "building rPlayHub"
 LOG="$ROOT/build/xcodebuild.log"
 mkdir -p "$ROOT/build"
 if ! xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug \
         -derivedDataPath "$ROOT/build/DerivedData" \
-        CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" \
+        CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$SIGN_ID" \
         DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
         build >"$LOG" 2>&1; then
     grep -E "error:" "$LOG" | head -10 >&2 || true
