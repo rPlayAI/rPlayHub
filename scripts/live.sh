@@ -206,14 +206,6 @@ rplay_env() {
 if [[ -n "$(rplay_env)" ]]; then
     say "experiment knobs: $(rplay_env | sed 's/^env //')"
 fi
-( sleep 4
-  if grep -q "camera permission denied" "$ROOT/logs/app.log" 2>/dev/null; then
-      say "camera access is denied, so USB capture cannot run — the picture will be the capped one."
-      printf '    to fix:  tccutil reset Camera com.rplay.rplayhub   then rerun and grant the prompt\n'
-  elif grep -q "USB capture started" "$ROOT/logs/app.log" 2>/dev/null; then
-      say "USB capture is live — the picture is coming from the cable, not the capped stream"
-  fi ) &
-
 say "starting the engine as root (Ctrl-C to stop)"
 echo
 if [[ ${#ARGS[@]} -gt 0 ]]; then

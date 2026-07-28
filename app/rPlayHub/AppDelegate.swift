@@ -406,7 +406,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 1184x2544 / 6 Mbps -- about 0.03 bits per pixel, which visibly falls apart the moment
         // anything moves. Apple's Device Hub negotiates identical numbers and shows identical
         // artefacting, so it is a property of that transport rather than something to fix.
-        let usbRunning = usb != nil || startUSBMirror()
+        // USB capture is opt-in and off by default: RPLAYHUB_USB_CAPTURE=1.
+        //
+        // It needs camera access, because macOS presents a tethered iPhone through the camera
+        // subsystem, and that turned into a long detour for no picture. The CoreDevice path now
+        // recovers from artefacting on its own, so it is the sane default and nothing here should
+        // pester about permissions to reach it.
+        let wantUSB = ProcessInfo.processInfo.environment["RPLAYHUB_USB_CAPTURE"] == "1"
+        let usbRunning = wantUSB && (usb != nil || startUSBMirror())
 
         let c = ControlClient(port: controlPort)
         do {
