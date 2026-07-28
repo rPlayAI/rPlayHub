@@ -518,6 +518,97 @@ class RTCPSession:
 STREAM_TIMEOUT_S = int(os.environ.get("RPLAY_STREAM_TIMEOUT", 600))
 
 
+def describe_answer(answer):
+    """Print what the device actually chose, rather than what we asked for.
+
+    The offer is a wish list; the device answers with the encoding it will really do — coded size,
+    frame rate, bitrate ceiling. Those three decide picture quality entirely, and we were throwing
+    the answer away, which meant every quality experiment had no readout. Measured against this
+    screen: 1184x2576 at ~45 fps and a ~4 Mbps ceiling is 0.029 bits/pixel, roughly 3.5x below
+    what UI content needs to look clean — and Device Hub gets the same numbers, so the artefacting
+    under motion is the encoder's budget, not our pipeline.
+    """
+    if not isinstance(answer, dict):
+        return
+    blob = None
+    for value in _walk(answer):
+        if isinstance(value, bytes) and value[:1] == b"b" and b"plist" in value[:16]:
+            try:
+                pl = plistlib.loads(value)
+            except Exception:
+                continue
+            for k, v in pl.items():
+                if isinstance(v, bytes) and "MediaBlob" in k:
+                    blob = v
+    if blob is None:
+        return
+    try:
+        raw = zlib.decompress(blob)
+    except Exception:
+        return
+    # The answer is protobuf we have not fully mapped. Rather than guess field names, surface the
+    # values that plausibly are the ones that matter: any varint that looks like a dimension, a
+    # frame rate or a bitrate. Wrong labels would be worse than none, so they are marked unsure.
+    print(f"  device answer: {len(raw)} bytes of protobuf")
+    seen = []
+    for fno, val in _varint_fields(raw):
+        if 200 <= val <= 4096 or 100_000 <= val <= 200_000_000:
+            seen.append(f"f{fno}={val}")
+    if seen:
+        print(f"    notable values (unmapped fields): {' '.join(seen[:16])}")
+
+
+def _walk(obj):
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from _walk(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _walk(v)
+    else:
+        yield obj
+
+
+def _varint_fields(buf, depth=0):
+    """Yield (field_number, value) for varints, descending into length-delimited submessages."""
+    o = 0
+    while o < len(buf):
+        try:
+            key, o = _read_varint(buf, o)
+        except Exception:
+            return
+        fno, wt = key >> 3, key & 7
+        if wt == 0:
+            try:
+                val, o = _read_varint(buf, o)
+            except Exception:
+                return
+            yield fno, val
+        elif wt == 2:
+            try:
+                n, o = _read_varint(buf, o)
+            except Exception:
+                return
+            sub, o = buf[o:o + n], o + n
+            if depth < 4:
+                yield from _varint_fields(sub, depth + 1)
+        elif wt == 5:
+            o += 4
+        elif wt == 1:
+            o += 8
+        else:
+            return
+
+
+def _read_varint(buf, o):
+    r = shift = 0
+    while True:
+        b = buf[o]; o += 1
+        r |= (b & 0x7F) << shift; shift += 7
+        if not b & 0x80:
+            return r, o
+
+
 def open_stream(dev_addr, our_addr, display_port, on_packet=None, codec="auto",
                 timeout_s=STREAM_TIMEOUT_S):
     """Negotiate an RTP screen stream and start draining it in a background thread.
@@ -550,8 +641,9 @@ def open_stream(dev_addr, our_addr, display_port, on_packet=None, codec="auto",
         "senderIP": dev_addr, "timeout": xpc.U64(timeout_s), "type": "video",
     }
     print(f"  negotiating stream: receiver [{our_addr}]:{recv_port} <- device {dev_addr}")
-    svc.invoke("com.apple.coredevice.feature.startmediastream", request,
-               action_identifier="com.apple.coredevice.action.mediastreamstart")
+    answer = svc.invoke("com.apple.coredevice.feature.startmediastream", request,
+                        action_identifier="com.apple.coredevice.action.mediastreamstart")
+    describe_answer(answer)
 
     stop = threading.Event()
     stats = {"packets": 0, "bytes": 0, "started": time.time()}
