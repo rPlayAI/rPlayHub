@@ -128,15 +128,28 @@ fi
 say "building rPlayHub"
 LOG="$ROOT/build/xcodebuild.log"
 mkdir -p "$ROOT/build"
+# Build as the invoking user, not as root.
+#
+# Only the engine needs root (it creates a utun). Building as root breaks code signing outright:
+# codesign cannot reach the user's login keychain, so the private key is unavailable and it fails
+# with errSecInternalComponent -- "unable to build chain to self-signed root". Dropping privileges
+# for the build is what makes a real signature possible, and a real signature is what lets the
+# camera grant survive a rebuild.
 build_app() {
-    xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug \
+    local as_user=()
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        # Existing root-owned build output would block the unprivileged build.
+        chown -R "$SUDO_USER" "$ROOT/build/DerivedData" 2>/dev/null || true
+        as_user=(sudo -u "$SUDO_USER")
+    fi
+    "${as_user[@]}" xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug \
         -derivedDataPath "$ROOT/build/DerivedData" \
         CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$1" \
         DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
         build >"$LOG" 2>&1
 }
 if ! build_app "$SIGN_ID"; then
-    if [[ "$SIGN_ID" != "-" ]] && grep -q "Signing certificate is invalid\|not valid for code signing" "$LOG"; then
+    if [[ "$SIGN_ID" != "-" ]] && grep -qE "Signing certificate is invalid|not valid for code signing|errSecInternalComponent|CodeSign failed" "$LOG"; then
         # A signing problem must not stop the app from running. Ad-hoc still builds and runs; it
         # just cannot hold a camera grant across rebuilds, which is worth saying out loud.
         say "that identity was rejected — falling back to ad-hoc (re-grant camera each rebuild)"
