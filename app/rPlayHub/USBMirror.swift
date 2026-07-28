@@ -89,9 +89,44 @@ final class USBMirror: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
                                   0, nil, UInt32(MemoryLayout<UInt32>.size), &allow)
     }
 
+    /// Ask for camera access, prompting the user the first time.
+    ///
+    /// Required, and easy to leave out: the tethered iPhone arrives through the camera subsystem,
+    /// so without an authorised process AVCaptureDeviceInput fails and macOS never prompts —
+    /// which looks exactly like "no device" and is why nothing appeared on the first attempt.
+    static func requestAuthorization(_ done: @escaping (Bool) -> Void) {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            done(true)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async { done(granted) }
+            }
+        default:
+            done(false)      // denied or restricted: only the user can undo this, in Settings
+        }
+    }
+
+    static var authorizationDescription: String {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:    return "granted"
+        case .notDetermined: return "not yet asked"
+        case .denied:        return "denied — grant it in Settings > Privacy & Security > Camera"
+        case .restricted:    return "restricted by policy"
+        @unknown default:    return "unknown"
+        }
+    }
+
     func start() -> Bool {
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+            status = "camera permission \(Self.authorizationDescription)"
+            return false
+        }
         guard let device = Self.availableDevice() else {
-            status = "no USB-tethered iPhone (cable connected and trusted?)"
+            let muxed = AVCaptureDevice.devices(for: .muxed).count
+            status = muxed == 0
+                ? "no USB-tethered iPhone — connect a data cable and trust this Mac"
+                : "\(muxed) muxed device(s) present but none looked like an iPhone"
             return false
         }
         guard let input = try? AVCaptureDeviceInput(device: device) else {

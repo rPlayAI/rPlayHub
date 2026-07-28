@@ -322,6 +322,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Control still runs over CoreDevice either way: touch goes through universalhidservice, and
     /// nothing about the picture changes that.
     private func startUSBMirror() -> Bool {
+        // Prompt on first run. Asking is asynchronous, so a fresh grant cannot help this attempt —
+        // reconnect once the answer arrives and the next attempt will take the USB path.
+        if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
+            USBMirror.requestAuthorization { [weak self] granted in
+                NSLog("rPlayHub: camera permission \(granted ? "granted" : "refused")")
+                if granted { self?.reconnect() }
+            }
+            return false
+        }
         let mirror = USBMirror()
         mirror.onFrame = { [weak self] picture in self?.view.displayLayer.present(picture) }
         mirror.onSize = { [weak self] size in
