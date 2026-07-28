@@ -139,7 +139,14 @@ def _media_blob_video(session_id, codec="auto"):
           # the encoder predicts from the newest acknowledged frame rather than from a frame the
           # receiver may have missed. Without it a single lost packet smears until the session
           # ends. This must be kept in step with RTCPSession.send_ltr_ack().
-          + _fv(7, 1) + _fv(8, 63) + _fv(12, 1))
+          #
+          # Both halves are switchable, because "LTR without acks" and "acks without LTR" are each
+          # worse than either consistent choice, and only an experiment can say which consistent
+          # choice this device likes:
+          #     RPLAY_LTRP=0      offer field 7 off — P-frames chain off the previous frame, so a
+          #                       bad frame diffuses and washes out instead of being anchored
+          #     RPLAY_LTR_ACK=0   stop sending the acks (see RTCPSession.send_ltr_ack)
+          + _fv(7, int(os.environ.get("RPLAY_LTRP", 1))) + _fv(8, 63) + _fv(12, 1))
     f9s = b""
     for f1, f2, f3 in _VIDEO_BITRATE_TIERS:
         # Only the large ceilings scale; the small values (299, 4100, 6500) are not bitrates.
@@ -524,6 +531,9 @@ _EXPERIMENTAL_KNOBS = ("RPLAY_WIDTH", "RPLAY_HEIGHT", "RPLAY_FPS", "RPLAY_VIDEO_
                        "RPLAY_DISPLAY_SCALE", "RPLAY_VIRTUAL_DISPLAY")
 _DEFAULT_TIMEOUT = 60 if any(os.environ.get(k) for k in _EXPERIMENTAL_KNOBS) else 600
 STREAM_TIMEOUT_S = int(os.environ.get("RPLAY_STREAM_TIMEOUT", _DEFAULT_TIMEOUT))
+
+# Sending LTR acks only makes sense while the offer asks for LTR; keep the pair switchable.
+LTR_ACK_ENABLED = os.environ.get("RPLAY_LTR_ACK", "1") != "0"
 
 
 def _stream_config_from_env():

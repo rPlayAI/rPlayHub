@@ -901,7 +901,7 @@ class MirrorCore:
             # held back — a non-empty buffer means some earlier packet has not been released yet,
             # so the frame is not actually complete however final this packet looks.
             intact = lost_now == self._lost_at_frame_start and not self._reorder.buf
-            if rtcp is not None and intact:
+            if rtcp is not None and intact and screen.LTR_ACK_ENABLED:
                 rtcp.send_ltr_ack(int.from_bytes(pkt[4:8], "big"))
             self._lost_at_frame_start = lost_now
 

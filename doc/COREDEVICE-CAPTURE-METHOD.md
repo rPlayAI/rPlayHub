@@ -79,6 +79,63 @@ utun frame (DLT_NULL: 4-byte AF header)
 - **RTP vs RTCP** share version 2 — restrict RTCP parsing to PT 200–223.
 - **Tunnel utun number changes** across reconnects — re-find it (ULA `fd..` / mtu 16000) each session.
 
+## The `startmediastream` message format (captured from Device Hub, iOS 27)
+
+### XPC invocation dict (client → device)
+```
+CoreDevice.actionIdentifier      = "com.apple.coredevice.action.mediastreamstart"
+CoreDevice.featureIdentifier     = ""          # empty on Apple's — match on actionIdentifier
+CoreDevice.coreDeviceVersion     = {components:[642,0,1,0,0], originalComponentsCount:3, stringValue:"642.0.1"}
+CoreDevice.CoreDeviceDDIProtocolVersion = 2
+CoreDevice.deviceIdentifier      = <uuid str>
+CoreDevice.invocationIdentifier  = <uuid str>
+CoreDevice.input = {
+    type                 = "video"            # or "audio"
+    direction            = "output"
+    timeout              = 20                  # NOT session lifetime (see findings) — RTCP keepalive gates life
+    clientSupportedFeatures = 140
+    senderIP             = "<device tunnel ip, fd..::1>"
+    receiverIP           = "<host tunnel ip, fd..::2>"
+    receiverPort         = <u16>               # where the device sends RTP
+    sessionEventChannel  = <uuid>              # ← Apple sends this; ours omits it (not on critical path)
+    options = {
+        avcMediaStreamOptionClientSessionID          = {uuid: <uuid>}   # keep for stopmediastream
+        AVCMediaStreamNegotiatorAccessNetworkType    = {int: 1}
+        AVCMediaStreamNegotiatorTransportProtocolType= {int: 2}
+        CoreDeviceVideoDisplayMode                   = {string: "DisplayByID"}
+        VideoStreamForDisplayID                      = {int: 1}
+    }
+    negotiatorOffer = <binary plist, ~487 B>   # ← the AVConference offer, below
+}
+```
+The **answer** comes back as `CoreDevice.output.connection.streamConfig` (the negotiated result — see findings).
+
+### negotiatorOffer (binary plist, "avc" = AVConference)
+```
+avcMediaStreamNegotiatorMode          = 5      # 5 = CoreDeviceScreenSharing (6 = audio)
+avcMediaStreamOptionCallID            = <uuid str>
+avcMediaStreamOptionRemoteEndpointInfo= <protobuf, ~33 B>   # {f1:0, f2:1, f3:model, f4:osver, f5:build}
+avcMediaStreamNegotiatorMediaBlob     = <zlib level-9 protobuf, ~203 B>   # ← the video settings, below
+```
+
+### mediaBlob protobuf (`VCMediaNegotiationBlobVideoSettings`, field map)
+```
+f1 = 1                     f2 = 1
+f5  VideoSettings {
+     f1 = SSRC/session   f2 = allowRTCPFB(0)
+     f3 = HEVC CodecBank { f1=payloadType 123; f2*=ResEntry{f1,f2=pairIdx,f3=50115,f4}; f3="FLS;SW:1;"; f4=1 }
+     f3 = AVC  CodecBank { f1=payloadType 100; f2*=ResEntry(×2); f3="FLS;VRAE:0;SW:1;"; f4=14 }
+     f7 = ltrpEnabled         # Apple 1 / ours 0  ← set 1
+     f8 = pixelFormats (63)
+     f10 = fecEnabled         # ours 1 / Apple ABSENT  ← remove
+     f12 = blackFrameOnClear (1)
+   }
+f6  = decoderName "Viceroy 1.7.0"
+f8  = 0
+f9* = bitrate tier { f1=kind, f2=bps, f3=bufferCap }   # 10 tiers; content identical to ours (order differs)
+f13 = timestamp   f14 = 2   f16 = 0   f18 = 1
+```
+
 ## Alternative captures (when tcpdump isn't enough)
 
 - **lldb hook** (`reference/capture/cdcap2.py`): breakpoint `nw_connection_send` / the receive completion
