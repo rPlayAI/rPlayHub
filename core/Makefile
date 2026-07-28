@@ -7,20 +7,24 @@ CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -O2 -g
 HEVC_SAMPLE ?= ../screen3.h265
 H264_SAMPLE ?= ../build/screen3.h264
 
-all: test_rp_video_stream test_rp_xpc
+all: test_rp_video_stream test_rp_xpc test_rp_remotexpc
 
 test_rp_video_stream: test_rp_video_stream.c rp_video_stream.c rp_video_stream.h rp_geometry.c rp_geometry.h
 	$(CC) $(CFLAGS) -o $@ test_rp_video_stream.c rp_video_stream.c rp_geometry.c
 
+test_rp_remotexpc: test_rp_remotexpc.c rp_remotexpc.c rp_http2.c rp_xpc.c
+	$(CC) $(CFLAGS) -o $@ $^
+
 test_rp_xpc: test_rp_xpc.c rp_xpc.c rp_xpc.h
 	$(CC) $(CFLAGS) -o $@ test_rp_xpc.c rp_xpc.c
 
-test: test_rp_video_stream test_rp_xpc
+test: test_rp_video_stream test_rp_xpc test_rp_remotexpc
 	./test_rp_video_stream $(HEVC_SAMPLE) $(H264_SAMPLE)
 	@echo "core/rp_xpc tests"
 	@./test_rp_xpc >/dev/null && echo "  encoder + reader OK (byte-compare against Python: scripts/check-xpc.sh)"
+	@./test_rp_remotexpc | tail -6
 
 clean:
-	rm -f test_rp_video_stream test_rp_xpc
+	rm -f test_rp_video_stream test_rp_xpc test_rp_remotexpc
 
 .PHONY: all test clean

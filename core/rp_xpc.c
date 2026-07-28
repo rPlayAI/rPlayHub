@@ -254,6 +254,48 @@ int rp_xpc_dict_get(const rp_xpc_obj *dict, const char *key, rp_xpc_obj *value)
     return -1;
 }
 
+int rp_xpc_dict_count(const rp_xpc_obj *dict)
+{
+    if (!dict || !dict->data || dict->size < 12) return -1;
+    if (r32(dict->data) != RP_XPC_DICT) return -1;
+    return (int)r32(dict->data + 8);
+}
+
+int rp_xpc_dict_next(const rp_xpc_obj *dict, size_t *cursor,
+                     const char **key, rp_xpc_obj *value)
+{
+    if (!dict || !dict->data || !cursor || dict->size < 12) return -1;
+    if (r32(dict->data) != RP_XPC_DICT) return -1;
+    uint32_t count = r32(dict->data + 8);
+
+    /* The cursor counts entries, and each step re-walks from the start. That is quadratic, but
+     * these dictionaries hold tens of entries and are parsed once per session, so the simplicity
+     * is worth more than the cycles -- and it keeps the cursor a plain integer the caller cannot
+     * corrupt into an out-of-bounds pointer. */
+    size_t want = *cursor;
+    if (want >= count) return -1;
+
+    const uint8_t *p = dict->data + 12;
+    const uint8_t *end = dict->data + dict->size;
+    for (uint32_t i = 0; i < count && p < end; i++) {
+        const char *k = (const char *)p;
+        size_t klen = strnlen(k, (size_t)(end - p));
+        if (klen == (size_t)(end - p)) return -1;          /* unterminated */
+        p += (klen + 1 + 3u) & ~3u;
+        if (p >= end) return -1;
+        size_t vsize = obj_size(p, (size_t)(end - p));
+        if (!vsize) return -1;
+        if (i == want) {
+            if (key) *key = k;
+            if (value) { value->data = p; value->size = vsize; }
+            *cursor = want + 1;
+            return 0;
+        }
+        p += vsize;
+    }
+    return -1;
+}
+
 int rp_xpc_get_uint64(const rp_xpc_obj *obj, uint64_t *out)
 {
     if (!obj || obj->size < 12) return -1;

@@ -27,6 +27,9 @@
 #include <net/if.h>
 #include <pthread.h>
 
+#include "../core/rp_remotexpc.h"
+#include "../core/rp_xpc.h"
+
 #define USBMUXD_SOCKET "/var/run/usbmuxd"
 #define LOCKDOWN_PORT 62078
 #define USBMUX_TYPE_PLIST 8
@@ -447,6 +450,126 @@ static int rsd_reachable(const char *device, long rsd_port) {
     return rc;
 }
 
+
+/* ---------------------------------------------------------------- Layer 3b: RSD over RemoteXPC
+ *
+ * The tunnel gives us an ordinary socket to the device; this is what makes it useful. One
+ * RemoteXPC handshake to the RSD port returns the service map -- roughly 85 entries naming every
+ * coredevice.* feature and the port it listens on. Nothing else can be reached without it.
+ *
+ * The session layer lives in ../core so the daemon and the ports share it; only the socket
+ * plumbing is here.
+ */
+static long sock_read(void *ctx, void *buf, size_t len)
+{
+    return (long)recv(*(int *)ctx, buf, len, 0);
+}
+
+static long sock_write(void *ctx, const void *buf, size_t len)
+{
+    return (long)send(*(int *)ctx, buf, len, 0);
+}
+
+static int rsd_connect(const char *addr, long port)
+{
+    struct sockaddr_in6 sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sin6_family = AF_INET6;
+    sa.sin6_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET6, addr, &sa.sin6_addr) != 1) return -1;
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct timeval tv = { .tv_sec = 8, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
+    return fd;
+}
+
+/* Ask RSD what the device offers, and print it. Returns the number of services, or -1. */
+static int rsd_enumerate(const char *addr, long port)
+{
+    int fd = rsd_connect(addr, port);
+    if (fd < 0) { fprintf(stderr, "  cannot connect to [%s]:%ld\n", addr, port); return -1; }
+
+    static uint8_t reassembly[1 << 20];   /* the service map runs to tens of kilobytes */
+    static uint8_t raw[1 << 16];
+    rp_rxpc_session s;
+    rp_rxpc_io io = { sock_read, sock_write, &fd };
+    rp_rxpc_init(&s, io, reassembly, sizeof reassembly, raw, sizeof raw);
+
+    if (rp_rxpc_handshake(&s) != 0) {
+        fprintf(stderr, "  RemoteXPC handshake failed\n");
+        close(fd);
+        return -1;
+    }
+
+    uint8_t body[512];
+    rp_xpc_writer w;
+    rp_xpc_writer_init(&w, body, sizeof body);
+    rp_xpc_dict_begin(&w);
+    rp_xpc_set_string(&w, "MessageType", "Handshake");
+    rp_xpc_set_uint64(&w, "MessagingProtocolVersion", 7);
+    {
+        /* A fixed UUID is fine: the device echoes it and does not key anything on the value. */
+        static const uint8_t uuid[16] = {0x12,0x34,0x56,0x78,0x12,0x34,0x56,0x78,
+                                         0x12,0x34,0x56,0x78,0x12,0x34,0x56,0x78};
+        rp_xpc_set_uuid(&w, "UUID", uuid);
+    }
+    rp_xpc_key(&w, "Properties");
+    rp_xpc_dict_begin(&w);
+    rp_xpc_set_uint64(&w, "RemoteXPCVersionFlags", 0x0100000000000006ULL);
+    rp_xpc_set_bool(&w, "SensitivePropertiesVisible", true);
+    rp_xpc_dict_end(&w);
+    rp_xpc_key(&w, "Services");
+    rp_xpc_dict_begin(&w);
+    rp_xpc_dict_end(&w);
+    rp_xpc_dict_end(&w);
+    if (w.overflow) { fprintf(stderr, "  handshake message overflowed\n"); close(fd); return -1; }
+
+    if (rp_rxpc_send(&s, body, w.len, 0) != 0) {
+        fprintf(stderr, "  could not send the RSD handshake\n");
+        close(fd);
+        return -1;
+    }
+
+    /* The answer is whichever message carries Services or Properties; earlier ones are noise. */
+    rp_xpc_obj peer, services;
+    for (;;) {
+        if (rp_rxpc_recv(&s, &peer) != 0) {
+            fprintf(stderr, "  no RSD answer\n");
+            close(fd);
+            return -1;
+        }
+        if (rp_xpc_dict_get(&peer, "Services", &services) == 0) break;
+    }
+
+    int count = rp_xpc_dict_count(&services);
+    printf("  %d services\n", count);
+
+    /* The three the mirroring product actually depends on. */
+    static const char *want[] = {
+        "com.apple.coredevice.screencaptureservice",
+        "com.apple.coredevice.displayservice",
+        "com.apple.coredevice.hid.universalhidservice",
+    };
+    for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
+        rp_xpc_obj svc, portv;
+        uint64_t p = 0;
+        if (rp_xpc_dict_get(&services, want[i], &svc) == 0 &&
+            rp_xpc_dict_get(&svc, "Port", &portv) == 0) {
+            const char *ps = NULL;
+            if (rp_xpc_get_string(&portv, &ps) == 0) printf("    %-46s port %s\n", want[i], ps);
+            else if (rp_xpc_get_uint64(&portv, &p) == 0) printf("    %-46s port %llu\n",
+                                                                want[i], (unsigned long long)p);
+        } else {
+            printf("    %-46s MISSING\n", want[i]);
+        }
+    }
+
+    close(fd);
+    return count;
+}
+
 int main(void) {
     SSL_library_init();
 
@@ -525,6 +648,10 @@ int main(void) {
     else
         printf("  ✗ could not connect to [%s]:%ld (%s)\n", addr, rsd,
                pump.failed ? pump.reason : strerror(errno));
+
+    printf("\n== Layer 3b: RSD over RemoteXPC ==\n");
+    if (rsd_enumerate(addr, rsd) < 0)
+        fprintf(stderr, "  service discovery failed\n");
 
     printf("\n  Ctrl-C to tear down. tx/rx packets shown every 2s.\n");
     while (!pump.failed) {

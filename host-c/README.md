@@ -14,11 +14,23 @@ committed to in C or Swift.
 |---|---|---|
 | 0 usbmux | ✅ `cdhost.c` | list devices, connect-to-port |
 | 1 lockdown | ✅ `cdhost.c` | QueryType, GetValue (real device info) |
-| 1.5 TLS session | TODO | OpenSSL client-cert; `MFiClientPlatformOpenSSL.c` is the model |
-| 2 CoreDevice tunnel | TODO | `CDTunnel` magic + u16 + JSON; trivial, Python is the reference |
-| 3 RemoteXPC + XPC codec | TODO | HTTP/2 framing + the XPC object codec; port `../host/rplayhub/wire/` |
+| 1.5 TLS session | ✅ `cdhost.c` | OpenSSL client-cert from the usbmuxd pair record |
+| 2 CoreDevice tunnel | ✅ `cdhost.c` | `CDTunnel` magic + u16 + JSON handshake |
+| 3a utun + packet pump | ✅ `cdhost.c` | needs root; RSD then reachable with an ordinary socket |
+| 3 RemoteXPC + XPC codec | ✅ `../core/rp_remotexpc.c` | handshake is **byte-identical** to the Python (195 bytes) |
+| 3b RSD service discovery | ✅ `cdhost.c` | one handshake returns the ~85-entry service map |
 | 4 screen / HID services | TODO | port `../host/screen.py`, `../host/hid.py` |
 | 2b RemotePairing (direct wifi door) | TODO | the big one — see `../deps/AccessorySDK/PROVENANCE.md` |
+
+The protocol core is compiled from `../core`, not duplicated here: `rp_xpc.c`, `rp_http2.c` and
+`rp_remotexpc.c` contain no sockets, no allocation and no Apple headers, which is what lets the
+same files build for Linux and Windows. `cdhost.c` holds only the platform plumbing — usbmuxd,
+OpenSSL, utun.
+
+`make -C ../core test` verifies the whole protocol layer **with no device attached**, including
+the RemoteXPC opening exchange byte-for-byte against the Python. That matters because the
+handshake's ordering and flags come from a captured session rather than from a specification: one
+wrong byte and the device closes the connection without explanation.
 
 ## Support SDK
 

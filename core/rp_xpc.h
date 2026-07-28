@@ -117,6 +117,18 @@ int rp_xpc_unwrap(const uint8_t *msg, size_t len, uint32_t *flags, uint64_t *mes
 /* Look up a key in a dictionary object. Returns 0 and fills `value` when found. */
 int rp_xpc_dict_get(const rp_xpc_obj *dict, const char *key, rp_xpc_obj *value);
 
+/* Walk a dictionary's entries in wire order.
+ *
+ * Start with *cursor = 0 and call until it returns non-zero. `key` points into the message and
+ * stays valid as long as it does. Needed because the interesting dictionaries -- the RSD service
+ * map above all -- are answers whose keys we do not know in advance; looking those up one at a
+ * time is impossible when the whole point is to discover what the device offers. */
+int rp_xpc_dict_next(const rp_xpc_obj *dict, size_t *cursor,
+                     const char **key, rp_xpc_obj *value);
+
+/* Number of entries in a dictionary, or -1 if it is not one. */
+int rp_xpc_dict_count(const rp_xpc_obj *dict);
+
 rp_xpc_type rp_xpc_obj_type(const rp_xpc_obj *obj);
 int rp_xpc_get_uint64(const rp_xpc_obj *obj, uint64_t *out);
 int rp_xpc_get_string(const rp_xpc_obj *obj, const char **out);  /* NUL-terminated in place */
