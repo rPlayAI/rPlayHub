@@ -518,6 +518,25 @@ class RTCPSession:
 STREAM_TIMEOUT_S = int(os.environ.get("RPLAY_STREAM_TIMEOUT", 600))
 
 
+def _stream_config_from_env():
+    """Build a streamConfig dict from RPLAY_* knobs. Empty means "let the device decide"."""
+    cfg = {}
+    for env, key in (("RPLAY_WIDTH", "CustomWidth"),
+                     ("RPLAY_HEIGHT", "CustomHeight"),
+                     ("RPLAY_FPS", "Framerate"),
+                     ("RPLAY_VIDEO_RESOLUTION", "VideoResolution"),
+                     ("RPLAY_MAX_BITRATE", "TXMaxBitrate"),
+                     ("RPLAY_MIN_BITRATE", "TXMinBitrate"),
+                     ("RPLAY_KEYFRAME_INTERVAL", "KeyFrameInterval")):
+        raw = os.environ.get(env)
+        if raw:
+            try:
+                cfg[key] = {"int": int(raw)}
+            except ValueError:
+                pass
+    return cfg
+
+
 def describe_answer(answer):
     """Print what the device actually chose, rather than what we asked for.
 
@@ -640,6 +659,22 @@ def open_stream(dev_addr, our_addr, display_port, on_packet=None, codec="auto",
         "receiverIP": our_addr, "receiverPort": xpc.U64(recv_port),
         "senderIP": dev_addr, "timeout": xpc.U64(timeout_s), "type": "video",
     }
+    cfg = _stream_config_from_env()
+    if cfg:
+        # `streamConfig` is a sibling of `options` and `negotiatorOffer` in the request vocabulary
+        # (CoreDeviceUtilities carries the whole key list), and its keys are the encoding settings
+        # the device otherwise picks alone: CustomWidth, CustomHeight, Framerate, TXMaxBitrate.
+        #
+        # This is the one lever with real headroom. At the negotiated 1184x2576 and ~45 fps, the
+        # ~4 Mbps the device grants is 0.029 bits/pixel — about 3.5x below what UI content needs,
+        # which is why one swipe destroys the picture. Device Hub measures the same, so this is a
+        # budget to escape rather than a bug to fix. Halving the coded size would put the same
+        # bitrate at roughly 0.17 bits/pixel.
+        #
+        # Apple does not send this key, so the device may ignore or reject it. A rejection is a
+        # clear signal rather than a silent degradation, which is why it is worth trying.
+        request["streamConfig"] = cfg
+        print(f"  streamConfig override: {cfg}")
     print(f"  negotiating stream: receiver [{our_addr}]:{recv_port} <- device {dev_addr}")
     answer = svc.invoke("com.apple.coredevice.feature.startmediastream", request,
                         action_identifier="com.apple.coredevice.action.mediastreamstart")
