@@ -50,3 +50,4 @@ host-c/cdhost
 core/test_rp_xpc
 core/test_rp_video_stream
 core/test_rp_http2
+core/test_rp_remotexpc
