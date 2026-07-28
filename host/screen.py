@@ -683,11 +683,24 @@ def open_stream(dev_addr, our_addr, display_port, on_packet=None, codec="auto",
 
     svc = CoreDeviceService(dev_addr, display_port)
     csid = uuid.uuid4()
+
+    # ONE identity for this receiver, used in both the offer and every RTCP packet we send.
+    #
+    # These used to be two independent random numbers, and that quietly broke LTR. Field 5.1 of
+    # the offer is our SSRC: the device echoes it back in its answer as RemoteSSRC, and Apple's
+    # capture shows the same value in all three places — offer 725448759, answer RemoteSSRC
+    # 725448759, and every LTR-ACK sent with SSRC 0x2b3d7837, which is that number.
+    #
+    # We were announcing one SSRC in the offer and sending acks from another, so the device saw
+    # acknowledgements from a source it had never associated with this stream and discarded them.
+    # That is the worst of both worlds: the encoder anchors prediction on a long-term reference
+    # and never learns which frames we actually received, so an error is anchored instead of
+    # washing out — exactly the "first frame perfect, then permanently garbled" symptom.
+    ssrc = random.randint(1, 0xFFFFFFFE)
     request = {
         "clientSupportedFeatures": xpc.U64(_CLIENT_SUPPORTED_FEATURES),
         "direction": "output",
-        "negotiatorOffer": build_offer(str(uuid.uuid4()).upper(), random.randint(0, 0xFFFFFFFF),
-                                       codec=codec),
+        "negotiatorOffer": build_offer(str(uuid.uuid4()).upper(), ssrc, codec=codec),
         "options": {
             "AVCMediaStreamNegotiatorAccessNetworkType": {"int": _ACCESS_NETWORK_TYPE},
             "AVCMediaStreamNegotiatorTransportProtocolType": {"int": _TRANSPORT_PROTOCOL_TYPE},
@@ -750,7 +763,7 @@ def open_stream(dev_addr, our_addr, display_port, on_packet=None, codec="auto",
 
     stop = threading.Event()
     stats = {"packets": 0, "bytes": 0, "started": time.time()}
-    rtcp = RTCPSession(sock)
+    rtcp = RTCPSession(sock, ssrc=ssrc)
 
     def drain():
         sock.settimeout(1.0)
