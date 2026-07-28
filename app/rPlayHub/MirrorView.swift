@@ -102,6 +102,19 @@ final class MirrorView: NSView {
         // aspect ratio already, so gravity-driven letterboxing would fight the crop maths.
         displayLayer.contentsGravity = .resize
         displayLayer.backgroundColor = NSColor.black.cgColor
+
+        // Filtering, which was left at the default and should not have been.
+        //
+        // The coded picture is 1184x2576 and the window is a few hundred points tall, so this is a
+        // 3-5x REDUCTION. CoreAnimation's default minification is .linear with no mipmaps, which
+        // at that ratio samples far too sparsely: edges break up, text shimmers as the picture
+        // moves, and the result reads as compression damage even when the decoded frame is clean.
+        // .trilinear enables mipmapped sampling and removes it.
+        displayLayer.minificationFilter = .trilinear
+        displayLayer.magnificationFilter = .linear
+        // Rasterising at the wrong scale would resample a second time.
+        displayLayer.contentsScale = window?.backingScaleFactor ?? 2
+        clipLayer.contentsScale = displayLayer.contentsScale
         // No timebase and no scheduling. The layer simply shows the newest decoded picture; the
         // decoder, not the layer, decides what gets decoded, and it decodes everything.
         clipLayer.addSublayer(displayLayer)
@@ -145,6 +158,16 @@ final class MirrorView: NSView {
         let fx = (p.x - r.minX) / r.width
         let fy = (p.y - r.minY) / r.height
         return CGPoint(x: min(max(fx, 0), 1), y: min(max(fy, 0), 1))
+    }
+
+    /// Backing scale changes when the window moves to a display with a different density; a stale
+    /// value makes CoreAnimation resample the picture a second time for no reason.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        let scale = window?.backingScaleFactor ?? 2
+        displayLayer.contentsScale = scale
+        clipLayer.contentsScale = scale
+        layer?.contentsScale = scale
     }
 
     override func layout() {
