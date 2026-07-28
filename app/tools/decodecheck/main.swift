@@ -85,6 +85,10 @@ while offset < input.count {
     offset = end
 }
 
+// Release the picture still waiting for a successor, the same way the app's idle timer does.
+// Without this the harness under-reports by one and hides the held-frame behaviour entirely.
+stream.flushPendingIfIdle(after: 0)
+
 print("parser emitted \(emittedNALs.count) NALs (input had \(inputNALs.count); "
       + "the last is expected to be withheld as incomplete)")
 
