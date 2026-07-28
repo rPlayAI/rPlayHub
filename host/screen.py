@@ -549,7 +549,12 @@ def _stream_config_from_env():
         raw = os.environ.get(env)
         if raw:
             try:
-                cfg[key] = {"int": int(raw)}
+                # PLAIN values, not {"int": n}. The options dictionary uses typed wrappers, but
+                # streamConfig does not: the device's own answer encodes CustomWidth as 1184,
+                # RTCPSendInterval as 1.0 and DestIsIPv6 as True. Sending wrapped values here is
+                # almost certainly what hung startmediastream the first time — the device would
+                # have read an integer and found a dictionary.
+                cfg[key] = int(raw)
             except ValueError:
                 pass
     return cfg
@@ -748,12 +753,16 @@ def open_stream(dev_addr, our_addr, display_port, on_packet=None, codec="auto",
         # budget to escape rather than a bug to fix. Halving the coded size would put the same
         # bitrate at roughly 0.17 bits/pixel.
         #
-        # MEASURED: sending this HANGS the device. displayservice stays reachable (its RSD port
-        # answers) but startmediastream never returns, and the slot is then held. So streamConfig
-        # is answer-only, or needs a completeness we cannot supply. Left in place because it is
-        # env-gated and the finding is worth keeping, but do not reach for it first — prefer
-        # VideoStreamDisplayScale or the virtual-display source below, both of which live in
-        # dictionaries the device already accepts from us.
+        # This hung the device once, when the values were sent as {"int": n} wrappers. The
+        # answer shows streamConfig uses plain scalars, so that mismatch is the likely cause and
+        # is now fixed. Still treat it carefully: it is the only key here Apple does not send.
+        #
+        # KeyFrameInterval is the interesting one. The device answers 0 — one IDR at stream start
+        # and never another — which is exactly why a single corrupted frame stays on screen for
+        # the rest of the session instead of washing out. A small non-zero interval would make
+        # the picture self-repair.
+        #
+        #     RPLAY_KEYFRAME_INTERVAL=60
         request["streamConfig"] = cfg
         print(f"  streamConfig override: {cfg}")
     print(f"  negotiating stream: receiver [{our_addr}]:{recv_port} <- device {dev_addr}")
