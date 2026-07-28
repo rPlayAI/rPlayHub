@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var stream: StreamClient?
     private var control: ControlClient?
     private var hevc: HEVCStream?
+    private var usb: USBMirror?
 
     private var recordItem: NSMenuItem?
     private var isRecording = false
@@ -315,6 +316,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         connect()
     }
 
+    /// Try the USB capture path. Returns false if no cabled iPhone is available, in which case
+    /// the caller falls back to the CoreDevice video stream.
+    ///
+    /// Control still runs over CoreDevice either way: touch goes through universalhidservice, and
+    /// nothing about the picture changes that.
+    private func startUSBMirror() -> Bool {
+        let mirror = USBMirror()
+        mirror.onFrame = { [weak self] picture in self?.view.displayLayer.present(picture) }
+        mirror.onSize = { [weak self] size in
+            guard let self else { return }
+            // The plug-in delivers the screen itself, with none of the 16-pixel encoder padding
+            // the CoreDevice path carries, so the frame IS the screen and must not be cropped.
+            self.view.videoSize = size
+            self.view.deviceSize = size
+            self.applySizing()
+        }
+        guard mirror.start() else {
+            NSLog("rPlayHub: USB capture unavailable — \(mirror.status); using the CoreDevice stream")
+            return false
+        }
+        usb = mirror
+        retryTimer?.invalidate()
+        retryTimer = nil
+        return true
+    }
+
     private func connect() {
         let c = ControlClient(port: controlPort)
         do {
@@ -325,6 +352,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         control = c
         view.control = c
+
+        // Prefer the USB capture path when a cable is present. Both paths end at the same layer,
+        // so this is purely about which produces the picture.
+        //
+        // The CoreDevice stream is capped by the device at 1184x2544 / 6 Mbps, which is about
+        // 0.03 bits per pixel and visibly falls apart the moment anything moves. Apple's own
+        // Device Hub negotiates the identical numbers and shows the identical artefacting, so it
+        // is a property of that transport rather than something to fix. The capture plug-in is
+        // built for screen recording and carries no such budget.
+        if startUSBMirror() { return }
 
         // Decode is explicit and unconditional; the layer only ever shows the newest picture.
         let vt = VideoDecoder()

@@ -26,6 +26,10 @@
 	<string>public.app-category.developer-tools</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<key>NSCameraUsageDescription</key>
+	<string>rPlayHub shows a USB-connected iPhone's screen. macOS presents the tethered device through the camera subsystem, so this permission is required to mirror it. No camera is used.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>The tethered iPhone is presented as a combined audio and video device, so this permission is required alongside the screen. No microphone is recorded.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSHighResolutionCapable</key>

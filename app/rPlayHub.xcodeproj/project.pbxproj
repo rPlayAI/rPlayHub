@@ -11,6 +11,7 @@
 		1A0000000000000000000021 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000011 /* AppDelegate.swift */; };
 		1A0000000000000000000022 /* MirrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000012 /* MirrorView.swift */; };
 		1A0000000000000000000023 /* HEVCStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000013 /* HEVCStream.swift */; };
+		1A0000000000000000000035 /* USBMirror.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000034 /* USBMirror.swift */; };
 		1A0000000000000000000033 /* AppBuild.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000032 /* AppBuild.swift */; };
 		1A0000000000000000000031 /* VideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000030 /* VideoDecoder.swift */; };
 		1A0000000000000000000024 /* StreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000014 /* StreamClient.swift */; };
@@ -26,6 +27,7 @@
 		1A0000000000000000000011 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		1A0000000000000000000012 /* MirrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorView.swift; sourceTree = "<group>"; };
 		1A0000000000000000000013 /* HEVCStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HEVCStream.swift; sourceTree = "<group>"; };
+		1A0000000000000000000034 /* USBMirror.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBMirror.swift; sourceTree = "<group>"; };
 		1A0000000000000000000032 /* AppBuild.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBuild.swift; sourceTree = "<group>"; };
 		1A0000000000000000000030 /* VideoDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDecoder.swift; sourceTree = "<group>"; };
 		1A0000000000000000000014 /* StreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamClient.swift; sourceTree = "<group>"; };
@@ -71,6 +73,7 @@
 				1A0000000000000000000011 /* AppDelegate.swift */,
 				1A0000000000000000000012 /* MirrorView.swift */,
 				1A0000000000000000000013 /* HEVCStream.swift */,
+				1A0000000000000000000034 /* USBMirror.swift */,
 				1A0000000000000000000032 /* AppBuild.swift */,
 				1A0000000000000000000030 /* VideoDecoder.swift */,
 				1A0000000000000000000014 /* StreamClient.swift */,
@@ -156,6 +159,7 @@
 				1A0000000000000000000021 /* AppDelegate.swift in Sources */,
 				1A0000000000000000000022 /* MirrorView.swift in Sources */,
 				1A0000000000000000000023 /* HEVCStream.swift in Sources */,
+				1A0000000000000000000035 /* USBMirror.swift in Sources */,
 				1A0000000000000000000033 /* AppBuild.swift in Sources */,
 				1A0000000000000000000031 /* VideoDecoder.swift in Sources */,
 				1A0000000000000000000024 /* StreamClient.swift in Sources */,
