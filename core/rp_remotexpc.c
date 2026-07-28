@@ -152,17 +152,24 @@ int rp_rxpc_recv(rp_rxpc_session *s, rp_xpc_obj *obj)
         }
         if (f.type != H2_DATA || !f.length || !f.payload) continue;
 
-        if (s->buf_len + f.length > s->buf_cap) { s->buf_len = 0; return -1; }
-        memcpy(s->buf + s->buf_len, f.payload, f.length);
-        s->buf_len += f.length;
+        /* One accumulator per stream. The device interleaves DATA on the root and reply streams,
+         * and appending both to a single buffer produces a message that is two halves of
+         * different replies -- which fails to parse, forever, while the bytes keep arriving. */
+        int slot = (f.stream == RP_RXPC_REPLY_STREAM) ? 1 : 0;
+        size_t half = s->buf_cap / 2;
+        uint8_t *buf = s->buf + (size_t)slot * half;
+
+        if (s->buf_len[slot] + f.length > half) { s->buf_len[slot] = 0; continue; }
+        memcpy(buf + s->buf_len[slot], f.payload, f.length);
+        s->buf_len[slot] += f.length;
 
         uint32_t flags;
         uint64_t mid;
         rp_xpc_obj parsed;
-        if (rp_xpc_unwrap(s->buf, s->buf_len, &flags, &mid, &parsed) != 0) {
+        if (rp_xpc_unwrap(buf, s->buf_len[slot], &flags, &mid, &parsed) != 0) {
             continue;      /* incomplete: keep the bytes and wait for the rest */
         }
-        s->buf_len = 0;
+        s->buf_len[slot] = 0;
 
         /* Skip acknowledgements -- no payload, or an empty dictionary. The device sends one of
          * these before the real answer, and mistaking it for the answer is the classic way to

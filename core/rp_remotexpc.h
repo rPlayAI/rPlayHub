@@ -43,11 +43,13 @@ typedef struct {
     rp_rxpc_io io;
     uint64_t   next_message_id;
 
-    /* Reassembly. A reply larger than one DATA frame arrives in pieces, and the service map from
-     * RSD is routinely tens of kilobytes, so this is the normal case rather than an edge one. */
+    /* Reassembly, PER STREAM. A reply larger than one DATA frame arrives in pieces -- the RSD
+     * service map is tens of kilobytes, so that is the normal case -- and the device interleaves
+     * frames on the root and reply streams. Accumulating both into one buffer splices unrelated
+     * messages together and nothing parses. The buffer is split in half, one side per stream. */
     uint8_t   *buf;
     size_t     buf_cap;
-    size_t     buf_len;
+    size_t     buf_len[2];
 
     /* Bytes read from the transport but not yet consumed as whole frames. */
     uint8_t   *raw;

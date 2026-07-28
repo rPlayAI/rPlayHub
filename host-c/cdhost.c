@@ -521,13 +521,31 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
 
     /* The answer is whichever message carries Services or Properties; earlier ones are noise. */
     rp_xpc_obj peer, services;
+    int replies = 0;
     for (;;) {
         if (rp_rxpc_recv(&s, &peer) != 0) {
-            fprintf(stderr, "  no RSD answer\n");
+            /* Say what came back before giving up. "No answer" and "an answer without the key we
+             * wanted" are different faults and were previously indistinguishable. */
+            fprintf(stderr, "  no RSD answer after %d message(s)\n", replies);
             close(fd);
             return -1;
         }
+        replies++;
         if (rp_xpc_dict_get(&peer, "Services", &services) == 0) break;
+        if (replies <= 3) {
+            const char *k = NULL;
+            rp_xpc_obj v;
+            size_t cursor = 0;
+            fprintf(stderr, "  (message %d has keys:", replies);
+            while (rp_xpc_dict_next(&peer, &cursor, &k, &v) == 0 && cursor <= 6)
+                fprintf(stderr, " %s", k);
+            fprintf(stderr, ")\n");
+        }
+        if (replies > 20) {
+            fprintf(stderr, "  gave up after %d messages without a Services map\n", replies);
+            close(fd);
+            return -1;
+        }
     }
 
     int count = rp_xpc_dict_count(&services);
