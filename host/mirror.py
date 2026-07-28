@@ -295,6 +295,7 @@ class MirrorCore:
         self._samples = []
         self._nal_types = {}
         self.rtcp_packets = 0
+        self.mbps_peak = 0.0
 
         self.link = None
         self.tun = None
@@ -612,6 +613,7 @@ class MirrorCore:
         over rather than only while it is happening.
         """
         prev_rtp = prev_nals = 0
+        prev_bytes = 0
         stalls = 0
         while not self._stop.is_set():
             time.sleep(period)
@@ -625,6 +627,17 @@ class MirrorCore:
             d_rtp, d_nals = rtp - prev_rtp, nals - prev_nals
             prev_rtp, prev_nals = rtp, nals
 
+            # Bitrate over THIS interval, and the highest interval so far. A cumulative average is
+            # useless for judging picture quality: the screen is static most of the time, so the
+            # average tracks how long the session idled rather than what the encoder does when it
+            # matters. Only the peak during motion is comparable to Device Hub's 3.96 Mbps.
+            cur_bytes = (self.stream["stats"].get("bytes", 0)
+                         if self.stream and self.stream.get("stats") else 0)
+            mbps_now = round((cur_bytes - prev_bytes) * 8 / period / 1e6, 2)
+            prev_bytes = cur_bytes
+            if mbps_now > self.mbps_peak:
+                self.mbps_peak = mbps_now
+
             age = (round(time.monotonic() - self.video.last_irap_at, 1)
                    if self.video.last_irap_at else None)
             sample = {"t": round(time.time() - self.started_at, 1),
@@ -637,6 +650,8 @@ class MirrorCore:
                       "rtp_late": self._reorder.late,
                       "loss_pct": self._reorder.loss_pct,
                       "queue_drops": self.queue_drops,
+                      "mbps": mbps_now,
+                      "mbps_peak": self.mbps_peak,
                       "rtcp": self.rtcp_packets,
                       "rr_sent": (self.stream.get("rtcp").rr_sent
                                   if self.stream and self.stream.get("rtcp") else 0),
@@ -674,6 +689,7 @@ class MirrorCore:
                 stalls = 0
                 print(f"  health: {sample['rtp_per_s']:.0f} RTP/s  "
                       f"{sample['nals_per_s']:.0f} NAL/s  "
+                      f"{mbps_now:.2f} Mbps (peak {self.mbps_peak:.2f})  "
                       f"loss {self._reorder.loss_pct}%  "
                       f"rr={sample['rr_sent']} pli={sample['pli_sent']} "
                       f"fir={sample['fir_sent']}  "
@@ -1046,6 +1062,7 @@ class MirrorCore:
                     # motion is the encoder's, not ours. A visibly better picture needs this to go
                     # up — which is what RPLAY_TIER_SCALE exists to test.
                     "mbps": self._stream_mbps(),
+                    "mbps_peak": self.mbps_peak,
                     "recording": rec.stats() if rec else None}
 
         raise KeyError(method)
