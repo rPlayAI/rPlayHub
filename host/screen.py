@@ -659,6 +659,31 @@ def open_stream(dev_addr, our_addr, display_port, on_packet=None, codec="auto",
         "receiverIP": our_addr, "receiverPort": xpc.U64(recv_port),
         "senderIP": dev_addr, "timeout": xpc.U64(timeout_s), "type": "video",
     }
+    # Scaling the captured display is the cheapest way to cut the pixel rate, and it goes in the
+    # options dictionary the device already accepts from us rather than in a new top-level key.
+    scale = os.environ.get("RPLAY_DISPLAY_SCALE")
+    if scale:
+        request["options"]["VideoStreamDisplayScale"] = {"double": float(scale)}
+        print(f"  display scale override: {scale}")
+
+    # A virtual external display is encoded at a size WE choose, which is the whole point: the
+    # device's own panel is 1184x2576 and the ~4 Mbps it grants cannot cover that in motion.
+    # CoreDeviceUtilities spells out the requirement — "kVideoStreamDisplayModeVirtualExternal
+    # requested, but missing width, height" — and the per-case coding keys are width/height/
+    # refreshRate.
+    virt = os.environ.get("RPLAY_VIRTUAL_DISPLAY")
+    if virt:
+        size, _, rate = virt.partition("@")
+        w, _, h = size.lower().partition("x")
+        source = {"width": xpc.U64(int(w)), "height": xpc.U64(int(h))}
+        if rate:
+            source["refreshRate"] = xpc.U64(int(rate))
+        request["source"] = {"videoVirtualExternalDisplay": source}
+        # DisplayByID names the device's own panel; a virtual display is a different mode.
+        request["options"]["CoreDeviceVideoDisplayMode"] = {"string": "VirtualExternal"}
+        request["options"].pop("VideoStreamForDisplayID", None)
+        print(f"  virtual external display: {w}x{h}" + (f"@{rate}" if rate else ""))
+
     cfg = _stream_config_from_env()
     if cfg:
         # `streamConfig` is a sibling of `options` and `negotiatorOffer` in the request vocabulary
@@ -671,8 +696,12 @@ def open_stream(dev_addr, our_addr, display_port, on_packet=None, codec="auto",
         # budget to escape rather than a bug to fix. Halving the coded size would put the same
         # bitrate at roughly 0.17 bits/pixel.
         #
-        # Apple does not send this key, so the device may ignore or reject it. A rejection is a
-        # clear signal rather than a silent degradation, which is why it is worth trying.
+        # MEASURED: sending this HANGS the device. displayservice stays reachable (its RSD port
+        # answers) but startmediastream never returns, and the slot is then held. So streamConfig
+        # is answer-only, or needs a completeness we cannot supply. Left in place because it is
+        # env-gated and the finding is worth keeping, but do not reach for it first — prefer
+        # VideoStreamDisplayScale or the virtual-display source below, both of which live in
+        # dictionaries the device already accepts from us.
         request["streamConfig"] = cfg
         print(f"  streamConfig override: {cfg}")
     print(f"  negotiating stream: receiver [{our_addr}]:{recv_port} <- device {dev_addr}")
