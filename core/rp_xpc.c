@@ -192,11 +192,26 @@ int rp_xpc_unwrap(const uint8_t *msg, size_t len, uint32_t *flags, uint64_t *mes
     if (message_id) *message_id = r64(msg + 16);
     if (obj) { obj->data = NULL; obj->size = 0; }
     if (plen == 0) return 0;                       /* control frame, no payload */
-    if (len < 24 + 8) return -1;
+
+    /* The whole declared payload must be present.
+     *
+     * Without this check a message that has only partly arrived parses as a complete but
+     * TRUNCATED object: the header is intact, the first entries decode, and the rest is simply
+     * missing. The caller then looks for a key that has not arrived yet, does not find it, and
+     * throws the buffered bytes away -- so a reply spanning several DATA frames can never be
+     * assembled, and the failure looks like the device going silent rather than like a parse
+     * error. That is exactly how RSD service discovery failed: the map is tens of kilobytes and
+     * always spans multiple frames.
+     *
+     * The wrapper is magic(4) + flags(4) + length(8) + message_id(8) + payload, and the length
+     * field counts the payload only. */
+    if (len < 24 + plen) return -1;
     if (r32(msg + 24) != RP_XPC_PAYLOAD_MAGIC) return -1;
     if (obj) {
         obj->data = msg + 32;
-        obj->size = len - 32;
+        /* Sized from the declaration, not from what happens to be in the buffer: anything after
+         * this message belongs to the next one. */
+        obj->size = (size_t)plen - 8;
     }
     return 0;
 }

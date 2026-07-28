@@ -53,3 +53,4 @@ core/test_rp_http2
 core/test_rp_remotexpc
 core/test_rp_media_offer
 core/test_rp_rtp
+core/test_rp_bigreply
