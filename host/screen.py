@@ -171,11 +171,21 @@ def build_offer(call_id, session_id, model="Mac15,9", os_ver="2205.3.1", build="
 
 # ---- RTP/HEVC depacketize (RFC 7798) ----
 _HEVC_NAL_AP, _HEVC_NAL_FU = 48, 49
-_DS_TRAILER = bytes.fromhex("04f00ac0000003000004ec0ab003")   # displayservice 14-byte NAL footer
+# There is a ~14-byte footer on most coded slices, and it is SESSION-SPECIFIC: one capture ends
+# every slice with 04f00ac0000003000004ec0ab003, another with 04a00a100000030000049209e403. We used
+# to strip a hardcoded value, which silently did nothing on any session that did not match it.
+#
+# It is not stripped at all any more, because stripping it was measured to be pointless AND
+# risky. Decoding a reference capture with and without the footer removed gives, in both ffmpeg
+# and VideoToolbox, zero errors and PIXEL-IDENTICAL output across every frame sampled. The bytes
+# are legal trailing padding (note the 000003 emulation-prevention escapes) that both decoders
+# skip. Removing them buys nothing, while any suffix match -- hardcoded or detected -- risks
+# cutting real slice data off a frame whose payload happens to end the same way.
 _ANNEXB = b"\x00\x00\x00\x01"
 
 def _strip_trailer(nal):
-    return nal[:-len(_DS_TRAILER)] if nal.endswith(_DS_TRAILER) else nal
+    """Kept as a seam, deliberately doing nothing — see the note above."""
+    return nal
 
 def _depacketize(payload, fu, out):
     if len(payload) < 2:
