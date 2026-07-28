@@ -28,3 +28,6 @@ clean:
 	rm -f test_rp_video_stream test_rp_xpc test_rp_remotexpc
 
 .PHONY: all test clean
+
+test_rp_media_offer: test_rp_media_offer.c rp_media_offer.c
+	$(CC) $(CFLAGS) -o $@ $^ -lz
