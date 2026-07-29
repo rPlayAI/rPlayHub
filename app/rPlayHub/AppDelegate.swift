@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var usb: USBMirror?
     private var usbAttempts = 0
     private var directStream: DirectStream?
+    /// Kept so the status timer can compare what we acknowledged against what we actually decoded.
+    private var videoDecoder: VideoDecoder?
     /// Last RTP loss count written to the log, so only changes are recorded.
     private var lastLoggedLoss: UInt64 = 0
     private var loggedRTPOnce = false
@@ -536,6 +538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeDecoder() -> HEVCStream {
         // Decode is explicit and unconditional; the layer only ever shows the newest picture.
         let vt = VideoDecoder()
+        self.videoDecoder = vt
         vt.onFrame = { [weak self] picture in self?.view.displayLayer.present(picture) }
         let decoder = HEVCStream(decoder: vt)
         decoder.onFormat = { [weak self] size in
@@ -685,10 +688,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lastRTPLogAt = now
                 AppBuild.log(String(format: "rtp: %llu lost of %llu (%.2f%%), %.1f Mbit/s, "
                                             + "%llu keyframes, %llu ltr-acked, %llu malformed, "
-                                            + "%llu late, %llu dup, %d not shown",
+                                            + "%llu late, %llu dup, %d not shown, "
+                                            + "%d decoded, %d failed",
                                     st.lost, st.lost + st.packets, pct, st.mbps,
                                     st.keyframes, st.ltrAcked, st.bad,
-                                    st.late, st.dup, skipped))
+                                    st.late, st.dup, skipped,
+                                    videoDecoder?.framesDecoded ?? 0,
+                                    videoDecoder?.decodeFailures ?? 0))
                 lastLoggedLoss = st.lost
             }
         }

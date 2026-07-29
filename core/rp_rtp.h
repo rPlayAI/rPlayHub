@@ -65,6 +65,8 @@ typedef struct {
     /* Frames whose declared length disagreed with the bytes actually present, and fragmented
      * NALs abandoned because they exceeded the reassembly buffer. Both used to be silent. */
     uint64_t malformed, truncated;
+    /* Identity of the fragmented NAL in flight, so continuations can be checked against it. */
+    uint8_t fu_indicator, fu_type;
 } rp_rtp_session;
 
 /* `storage` must hold RP_RTP_REORDER_WINDOW * 1500 bytes plus RP_RTP_MAX_NAL, and outlive the

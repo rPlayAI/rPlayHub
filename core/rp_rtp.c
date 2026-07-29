@@ -115,12 +115,26 @@ static void depacketize(rp_rtp_session *s, const uint8_t *p, size_t n)
         } else if (type == HEVC_FU) {
             if (n < 3) return;
             uint8_t fuh = p[2];
+            /* Continuation fragments must match the unit they continue: same layer/TID byte,
+             * same NAL type, and no start bit. DisplayNote's shipping receiver rejects the whole
+             * access unit when any of those disagree (H264Assembler::internalProcessPacket ->
+             * ERROR_MALFORMED -> reset), and it is right to: appending a fragment from a
+             * different NAL produces a unit that is structurally valid and silently wrong. */
+            if (!(fuh & 0x80) && s->fu_len) {
+                if (p[0] != s->fu_indicator || (fuh & 0x3F) != s->fu_type) {
+                    s->malformed++;
+                    s->fu_len = 0;
+                    return;
+                }
+            }
             if (fuh & 0x80) {          /* start: rebuild the two-byte NAL header */
                 s->fu_len = 0;
                 if (s->fu_cap < 2) return;
                 s->fu[0] = (uint8_t)((p[0] & 0x81) | (((fuh & 0x3F)) << 1));
                 s->fu[1] = p[1];
                 s->fu_len = 2;
+                s->fu_indicator = p[0];
+                s->fu_type = (uint8_t)(fuh & 0x3F);
             }
             size_t add = n - 3;
             if (s->fu_len && s->fu_len + add <= s->fu_cap) {
