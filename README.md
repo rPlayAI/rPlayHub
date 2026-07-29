@@ -146,3 +146,9 @@ transport (usbmux | RemotePairing | relay)  →  TunnelLink (raw IPv6 + addresse
    →  RSD service catalog  →  RemoteXPC channels
    →  coredevice.* services: screencapture, displayservice, universalhidservice
 ```
+
+## Building
+
+See [BUILD.md](BUILD.md) — the daemon (`make -C host-c`), the app (`xcodebuild`), and
+`scripts/live.sh` which does both. It also records the two things that reliably go wrong: building
+as root breaks code signing, and selecting a signing identity by name can pick a revoked one.
