@@ -470,11 +470,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let decoder = self.makeDecoder()
             let direct = DirectStream()
-            direct.onNAL = { [weak decoder] nal in
-                nal.withUnsafeBytes { raw in
-                    guard let base = raw.baseAddress else { return }
-                    decoder?.feedAnnexB(base.assumingMemoryBound(to: UInt8.self), raw.count)
-                }
+            // Hand each NAL straight to the decoder. The depacketizer already knows exactly
+            // where every NAL starts and ends, so writing start codes and then scanning for them
+            // again is not just wasted work: the Annex-B parser cannot know a NAL has ended until
+            // the NEXT start code arrives, so it holds the newest one back. Over the proxy that
+            // meant every frame waited for the following frame's bytes. Here the boundaries are
+            // known, so nothing waits.
+            direct.onNAL = { [weak decoder] framed in
+                guard framed.count > 4 else { return }
+                decoder?.handle(nal: framed.subdata(in: 4..<framed.count))
             }
             if direct.start(tunnel) {
                 self.directStream = direct
