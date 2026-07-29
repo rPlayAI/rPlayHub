@@ -248,15 +248,22 @@ void rp_ra_feed(rp_rtp_assembler *a, const uint8_t *pkt, size_t len, uint64_t no
     size_t plen = end - off;
 
     /* Extend the 16-bit sequence number across wraps. */
-    if (!a->have_max_seq) { a->max_seq = seq; a->have_max_seq = 1; }
-    else if ((uint16_t)(seq - a->max_seq) < 0x8000u) {
+    uint32_t cycles_for_this = a->cycles;
+    if (!a->have_max_seq) {
+        a->max_seq = seq;
+        a->have_max_seq = 1;
+    } else if ((uint16_t)(seq - a->max_seq) < 0x8000u) {
+        /* Newer than anything seen. If the 16-bit number went backwards, it wrapped. */
         if (seq < a->max_seq) a->cycles += 0x10000u;
+        cycles_for_this = a->cycles;
         a->max_seq = seq;
-    } else if ((uint16_t)(a->max_seq - seq) > 0x8000u) {
-        a->cycles += 0x10000u;
-        a->max_seq = seq;
+    } else if (seq > a->max_seq && a->cycles >= 0x10000u) {
+        /* Older than the newest, and numerically larger: it belongs to the PREVIOUS cycle. Using
+         * the current one would put it ~65536 ahead and queue a stale packet as a future one,
+         * stalling the stream for the full loss deadline every time the counter wraps. */
+        cycles_for_this = a->cycles - 0x10000u;
     }
-    int32_t ext = (int32_t)(a->cycles | seq);
+    int32_t ext = (int32_t)(cycles_for_this | seq);
 
     if (!a->have_awaiting) { a->awaiting = ext; a->have_awaiting = 1; }
 
@@ -269,11 +276,16 @@ void rp_ra_feed(rp_rtp_assembler *a, const uint8_t *pkt, size_t len, uint64_t no
     if (i < a->queue_len && a->queue[i].ext_seq == ext) { a->duplicates++; return; }
 
     if (a->queue_len == a->queue_cap) {
-        /* Full. The head is the packet everything is waiting for and it is not coming. */
+        /* Full: the head is what everything is waiting for and it is not coming. Stepping over it
+         * drains the queue, which shifts every element -- so the insertion point computed above is
+         * stale and MUST be found again. Adjusting it in place, as this first did, could place a
+         * packet out of order in the one situation the queue exists to handle. */
         declare_lost(a);
-        while (i > 0 && (i > a->queue_len || a->queue[i - 1].ext_seq >= ext)) i--;
-        if (a->queue_len == a->queue_cap) return;   /* still no room; drop rather than corrupt */
-        if (i > a->queue_len) i = a->queue_len;
+        if (a->queue_len == a->queue_cap) return;   /* still no room; drop rather than misorder */
+        if (ext < a->awaiting) { a->late++; return; }   /* the drain may have passed it */
+        i = 0;
+        while (i < a->queue_len && a->queue[i].ext_seq < ext) i++;
+        if (i < a->queue_len && a->queue[i].ext_seq == ext) { a->duplicates++; return; }
     }
 
     memmove(a->queue + i + 1, a->queue + i, (size_t)(a->queue_len - i) * sizeof a->queue[0]);
