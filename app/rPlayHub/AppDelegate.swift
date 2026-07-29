@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var directStream: DirectStream?
     /// Last RTP loss count written to the log, so only changes are recorded.
     private var lastLoggedLoss: UInt64 = 0
+    private var loggedRTPOnce = false
+    private var lastRTPLogAt: TimeInterval = 0
     private var idleFlush: Timer?
     private var askedForCamera = false
 
@@ -661,9 +663,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let pct = st.packets > 0 ? Double(st.lost) / Double(st.lost + st.packets) * 100 : 0
             health += String(format: "\n%.1f Mbit/s · %llu keyframes\n%llu lost (%.2f%%)",
                              st.mbps, st.keyframes, st.lost, pct)
-            // Log only when loss actually moves, so the log is a timeline of events rather than
-            // a wall of identical lines -- the point is to correlate a jump with a swipe.
-            if st.lost != lastLoggedLoss {
+            // Log the first sample unconditionally, then on any change, then every 30 s.
+            //
+            // Logging only on change was wrong: the counter starts at zero, so a session with no
+            // loss at all produced no lines -- indistinguishable from the measurement not running.
+            // "No evidence of loss" and "evidence of no loss" are different claims and this has to
+            // support the second one, since that is the whole reason the counter exists.
+            let now = Date().timeIntervalSinceReferenceDate
+            if !loggedRTPOnce || st.lost != lastLoggedLoss || now - lastRTPLogAt > 30 {
+                loggedRTPOnce = true
+                lastRTPLogAt = now
                 AppBuild.log(String(format: "rtp: %llu lost of %llu (%.2f%%), %.1f Mbit/s, "
                                             + "%llu keyframes, %llu ltr-acked, %d not shown",
                                     st.lost, st.lost + st.packets, pct, st.mbps,
