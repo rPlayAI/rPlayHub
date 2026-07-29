@@ -454,20 +454,21 @@ static void method_stream_info(int fd, long id)
      * numbers for a stream that does not exist would make the app look connected to nothing. */
     uint64_t packets = 0, nals = 0, keys = 0, lost = 0, acks = 0;
     double mbps = 0;
-    uint64_t bad = 0;
-    media_stats(g_media, &packets, &nals, &keys, &lost, &acks, &mbps, &bad);
+    uint64_t bad = 0, late = 0, dup = 0;
+    media_stats(g_media, &packets, &nals, &keys, &lost, &acks, &mbps, &bad, &late, &dup);
     double loss_pct = (packets + lost) ? 100.0 * (double)lost / (double)(packets + lost) : 0.0;
     send_line(fd,
               "{\"id\":%ld,\"ok\":true,\"result\":{"
               "\"port\":%d,\"codec\":\"hevc\",\"container\":\"annexb\",\"viewers\":%d,"
               "\"nals\":%llu,\"rtp_packets\":%llu,\"keyframes\":%llu,\"rtp_lost\":%llu,"
-              "\"loss_pct\":%.2f,\"mbps\":%.2f,\"ltr_acked\":%llu,\"rtp_malformed\":%llu,"
+              "\"loss_pct\":%.2f,\"mbps\":%.2f,\"ltr_acked\":%llu,\"rtp_malformed\":%llu,\"rtp_late\":%llu,\"rtp_dup\":%llu,"
               "\"engine\":\"cdhostd\",\"streaming\":%s,\"viewer_drops\":%llu,"
               "\"display_service_port\":%ld,\"hid_service_port\":%ld}}",
               id, STREAM_PORT, viewer_count,
               (unsigned long long)nals, (unsigned long long)packets,
               (unsigned long long)keys, (unsigned long long)lost,
               loss_pct, mbps, (unsigned long long)acks, (unsigned long long)bad,
+              (unsigned long long)late, (unsigned long long)dup,
               g_media ? "true" : "false", (unsigned long long)viewer_drops_total,
               s->display_port, s->hid_port);
 }
@@ -544,9 +545,12 @@ static void viewers_write(const uint8_t *data, size_t len)
 }
 
 static void on_media_nal(void *ctx, const uint8_t *annexb, size_t len,
-                         int is_parameter_set, int is_keyframe)
+                         int is_parameter_set, int is_keyframe, int end_of_frame)
 {
     (void)ctx;
+    /* End-of-frame is a signal, not data: no bytes, nothing to cache or forward. The proxy
+     * stream is Annex-B, which carries no frame boundaries anyway. */
+    if (end_of_frame || !annexb || !len) return;
     if (is_parameter_set) {
         /* Parameter sets accumulate: VPS, SPS and PPS are three separate NALs and a decoder
          * needs all three. Reset when one repeats, which is how a new set is signalled. */

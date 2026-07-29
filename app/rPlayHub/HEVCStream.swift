@@ -191,6 +191,17 @@ final class HEVCStream {
         accessUnit.append(nal)
     }
 
+    /// The transport says this access unit is complete — submit it now.
+    ///
+    /// This is what the RTP marker bit is for, and it beats every heuristic below it: no waiting
+    /// for the next picture's first slice, no idle timer, and correct for multi-slice pictures
+    /// which the first-slice test handles only by luck of them arriving back to back.
+    func endAccessUnit() {
+        lock.lock()
+        defer { lock.unlock() }
+        flushAccessUnit()
+    }
+
     /// Release a finished picture that is only waiting for the next one to arrive.
     ///
     /// A picture is assembled when its first slice appears and submitted when the FOLLOWING

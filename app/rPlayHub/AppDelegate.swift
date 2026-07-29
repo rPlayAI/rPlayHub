@@ -480,6 +480,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // the NEXT start code arrives, so it holds the newest one back. Over the proxy that
             // meant every frame waited for the following frame's bytes. Here the boundaries are
             // known, so nothing waits.
+            // Submit each picture the moment the transport says it is complete.
+            direct.onEndOfFrame = { [weak decoder] in decoder?.endAccessUnit() }
             direct.onNAL = { [weak decoder] framed in
                 guard framed.count > 4 else { return }
                 decoder?.handle(nal: framed.subdata(in: 4..<framed.count))
@@ -667,6 +669,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // present, or one too large to reassemble. Separate from loss on purpose -- these
             // packets were received, so a non-zero count here points at our parsing, not the link.
             if st.bad > 0 { health += "\n\(st.bad) malformed (received, did not add up)" }
+            // Arrived too late to use. Counted separately from loss because it IS separate:
+            // these packets reached us and were thrown away, so a stream reading "0 lost" can
+            // still be missing data. Reading loss alone overstates how intact the stream was.
+            if st.late > 0 { health += "\n\(st.late) too late to use" }
             // Log the first sample unconditionally, then on any change, then every 30 s.
             //
             // Logging only on change was wrong: the counter starts at zero, so a session with no
@@ -679,9 +685,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lastRTPLogAt = now
                 AppBuild.log(String(format: "rtp: %llu lost of %llu (%.2f%%), %.1f Mbit/s, "
                                             + "%llu keyframes, %llu ltr-acked, %llu malformed, "
-                                            + "%d not shown",
+                                            + "%llu late, %llu dup, %d not shown",
                                     st.lost, st.lost + st.packets, pct, st.mbps,
-                                    st.keyframes, st.ltrAcked, st.bad, skipped))
+                                    st.keyframes, st.ltrAcked, st.bad,
+                                    st.late, st.dup, skipped))
                 lastLoggedLoss = st.lost
             }
         }

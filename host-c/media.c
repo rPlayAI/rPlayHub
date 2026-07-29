@@ -47,6 +47,7 @@ struct media_session {
      * not reconstruct corrupts everything after it, which is the exact failure LTR exists to
      * prevent. */
     uint64_t lost_at_frame_start;
+    unsigned emitted_in_packet;
 
     int      negotiated;      /* the device is holding a stream slot for us */
     uint64_t packets, bytes, nals, keyframes;
@@ -77,7 +78,10 @@ static void nal_cb(void *ctx, const uint8_t *nal, size_t len)
     framed[0] = 0; framed[1] = 0; framed[2] = 0; framed[3] = 1;
     if (len > RP_RTP_MAX_NAL) return;
     memcpy(framed + 4, nal, len);
-    if (m->on_nal) m->on_nal(m->ctx, framed, len + 4, is_param, is_key);
+    /* The marker applies to the last NAL out of this packet. We do not know which NAL that is
+     * until the packet is fully depacketized, so it is stamped afterwards, below. */
+    if (m->on_nal) m->on_nal(m->ctx, framed, len + 4, is_param, is_key, 0);
+    m->emitted_in_packet++;
 }
 
 /* ------------------------------------------------------------------ receive */
@@ -105,6 +109,7 @@ static void *recv_loop(void *arg)
         rp_rtcp_note_rtp(&m->rtcp, pkt, (size_t)n);
 
         uint64_t lost_before = m->rtp.lost;
+        m->emitted_in_packet = 0;
         rp_rtp_feed(&m->rtp, pkt, (size_t)n);
 
         /* The marker bit ends a frame, so this is the moment to acknowledge it -- but only if
@@ -112,6 +117,10 @@ static void *recv_loop(void *arg)
         int marker = 0;
         uint32_t ts = 0;
         if (rp_rtp_header(pkt, (size_t)n, NULL, &ts, &marker, NULL) == 0 && marker) {
+            /* Announce the end of the access unit. A zero-length NAL carries no data and exists
+             * only to say "that was the last one" -- which lets the consumer submit the picture
+             * now instead of waiting for the next picture to start. */
+            if (m->on_nal) m->on_nal(m->ctx, NULL, 0, 0, 0, 1);
             if (m->rtp.lost == m->lost_at_frame_start && m->rtp.lost == lost_before) {
                 uint8_t ack[32];
                 size_t an = rp_rtcp_build_ltr_ack(&m->rtcp, ts, ack, sizeof ack);
@@ -375,12 +384,13 @@ void media_stop(media_session *m)
 }
 
 void media_stats(const media_session *m, uint64_t *packets, uint64_t *nals, uint64_t *keyframes,
-                 uint64_t *lost, uint64_t *ltr_acked, double *mbps, uint64_t *bad)
+                 uint64_t *lost, uint64_t *ltr_acked, double *mbps, uint64_t *bad,
+                 uint64_t *late, uint64_t *dup)
 {
     if (!m) {
         if (packets) *packets = 0; if (nals) *nals = 0; if (keyframes) *keyframes = 0;
         if (lost) *lost = 0; if (ltr_acked) *ltr_acked = 0; if (mbps) *mbps = 0;
-        if (bad) *bad = 0;
+        if (bad) *bad = 0; if (late) *late = 0; if (dup) *dup = 0;
         return;
     }
     if (packets) *packets = m->packets;
@@ -388,6 +398,8 @@ void media_stats(const media_session *m, uint64_t *packets, uint64_t *nals, uint
     if (keyframes) *keyframes = m->keyframes;
     if (lost) *lost = m->rtp.lost;
     if (bad) *bad = m->rtp.malformed + m->rtp.truncated;
+    if (late) *late = m->rtp.late;
+    if (dup) *dup = m->rtp.duplicates;
     if (ltr_acked) *ltr_acked = m->rtcp.ltr_acked;
     if (mbps) {
         struct timespec t;

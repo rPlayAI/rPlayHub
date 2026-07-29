@@ -21,6 +21,10 @@ import Foundation
 final class DirectStream {
     /// Every NAL, already framed with a start code, on the RTP thread.
     var onNAL: ((Data) -> Void)?
+    /// The RTP marker bit: the access unit just delivered is complete. Without this the consumer
+    /// has to infer the boundary from the NEXT picture's first slice, which cannot arrive until
+    /// the next picture does -- a whole frame of latency, and a guess where RTP states a fact.
+    var onEndOfFrame: (() -> Void)?
     /// Reported once when the stream is up.
     var onStarted: ((String) -> Void)?
 
@@ -77,9 +81,14 @@ final class DirectStream {
         cfg.keyframe_every_s = Self.keyframeInterval
 
         let ctx = Unmanaged.passUnretained(self).toOpaque()
-        media = media_start(&cfg, { ctx, annexb, len, _, _ in
-            guard let ctx, let annexb else { return }
+        media = media_start(&cfg, { ctx, annexb, len, _, _, endOfFrame in
+            guard let ctx else { return }
             let me = Unmanaged<DirectStream>.fromOpaque(ctx).takeUnretainedValue()
+            if endOfFrame != 0 {
+                me.onEndOfFrame?()
+                return
+            }
+            guard let annexb else { return }
             me.onNAL?(Data(bytes: annexb, count: len))
         }, ctx)
 
@@ -106,10 +115,11 @@ final class DirectStream {
     }
 
     var stats: (packets: UInt64, nals: UInt64, keyframes: UInt64,
-                lost: UInt64, ltrAcked: UInt64, mbps: Double, bad: UInt64) {
+                lost: UInt64, ltrAcked: UInt64, mbps: Double, bad: UInt64,
+                late: UInt64, dup: UInt64) {
         var p: UInt64 = 0, n: UInt64 = 0, k: UInt64 = 0, l: UInt64 = 0, a: UInt64 = 0
-        var mbps: Double = 0, bad: UInt64 = 0
-        media_stats(media, &p, &n, &k, &l, &a, &mbps, &bad)
-        return (p, n, k, l, a, mbps, bad)
+        var mbps: Double = 0, bad: UInt64 = 0, late: UInt64 = 0, dup: UInt64 = 0
+        media_stats(media, &p, &n, &k, &l, &a, &mbps, &bad, &late, &dup)
+        return (p, n, k, l, a, mbps, bad, late, dup)
     }
 }
