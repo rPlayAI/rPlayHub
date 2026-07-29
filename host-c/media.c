@@ -6,6 +6,7 @@
 #include <netinet/tcp.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -110,8 +111,13 @@ static void *recv_loop(void *arg)
          * implementations -- if a production RTP receiver renders the same corruption, our
          * depacketizer is not the cause, and if it does not, it is.
          *
-         * Fire and forget on loopback: a slow or absent consumer cannot apply backpressure to a
-         * UDP send, so this cannot perturb the measurement it exists to make. */
+         * MEASURED CAVEAT: this is not free, and my first version of this comment claimed it was.
+         * Enabling the mirror took a stream that had run at 0.00% loss for tens of thousands of
+         * packets to 7.9-10.6% loss with decode failures to match. One extra syscall per packet on
+         * the receive thread is enough to make it miss the next datagram, so the mirror IS part of
+         * what it measures. The socket is non-blocking and given a large send buffer to reduce
+         * that, but do not treat a mirrored run as a clean baseline -- compare mirrored against
+         * mirrored, and take loss figures from a run with the mirror off. */
         if (m->fwd_fd >= 0)
             sendto(m->fwd_fd, pkt, (size_t)n, 0,
                    (struct sockaddr *)&m->fwd_addr, sizeof m->fwd_addr);
@@ -199,6 +205,11 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
             m->fwd_addr.sin_family = AF_INET;
             m->fwd_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             m->fwd_addr.sin_port = htons((uint16_t)atoi(fwd));
+            /* Never let the copy stall the receive thread: non-blocking, and a send buffer big
+             * enough that a bursty consumer does not push back within one frame. */
+            int fl = fcntl(m->fwd_fd, F_GETFL, 0);
+            if (fl >= 0) fcntl(m->fwd_fd, F_SETFL, fl | O_NONBLOCK);
+            setsockopt(m->fwd_fd, SOL_SOCKET, SO_SNDBUF, &(int){ 4 * 1024 * 1024 }, sizeof(int));
             fprintf(stderr, "  mirroring RTP to 127.0.0.1:%s for an independent receiver\n", fwd);
         }
     }

@@ -15,8 +15,10 @@
 #   ffmpeg is clean and we are not -> the fault is ours, and this gives a working reference to
 #     diff against, live, rather than against a capture that may not reproduce it.
 #
-# Nothing here perturbs the real path: the mirror is a fire-and-forget UDP send on loopback, so a
-# slow or absent consumer cannot push back on the receive thread.
+# The mirror is NOT free, despite what this comment first claimed. Turning it on took a stream
+# that had held 0.00% loss over tens of thousands of packets to 7.9-10.6% loss: one extra syscall
+# per packet on the receive thread is enough to miss the next datagram. Compare mirrored runs
+# against mirrored runs, and take any loss figure from a run with the mirror off.
 set -e
 
 PORT="${1:-5004}"
