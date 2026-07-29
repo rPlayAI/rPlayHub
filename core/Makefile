@@ -24,6 +24,7 @@ test: test_rp_video_stream test_rp_xpc test_rp_remotexpc test_rp_media_offer tes
 	@./test_rp_xpc >/dev/null && echo "  encoder + reader OK (byte-compare against Python: scripts/check-xpc.sh)"
 	@./test_rp_remotexpc | tail -6
 	@./test_rp_bigreply
+	@../scripts/check-handshake.sh || true
 	@echo "core/rp_media_offer + rp_rtp (byte-compared against the Python and a real capture)"
 	@../scripts/check-offer.sh || true
 	@../scripts/check-rtp.sh || true

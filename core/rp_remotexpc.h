@@ -30,7 +30,13 @@ extern "C" {
 #define RP_RXPC_ROOT_STREAM   1u
 #define RP_RXPC_REPLY_STREAM  3u
 
-#define RP_RXPC_INITIAL_WINDOW 1048576u
+/* 16 MB, matching the Python that is proven against devices.
+ *
+ * Not an arbitrary size. HTTP/2 stops a sender once it has written this many bytes unacknowledged,
+ * and a full-screen screenshot is several megabytes: at 1 MB the transfer stalled at exactly the
+ * limit and looked like the device going silent. The reference implementation picks a window large
+ * enough that a single reply never reaches it. */
+#define RP_RXPC_INITIAL_WINDOW (16u * 1024u * 1024u)
 
 /* Transport. Return the number of bytes moved, 0 on clean close, negative on error. */
 typedef struct {
