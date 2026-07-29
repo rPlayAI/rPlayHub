@@ -1,8 +1,20 @@
 #include "rp_remotexpc.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "rp_http2.h"
+
+/* Set RPLAY_XPC_DEBUG=1 to trace every frame and message. A receive loop that silently skips
+ * things is impossible to diagnose from the outside -- which is how "the service never answered"
+ * ended up meaning four different things over four hardware runs. */
+static int xpc_debug(void)
+{
+    static int cached = -1;
+    if (cached < 0) { const char *e = getenv("RPLAY_XPC_DEBUG"); cached = (e && *e == '1'); }
+    return cached;
+}
 
 #define H2_DATA          0x0
 #define H2_RST_STREAM    0x3
@@ -150,6 +162,9 @@ int rp_rxpc_recv(rp_rxpc_session *s, rp_xpc_obj *obj)
             if (!n || write_all(s, out, n)) return -1;
             continue;
         }
+        if (xpc_debug())
+            fprintf(stderr, "    [xpc] frame type=0x%x flags=0x%x stream=%u len=%zu\n",
+                    f.type, f.flags, f.stream, f.length);
         if (f.type != H2_DATA || !f.length || !f.payload) continue;
 
         /* One accumulator per stream. The device interleaves DATA on the root and reply streams,
@@ -174,8 +189,15 @@ int rp_rxpc_recv(rp_rxpc_session *s, rp_xpc_obj *obj)
         uint64_t mid;
         rp_xpc_obj parsed;
         if (rp_xpc_unwrap(buf, s->buf_len[slot], &flags, &mid, &parsed) != 0) {
+            if (xpc_debug())
+                fprintf(stderr, "    [xpc] incomplete: %zu bytes buffered on stream %u\n",
+                        s->buf_len[slot], f.stream);
             continue;      /* incomplete: keep the bytes and wait for the rest */
         }
+        if (xpc_debug())
+            fprintf(stderr, "    [xpc] message flags=0x%x id=%llu payload=%zu bytes%s\n",
+                    flags, (unsigned long long)mid, parsed.size,
+                    (parsed.size == 0 || rp_xpc_is_empty_dict(&parsed)) ? "  (SKIPPED as ack)" : "");
         s->buf_len[slot] = 0;
 
         /* Skip acknowledgements -- no payload, or an empty dictionary. The device sends one of
