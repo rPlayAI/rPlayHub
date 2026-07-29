@@ -47,6 +47,7 @@ struct media_session {
      * prevent. */
     uint64_t lost_at_frame_start;
 
+    int      negotiated;      /* the device is holding a stream slot for us */
     uint64_t packets, bytes, nals, keyframes;
     struct timespec started;
 };
@@ -254,6 +255,7 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
         goto fail;
     }
     printf("  media stream negotiated, receiving on port %d\n", recv_port);
+    m->negotiated = 1;
 
     clock_gettime(CLOCK_MONOTONIC, &m->started);
     pthread_create(&m->recv_thread, NULL, recv_loop, m);
@@ -294,6 +296,35 @@ long media_sock_write(void *ctx, const void *buf, size_t len) { return (long)sen
 void media_stop(media_session *m)
 {
     if (!m) return;
+
+    /* Tell the device to release the stream before dropping the sockets.
+     *
+     * It allows ONE media stream per session and holds the slot for the negotiated lifetime --
+     * ten minutes -- if nobody stops it. Now that the app owns the stream rather than a
+     * long-lived daemon, restarts are frequent, and without this every restart would find the
+     * device still busy from the previous run. */
+    if (m->svc >= 0 && m->negotiated) {
+        static const uint8_t csid[16] = {0x16,0x0f,0xd8,0xd6,0x03,0x69,0x48,0xc1,
+                                         0xaa,0xd8,0x3a,0x96,0x3a,0xde,0x19,0x3f};
+        uint8_t input[256];
+        rp_xpc_writer w;
+        rp_xpc_writer_init(&w, input, sizeof input);
+        rp_xpc_dict_begin(&w);
+        rp_xpc_key(&w, "avcMediaStreamOptionClientSessionID");
+        rp_xpc_dict_begin(&w);
+        rp_xpc_set_uuid(&w, "uuid", csid);
+        rp_xpc_dict_end(&w);
+        rp_xpc_dict_end(&w);
+        if (!w.overflow) {
+            rp_xpc_obj out;
+            char ua[37] = "8f1e2c40-0000-4000-8000-00000000000a";
+            char ub[37] = "8f1e2c40-0000-4000-8000-00000000000b";
+            if (rp_cd_invoke(&m->rxpc, RP_CD_FEATURE_STOPSTREAM, RP_CD_ACTION_STOPSTREAM,
+                             input, w.len, ua, ub, &out, NULL) == 0)
+                printf("  media stream released\n");
+        }
+    }
+
     m->stop = 1;
     if (m->recv_thread) pthread_join(m->recv_thread, NULL);
     if (m->rtcp_thread) pthread_join(m->rtcp_thread, NULL);

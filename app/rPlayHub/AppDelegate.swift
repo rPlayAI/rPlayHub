@@ -445,11 +445,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.startProxiedStream(c)
                 return
             }
+            let decoder = self.makeDecoder()
             let direct = DirectStream()
-            direct.onNAL = { [weak self] nal in
+            direct.onNAL = { [weak decoder] nal in
                 nal.withUnsafeBytes { raw in
                     guard let base = raw.baseAddress else { return }
-                    self?.hevc?.feedAnnexB(base.assumingMemoryBound(to: UInt8.self), raw.count)
+                    decoder?.feedAnnexB(base.assumingMemoryBound(to: UInt8.self), raw.count)
                 }
             }
             if direct.start(tunnel) {
@@ -461,8 +462,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The original route: the engine depacketizes and we read Annex-B over loopback.
-    private func startProxiedStream(_ c: ControlClient) {
+    /// Build the decoder and the idle flush. Both video paths need exactly this, and having it
+    /// in one place is what stops the direct path feeding a decoder that was never created --
+    /// which it did, silently, on the first attempt.
+    @discardableResult
+    private func makeDecoder() -> HEVCStream {
         // Decode is explicit and unconditional; the layer only ever shows the newest picture.
         let vt = VideoDecoder()
         vt.onFrame = { [weak self] picture in self?.view.displayLayer.present(picture) }
@@ -470,17 +474,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         decoder.onFormat = { [weak self] size in
             guard let self else { return }
             self.view.videoSize = size          // coded size, padding included
+            // The direct path has no engine telling us the screen size, and an unknown one would
+            // leave the crop disabled. The coded frame is the screen plus 16-pixel alignment
+            // padding, so fall back to it rather than showing nothing.
+            if self.view.deviceSize == .zero { self.view.deviceSize = size }
             self.applySizing()
         }
         hevc = decoder
 
         // Release a finished picture once the stream goes quiet, rather than leaving it to wait
-        // for the next one. Without this the newest frame is always one behind, and the moment
-        // motion stops the final frame is never displayed at all.
+        // for the next one.
         idleFlush?.invalidate()
         idleFlush = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak decoder] _ in
             decoder?.flushPendingIfIdle()
         }
+        return decoder
+    }
+
+    /// The original route: the engine depacketizes and we read Annex-B over loopback.
+    private func startProxiedStream(_ c: ControlClient) {
+        let decoder = makeDecoder()
 
         let s = StreamClient(port: videoPort)
         s.onNAL = { [weak decoder] nal in decoder?.handle(nal: nal) }
