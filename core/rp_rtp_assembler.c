@@ -177,6 +177,7 @@ static int assemble(rp_rtp_assembler *a, const uint8_t *p, size_t n)
 
 static void deliver(rp_rtp_assembler *a, rp_ra_packet *pk)
 {
+    a->last_rtp_time = pk->rtp_time;
     if (assemble(a, pk->data, pk->len) != 0) {
         a->malformed++;
         reset_fragment(a);

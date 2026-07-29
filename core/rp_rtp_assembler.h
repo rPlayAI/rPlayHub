@@ -102,6 +102,10 @@ typedef struct {
      * are kept apart because they mean different things: `lost` never arrived, `late` arrived
      * after we gave up on it, `malformed` arrived and did not add up. */
     uint64_t received, lost, late, duplicates, malformed, discontinuities, frames;
+    /* Timestamp of the packet most recently delivered. The LTR acknowledgement has to carry the
+     * timestamp of the frame it acknowledges, and with a reorder queue the packet that closed a
+     * frame is not necessarily the one that just arrived. */
+    uint32_t last_rtp_time;
 } rp_rtp_assembler;
 
 /* `queue` must hold at least `queue_cap` entries; `nal_storage` at least `nal_cap` bytes.

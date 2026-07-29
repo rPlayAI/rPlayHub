@@ -18,6 +18,7 @@
 		1A0000000000000000000049 /* rp_coredevice.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000048 /* rp_coredevice.c */; };
 		1A000000000000000000004B /* rp_media_offer.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A000000000000000000004A /* rp_media_offer.c */; };
 		1A000000000000000000004D /* rp_rtp.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A000000000000000000004C /* rp_rtp.c */; };
+		1A0000000000000000000AA1 /* rp_rtp_assembler.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000AA0 /* rp_rtp_assembler.c */; };
 		1A000000000000000000004F /* rp_rtcp.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A000000000000000000004E /* rp_rtcp.c */; };
 		1A0000000000000000000051 /* media.c in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000050 /* media.c */; };
 		1A0000000000000000000035 /* USBMirror.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000034 /* USBMirror.swift */; };
@@ -43,6 +44,7 @@
 		1A0000000000000000000048 /* rp_coredevice.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = rp_coredevice.c; path = ../core/rp_coredevice.c; sourceTree = SOURCE_ROOT; };
 		1A000000000000000000004A /* rp_media_offer.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = rp_media_offer.c; path = ../core/rp_media_offer.c; sourceTree = SOURCE_ROOT; };
 		1A000000000000000000004C /* rp_rtp.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = rp_rtp.c; path = ../core/rp_rtp.c; sourceTree = SOURCE_ROOT; };
+		1A0000000000000000000AA0 /* rp_rtp_assembler.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = rp_rtp_assembler.c; path = ../core/rp_rtp_assembler.c; sourceTree = SOURCE_ROOT; };
 		1A000000000000000000004E /* rp_rtcp.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = rp_rtcp.c; path = ../core/rp_rtcp.c; sourceTree = SOURCE_ROOT; };
 		1A0000000000000000000050 /* media.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = media.c; path = ../host-c/media.c; sourceTree = SOURCE_ROOT; };
 		1A0000000000000000000034 /* USBMirror.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBMirror.swift; sourceTree = "<group>"; };
@@ -98,6 +100,7 @@
 				1A0000000000000000000048 /* rp_coredevice.c */,
 				1A000000000000000000004A /* rp_media_offer.c */,
 				1A000000000000000000004C /* rp_rtp.c */,
+				1A0000000000000000000AA0 /* rp_rtp_assembler.c */,
 				1A000000000000000000004E /* rp_rtcp.c */,
 				1A0000000000000000000050 /* media.c */,
 				1A0000000000000000000034 /* USBMirror.swift */,
@@ -193,6 +196,7 @@
 				1A0000000000000000000049 /* rp_coredevice.c in Sources */,
 				1A000000000000000000004B /* rp_media_offer.c in Sources */,
 				1A000000000000000000004D /* rp_rtp.c in Sources */,
+				1A0000000000000000000AA1 /* rp_rtp_assembler.c in Sources */,
 				1A000000000000000000004F /* rp_rtcp.c in Sources */,
 				1A0000000000000000000051 /* media.c in Sources */,
 				1A0000000000000000000035 /* USBMirror.swift in Sources */,

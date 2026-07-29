@@ -51,7 +51,7 @@ endif
 CORE_DIR := ../core
 CORE_SRC := $(CORE_DIR)/rp_xpc.c $(CORE_DIR)/rp_http2.c $(CORE_DIR)/rp_remotexpc.c \
             $(CORE_DIR)/rp_coredevice.c $(CORE_DIR)/rp_media_offer.c \
-            $(CORE_DIR)/rp_rtp.c $(CORE_DIR)/rp_rtcp.c
+            $(CORE_DIR)/rp_rtp.c $(CORE_DIR)/rp_rtp_assembler.c $(CORE_DIR)/rp_rtcp.c
 CFLAGS   += -I$(CORE_DIR)
 
 all: cdhost

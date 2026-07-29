@@ -1,4 +1,5 @@
 #include "media.h"
+#include "rp_rtp_assembler.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -48,6 +49,11 @@ struct media_session {
      * not reconstruct corrupts everything after it, which is the exact failure LTR exists to
      * prevent. */
     uint64_t lost_at_frame_start;
+    /* The vendored Miracast assembler, used instead of rp_rtp when RPLAY_ASSEMBLER=miracast. */
+    int use_ra;
+    rp_rtp_assembler ra;
+    rp_ra_packet *ra_queue;
+    uint8_t *ra_nal;
     unsigned emitted_in_packet;
     int fwd_fd;                       /* -1 unless RPLAY_RTP_FORWARD is set */
     struct sockaddr_in fwd_addr;
@@ -67,6 +73,11 @@ static uint64_t now_ms(void)
 /* ------------------------------------------------------------------ NAL classification */
 
 static int hevc_type(const uint8_t *nal, size_t n) { return n ? (nal[0] >> 1) & 0x3F : -1; }
+
+/* The assembler delivers whole NALs and signals frame ends itself, so both paths converge on
+ * the same media_nal_fn the consumer already sees. */
+static void ra_nal_cb(void *ctx, const uint8_t *nal, size_t len);
+static void ra_frame_cb(void *ctx);
 
 static void nal_cb(void *ctx, const uint8_t *nal, size_t len)
 {
@@ -98,7 +109,12 @@ static void *recv_loop(void *arg)
         socklen_t flen = sizeof from;
         ssize_t n = recvfrom(m->udp, pkt, sizeof pkt, 0, (struct sockaddr *)&from, &flen);
         if (n <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                /* Idle. This is what enforces the 100 ms deadline when no further packet arrives
+                 * to drive it; without it a gap at the end of a burst would hold the picture. */
+                if (m->use_ra) rp_ra_tick(&m->ra, now_ms() * 1000ull);
+                continue;
+            }
             break;
         }
         if (!m->have_peer) { m->peer = from; m->have_peer = 1; }
@@ -127,6 +143,15 @@ static void *recv_loop(void *arg)
             continue;
         }
         rp_rtcp_note_rtp(&m->rtcp, pkt, (size_t)n);
+
+        if (m->use_ra) {
+            /* The assembler owns sequencing, fragment reassembly and the frame boundary, and
+             * raises the LTR acknowledgement from its own callback -- it must, because with a
+             * reorder queue the packet that completes a frame is not necessarily the one that
+             * just arrived, which is precisely the case the old path got wrong. */
+            rp_ra_feed(&m->ra, pkt, (size_t)n, now_ms() * 1000ull);
+            continue;
+        }
 
         uint64_t lost_before = m->rtp.lost;
         m->emitted_in_packet = 0;
@@ -190,6 +215,30 @@ static void *rtcp_loop(void *arg)
 
 static int connect_service(media_session *m, const char *addr, long port);
 
+/* One NAL from the vendored assembler: frame it and hand it on, exactly as nal_cb does. */
+static void ra_nal_cb(void *ctx, const uint8_t *nal, size_t len)
+{
+    nal_cb(ctx, nal, len);
+}
+
+/* The access unit is complete. Announce it, then acknowledge it as a long-term reference -- but
+ * only if nothing was declared lost while it was being assembled. Acknowledging a frame we did
+ * not receive intact would have the device predict from a reference we do not hold, and every
+ * frame after it would drift until the next keyframe. */
+static void ra_frame_cb(void *ctx)
+{
+    media_session *m = (media_session *)ctx;
+    if (m->on_nal) m->on_nal(m->ctx, NULL, 0, 0, 0, 1);
+
+    if (m->ra.lost == m->lost_at_frame_start) {
+        uint8_t ack[32];
+        size_t an = rp_rtcp_build_ltr_ack(&m->rtcp, m->ra.last_rtp_time, ack, sizeof ack);
+        if (an && m->have_peer)
+            sendto(m->udp, ack, an, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+    }
+    m->lost_at_frame_start = m->ra.lost;
+}
+
 media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *ctx)
 {
     media_session *m = calloc(1, sizeof *m);
@@ -220,6 +269,21 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     m->rxpc_reassembly = malloc(1 << 20);
     m->rxpc_raw = malloc(1 << 16);
     if (!m->rtp_storage || !m->rxpc_reassembly || !m->rxpc_raw) goto fail;
+
+    const char *asm_sel = getenv("RPLAY_ASSEMBLER");
+    m->use_ra = (asm_sel && !strcmp(asm_sel, "miracast"));
+    if (m->use_ra) {
+        m->ra_queue = calloc(RP_RA_MAX_PACKETS, sizeof *m->ra_queue);
+        m->ra_nal = malloc(RP_RA_MAX_NAL);
+        if (!m->ra_queue || !m->ra_nal) { m->use_ra = 0; }
+        else if (rp_ra_init(&m->ra, RP_RA_CODEC_AUTO, m->ra_queue, RP_RA_MAX_PACKETS,
+                            m->ra_nal, RP_RA_MAX_NAL, ra_nal_cb, ra_frame_cb, m) != 0) {
+            m->use_ra = 0;
+        } else {
+            fprintf(stderr, "  using the vendored Miracast assembler "
+                            "(100 ms reorder deadline, discontinuity on loss)\n");
+        }
+    }
 
     rp_rtp_init(&m->rtp, RP_RTP_CODEC_HEVC, m->rtp_storage,
                 (size_t)RP_RTP_REORDER_WINDOW * 1500 + RP_RTP_MAX_NAL, nal_cb, m);
@@ -389,6 +453,7 @@ long media_sock_write(void *ctx, const void *buf, size_t len) { return (long)sen
 void media_stop(media_session *m)
 {
     if (m && m->fwd_fd >= 0) { close(m->fwd_fd); m->fwd_fd = -1; }
+    if (m) { free(m->ra_queue); m->ra_queue = NULL; free(m->ra_nal); m->ra_nal = NULL; }
     if (!m) return;
 
     /* Tell the device to release the stream before dropping the sockets.
@@ -443,10 +508,17 @@ void media_stats(const media_session *m, uint64_t *packets, uint64_t *nals, uint
     if (packets) *packets = m->packets;
     if (nals) *nals = m->nals;
     if (keyframes) *keyframes = m->keyframes;
-    if (lost) *lost = m->rtp.lost;
-    if (bad) *bad = m->rtp.malformed + m->rtp.truncated;
-    if (late) *late = m->rtp.late;
-    if (dup) *dup = m->rtp.duplicates;
+    if (m->use_ra) {
+        if (lost) *lost = m->ra.lost;
+        if (bad) *bad = m->ra.malformed;
+        if (late) *late = m->ra.late;
+        if (dup) *dup = m->ra.duplicates;
+    } else {
+        if (lost) *lost = m->rtp.lost;
+        if (bad) *bad = m->rtp.malformed + m->rtp.truncated;
+        if (late) *late = m->rtp.late;
+        if (dup) *dup = m->rtp.duplicates;
+    }
     if (ltr_acked) *ltr_acked = m->rtcp.ltr_acked;
     if (mbps) {
         struct timespec t;
