@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -190,9 +191,37 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     int recv_port = ntohs(bind_addr.sin6_port);
 
     /* A burst from a full-screen transition is a few hundred packets at once; the default
-     * receive buffer drops them and the loss shows up as permanent corruption. */
-    int rcvbuf = 4 * 1024 * 1024;
-    setsockopt(m->udp, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof rcvbuf);
+     * receive buffer drops them and the loss shows up as permanent corruption.
+     *
+     * Read the size back rather than trusting the request. The kernel clamps this to
+     * kern.ipc.maxsockbuf without failing the call, so a silent clamp to the 786 KB default
+     * looks exactly like success -- and a burst that overflows leaves no trace on this side
+     * beyond a sequence gap that is indistinguishable from loss on the wire. Step down until
+     * one is actually granted. */
+    int rcvbuf = 0;
+    for (int want = 4 * 1024 * 1024; want >= 512 * 1024; want /= 2) {
+        if (setsockopt(m->udp, SOL_SOCKET, SO_RCVBUF, &want, sizeof want) != 0) continue;
+        int got = 0; socklen_t glen = sizeof got;
+        if (getsockopt(m->udp, SOL_SOCKET, SO_RCVBUF, &got, &glen) == 0 && got >= want / 2) {
+            rcvbuf = got;
+            break;
+        }
+    }
+    if (rcvbuf < 1024 * 1024)
+        fprintf(stderr, "  warning: UDP receive buffer is only %d KB; "
+                        "fast motion will overflow it (raise kern.ipc.maxsockbuf)\n",
+                rcvbuf / 1024);
+    /* Classify the flow as video, the way Apple's own AccessorySDK does for media sockets.
+     * This is what decides which queue the packets sit in when the link is contended -- on
+     * Wi-Fi it selects the WMM access category -- so it costs nothing and is exactly the case
+     * where a burst currently hurts: a fast swipe, not a still screen. */
+#ifdef SO_TRAFFIC_CLASS
+    setsockopt(m->udp, SOL_SOCKET, SO_TRAFFIC_CLASS, &(int){ SO_TC_VI }, sizeof(int));
+#endif
+#ifdef SO_NET_SERVICE_TYPE
+    setsockopt(m->udp, SOL_SOCKET, SO_NET_SERVICE_TYPE, &(int){ NET_SERVICE_TYPE_VI }, sizeof(int));
+#endif
+
     struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
     setsockopt(m->udp, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 
@@ -278,6 +307,15 @@ static int connect_service(media_session *m, const char *addr, long port)
     if (m->svc < 0) return -1;
     struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
     setsockopt(m->svc, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    /* No Nagle: every write here is one complete request that the device must answer before we
+     * proceed, so coalescing can only add a delay with nothing to coalesce with. And no SIGPIPE
+     * -- a device unplugged mid-session would otherwise kill the whole process instead of
+     * failing one write. Both from the AccessorySDK's socket setup. */
+    setsockopt(m->svc, IPPROTO_TCP, TCP_NODELAY, &(int){ 1 }, sizeof(int));
+#ifdef SO_NOSIGPIPE
+    setsockopt(m->svc, SOL_SOCKET, SO_NOSIGPIPE, &(int){ 1 }, sizeof(int));
+#endif
+
     if (connect(m->svc, (struct sockaddr *)&sa, sizeof sa) != 0) return -1;
 
     static long (*rd)(void *, void *, size_t);

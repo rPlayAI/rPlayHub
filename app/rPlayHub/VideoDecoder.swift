@@ -21,6 +21,7 @@
 //  not sample buffers. AVSampleBufferDisplayLayer has no equivalent anywhere else.
 //
 
+import AVFoundation
 import CoreMedia
 import CoreVideo
 import Foundation
@@ -80,15 +81,16 @@ final class VideoDecoder {
         }
         invalidate()
 
-        // BGRA rather than a YCbCr plane pair: CoreAnimation displays a BGRA IOSurface directly
-        // as layer contents, so the picture reaches the screen with no conversion of our own.
-        let attributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as CFDictionary,
-            kCVPixelBufferMetalCompatibilityKey as String: true,
-        ]
+        // No destination attributes, so the decoder emits its own native format and nothing
+        // converts anything. We used to ask for BGRA, which made VideoToolbox colour-convert
+        // every single frame -- 1184x2544 of it -- purely so the picture could be assigned as
+        // CALayer contents. Handing pictures to AVSampleBufferDisplayLayer instead removes the
+        // reason that conversion existed: it takes YCbCr directly. This is what rplay does.
         let spec: [String: Any] = [
-            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true,
+            // Require, not merely enable. A software fallback keeps up on a still home screen and
+            // falls behind exactly when a swipe raises the bitrate, which is the shape of the
+            // symptom -- better to fail loudly at session creation than to decode slowly.
+            kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder as String: true,
         ]
 
         var callback = VTDecompressionOutputCallbackRecord(
@@ -110,7 +112,7 @@ final class VideoDecoder {
             allocator: kCFAllocatorDefault,
             formatDescription: desc,
             decoderSpecification: spec as CFDictionary,
-            imageBufferAttributes: attributes as CFDictionary,
+            imageBufferAttributes: nil,   // native format -- see above
             outputCallback: &callback,
             decompressionSessionOut: &created)
         guard status == noErr, let created else {
@@ -124,56 +126,74 @@ final class VideoDecoder {
     }
 }
 
-/// A layer that shows decoded pictures, newest-wins.
+/// Shows decoded pictures, using the same presentation rplay uses (`libAirPlay2/hwdecoder.m`).
 ///
-/// Pictures arrive on the decoding thread; layers must be touched on the main thread. Rather than
-/// queueing every picture onto the main queue — which would build an unbounded backlog and show
-/// progressively staler frames — the newest picture replaces whatever has not been shown yet, and
-/// exactly one main-queue hop is in flight at a time.
-final class VideoLayer: CALayer {
-    /// Pictures decoded but never displayed because a newer one arrived first. Not a decode loss.
+/// Every picture is wrapped in a CMSampleBuffer carrying `kCMSampleAttachmentKey_DisplayImmediately`
+/// and enqueued; if the layer is not ready, the picture is dropped rather than queued.
+///
+/// Enqueueing DECODED pictures is what makes this safe, and it is the whole difference from the
+/// arrangement this file was originally written to escape. Feeding *compressed* samples to this
+/// layer lets it decide what to decode, and it drops before decoding -- fatal on a stream that
+/// sends one IDR per session, because a skipped frame breaks the reference chain and corrupts
+/// everything after it. Here decoding has already happened, in order, for every access unit. The
+/// layer only ever chooses whether to show a finished picture, which costs nothing.
+///
+/// `DisplayImmediately` is the part that matters for latency: without it the layer honours each
+/// sample's presentation timestamp and holds the picture until that time arrives. For a live
+/// mirror there is nothing to synchronise against, so waiting only adds delay.
+final class VideoLayer: AVSampleBufferDisplayLayer {
+    /// Pictures decoded but not shown because the layer was not ready. Not a decode loss: the
+    /// decoder consumed them, so the reference chain is intact.
     private(set) var framesSkipped = 0
 
-    private let lock = NSLock()
-    private var pending: CVPixelBuffer?
-    private var scheduled = false
-
-    /// The picture currently on screen, held for exactly as long as it is on screen.
-    ///
-    /// This reference is load-bearing, not bookkeeping. VideoToolbox hands out pixel buffers from
-    /// a recycling pool, and a buffer returns to that pool the moment its last CVPixelBuffer
-    /// reference goes away — the IOSurface that CoreAnimation retains as layer contents does NOT
-    /// hold it. Dropping our reference after assigning `contents` therefore frees the decoder to
-    /// decode the *next* frame straight into the surface being displayed, so the screen shows a
-    /// buffer being overwritten under it: tearing and torn-in garbage on a stream with no packet
-    /// loss at all. Holding the buffer until it is replaced keeps it out of the pool.
-    private var displayed: CVPixelBuffer?
+    private var format: CMVideoFormatDescription?
 
     func present(_ picture: CVPixelBuffer) {
-        lock.lock()
-        if pending != nil { framesSkipped += 1 }
-        pending = picture
-        let needsHop = !scheduled
-        scheduled = true
-        lock.unlock()
+        var desc = format
+        if desc == nil || !CMVideoFormatDescriptionMatchesImageBuffer(desc!, imageBuffer: picture) {
+            var made: CMVideoFormatDescription?
+            guard CMVideoFormatDescriptionCreateForImageBuffer(
+                    allocator: kCFAllocatorDefault,
+                    imageBuffer: picture,
+                    formatDescriptionOut: &made) == noErr, let made else { return }
+            format = made
+            desc = made
+        }
 
-        guard needsHop else { return }
-        DispatchQueue.main.async { [weak self] in self?.show() }
-    }
+        var timing = CMSampleTimingInfo(duration: .invalid,
+                                        presentationTimeStamp: .invalid,
+                                        decodeTimeStamp: .invalid)
+        var sample: CMSampleBuffer?
+        guard CMSampleBufferCreateForImageBuffer(
+                allocator: kCFAllocatorDefault,
+                imageBuffer: picture,
+                dataReady: true,
+                makeDataReadyCallback: nil,
+                refcon: nil,
+                formatDescription: desc!,
+                sampleTiming: &timing,
+                sampleBufferOut: &sample) == noErr, let sample else { return }
 
-    private func show() {
-        lock.lock()
-        let picture = pending
-        pending = nil
-        scheduled = false
-        lock.unlock()
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true),
+           CFArrayGetCount(attachments) > 0 {
+            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0),
+                                     to: CFMutableDictionary.self)
+            CFDictionarySetValue(dict,
+                                 Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+        }
 
-        guard let picture, let surface = CVPixelBufferGetIOSurface(picture) else { return }
-        displayed = picture          // must outlive the assignment below — see the declaration
-        // Implicit animation on `contents` would cross-fade every frame into the next.
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        contents = surface.takeUnretainedValue()
-        CATransaction.commit()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // Flush only on hard failure. Flushing because the layer is merely "not ready"
+            // discards what is already queued and starves the renderer -- rplay carries a comment
+            // about exactly that, having chased the resulting lag once.
+            if self.status == .failed { self.flush() }
+            if self.isReadyForMoreMediaData {
+                self.enqueue(sample)
+            } else {
+                self.framesSkipped += 1
+            }
+        }
     }
 }

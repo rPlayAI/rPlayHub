@@ -100,7 +100,7 @@ final class MirrorView: NSView {
 
         // .resize, not .resizeAspect: the layer frame below is computed to the video's exact
         // aspect ratio already, so gravity-driven letterboxing would fight the crop maths.
-        displayLayer.contentsGravity = .resize
+        displayLayer.videoGravity = .resize   // the frame below is already exact
         displayLayer.backgroundColor = NSColor.black.cgColor
 
         // Filtering is left at CoreAnimation's default on purpose.
