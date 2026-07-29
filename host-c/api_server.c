@@ -33,6 +33,9 @@ static api_session *g_session;
  * defined above the fan-out that owns them. */
 static media_session *g_media;
 static int viewer_count;
+/* NALs dropped because a viewer could not keep up. Declared here because
+ * stream_info reports it and is defined above the fan-out that maintains it. */
+static uint64_t viewer_drops_total;
 
 /* ------------------------------------------------------------------ tiny JSON helpers
  *
@@ -452,13 +455,14 @@ static void method_stream_info(int fd, long id)
               "\"port\":%d,\"codec\":\"hevc\",\"container\":\"annexb\",\"viewers\":%d,"
               "\"nals\":%llu,\"rtp_packets\":%llu,\"keyframes\":%llu,\"rtp_lost\":%llu,"
               "\"loss_pct\":%.2f,\"mbps\":%.2f,\"ltr_acked\":%llu,"
-              "\"engine\":\"cdhostd\",\"streaming\":%s,"
+              "\"engine\":\"cdhostd\",\"streaming\":%s,\"viewer_drops\":%llu,"
               "\"display_service_port\":%ld,\"hid_service_port\":%ld}}",
               id, STREAM_PORT, viewer_count,
               (unsigned long long)nals, (unsigned long long)packets,
               (unsigned long long)keys, (unsigned long long)lost,
               loss_pct, mbps, (unsigned long long)acks,
-              g_media ? "true" : "false", s->display_port, s->hid_port);
+              g_media ? "true" : "false", (unsigned long long)viewer_drops_total,
+              s->display_port, s->hid_port);
 }
 
 /* ------------------------------------------------------------------ video fan-out
@@ -470,7 +474,11 @@ static void method_stream_info(int fd, long id)
 #define MAX_VIEWERS 8
 
 static pthread_mutex_t viewers_lock = PTHREAD_MUTEX_INITIALIZER;
-static int viewers[MAX_VIEWERS];
+static struct {
+    int      fd;
+    uint64_t dropped;      /* NALs this viewer could not keep up with */
+    int      behind;       /* consecutive drops, so a hopeless viewer gets closed */
+} viewers[MAX_VIEWERS];
 
 /* Cached so a late viewer can start decoding. */
 static uint8_t param_cache[4096];
@@ -478,21 +486,52 @@ static size_t  param_len;
 static uint8_t keyframe_cache[RP_RTP_MAX_NAL + 4];
 static size_t  keyframe_len;
 
+/* Never block the caller.
+ *
+ * This runs on the RTP receive thread. A blocking send here couples a TCP consumer to a lossy
+ * real-time producer: a slow viewer fills its socket buffer, send() blocks, the thread stops
+ * calling recvfrom(), the UDP buffer overflows and packets are lost -- and because the device
+ * sends one IDR per session, that loss is permanent corruption of the picture for everyone. The
+ * viewer would never appear in the diagnosis.
+ *
+ * So the sockets are non-blocking and a viewer that cannot keep up loses data instead. That is
+ * the right way round: dropping frames for one slow consumer is recoverable -- the periodic
+ * keyframe repairs it within a few seconds -- while dropping RTP packets is not.
+ */
 static void viewers_write(const uint8_t *data, size_t len)
 {
     pthread_mutex_lock(&viewers_lock);
     for (int i = 0; i < viewer_count; ) {
         size_t off = 0;
-        int dead = 0;
+        int dead = 0, dropped = 0;
         while (off < len) {
-            ssize_t w = send(viewers[i], data + off, len - off, 0);
-            if (w <= 0) { dead = 1; break; }
-            off += (size_t)w;
+            ssize_t w = send(viewers[i].fd, data + off, len - off, 0);
+            if (w > 0) { off += (size_t)w; continue; }
+            if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) { dropped = 1; break; }
+            dead = 1;
+            break;
         }
         if (dead) {
-            close(viewers[i]);
+            close(viewers[i].fd);
             viewers[i] = viewers[--viewer_count];
-        } else i++;
+            continue;
+        }
+        if (dropped) {
+            viewers[i].dropped++;
+            viewer_drops_total++;
+            /* A viewer that has not accepted anything for a long stretch is not coming back;
+             * holding the slot only misleads whoever reads the viewer count. */
+            if (++viewers[i].behind > 600) {
+                printf("  dropping a viewer that stopped reading (%llu NALs behind)\n",
+                       (unsigned long long)viewers[i].dropped);
+                close(viewers[i].fd);
+                viewers[i] = viewers[--viewer_count];
+                continue;
+            }
+        } else {
+            viewers[i].behind = 0;
+        }
+        i++;
     }
     pthread_mutex_unlock(&viewers_lock);
 }
@@ -516,9 +555,20 @@ static void on_media_nal(void *ctx, const uint8_t *annexb, size_t len,
 
 static void viewer_add(int fd)
 {
+    /* Non-blocking, so a viewer can never stall the RTP thread. */
+    int fl = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    /* A generous socket buffer absorbs bursts -- a keyframe is ~120 kB arriving at once -- so a
+     * viewer only loses data if it is genuinely not reading. */
+    int sndbuf = 4 * 1024 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof sndbuf);
+
     pthread_mutex_lock(&viewers_lock);
     if (viewer_count >= MAX_VIEWERS) { pthread_mutex_unlock(&viewers_lock); close(fd); return; }
-    viewers[viewer_count++] = fd;
+    viewers[viewer_count].fd = fd;
+    viewers[viewer_count].dropped = 0;
+    viewers[viewer_count].behind = 0;
+    viewer_count++;
     pthread_mutex_unlock(&viewers_lock);
 
     /* Prime this viewer so it can decode from its first frame. */
