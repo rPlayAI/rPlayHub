@@ -430,6 +430,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if usbRunning { return }
 
+        refreshDevices(c)
+
         // Prefer receiving RTP ourselves, with nothing in the data path.
         //
         // The daemon only has to create the utun; once it exists the tunnel addresses are
@@ -458,6 +460,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 AppBuild.log("direct stream did not start; using the engine's stream")
                 self.startProxiedStream(c)
+            }
+        }
+    }
+
+    /// Populate the sidebar and learn the real screen size.
+    ///
+    /// Belongs to neither video path. It was left inside the proxied one during the direct-path
+    /// refactor, so the device silently disappeared from the sidebar whenever video came straight
+    /// from the phone.
+    private func refreshDevices(_ c: ControlClient) {
+        c.listDevices { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let devices):
+                self.sidebar.update(devices.map(DeviceRow.init(json:)))
+                if let d = devices.first {
+                    let model = d["product_type"] as? String ?? "iPhone"
+                    let os = d["os_version"] as? String ?? "?"
+                    self.deviceLabel = "\(model) · iOS \(os)"
+                    // The real screen size, which is smaller than the coded frame: the encoder
+                    // pads up to 16-pixel alignment. MirrorView crops and maps clicks with it.
+                    if let s = d["screen_size"] as? [String: Any],
+                       let w = (s["w"] as? NSNumber)?.doubleValue,
+                       let h = (s["h"] as? NSNumber)?.doubleValue, w > 0, h > 0 {
+                        self.view.deviceSize = CGSize(width: w, height: h)
+                        self.applySizing()
+                    }
+                } else {
+                    self.deviceLabel = "engine has no device"
+                }
+            case .failure(let e):
+                self.deviceLabel = "list_devices failed: \(e)"
             }
         }
     }
@@ -521,30 +555,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        c.listDevices { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let devices):
-                self.sidebar.update(devices.map(DeviceRow.init(json:)))
-                if let d = devices.first {
-                    let model = d["product_type"] as? String ?? "iPhone"
-                    let os = d["os_version"] as? String ?? "?"
-                    self.deviceLabel = "\(model) · iOS \(os)"
-                    // The real screen size, which is smaller than the coded frame: the encoder
-                    // pads up to 16-pixel alignment. MirrorView crops and maps clicks with it.
-                    if let s = d["screen_size"] as? [String: Any],
-                       let w = (s["w"] as? NSNumber)?.doubleValue,
-                       let h = (s["h"] as? NSNumber)?.doubleValue, w > 0, h > 0 {
-                        self.view.deviceSize = CGSize(width: w, height: h)
-                        self.applySizing()
-                    }
-                } else {
-                    self.deviceLabel = "engine has no device"
-                }
-            case .failure(let e):
-                self.deviceLabel = "list_devices failed: \(e)"
-            }
-        }
+
     }
 
     private func scheduleRetry(because reason: String) {
