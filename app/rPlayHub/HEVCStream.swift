@@ -133,6 +133,8 @@ final class HEVCStream {
     /// instead, and the engine is asked for a fresh keyframe when a viewer connects.
     private(set) var awaitingKeyframe = true
 
+    /// Splits the direct path's byte stream into NAL units.
+    private let annexb = AnnexBParser()
     private var framesSubmitted: Int64 = 0
     /// When the last NAL arrived, so a finished picture can be released once the stream goes quiet.
     private var lastNALAt = CFAbsoluteTimeGetCurrent()
@@ -141,6 +143,17 @@ final class HEVCStream {
 
     init(decoder: VideoDecoder) {
         self.decoder = decoder
+    }
+
+    /// Feed raw Annex-B bytes, as the direct RTP path produces them.
+    ///
+    /// Takes a pointer rather than Data so the RTP thread does not allocate per NAL: at 60 fps
+    /// with fragmented frames that is thousands of allocations a second on a real-time path.
+    func feedAnnexB(_ bytes: UnsafePointer<UInt8>, _ count: Int) {
+        annexb.feed(Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: bytes), count: count,
+                         deallocator: .none)) { [weak self] nal in
+            self?.handle(nal: nal)
+        }
     }
 
     func handle(nal: Data) {

@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hevc: HEVCStream?
     private var usb: USBMirror?
     private var usbAttempts = 0
+    private var directStream: DirectStream?
     private var idleFlush: Timer?
     private var askedForCamera = false
 
@@ -429,6 +430,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if usbRunning { return }
 
+        // Prefer receiving RTP ourselves, with nothing in the data path.
+        //
+        // The daemon only has to create the utun; once it exists the tunnel addresses are
+        // ordinary routes and this process can open sockets on them unprivileged. Taking the
+        // stream directly removes the daemon-as-producer / app-as-consumer coupling entirely --
+        // a viewer reading slowly can no longer apply backpressure to a real-time source that
+        // cannot retransmit. Falls back to the loopback Annex-B stream when the engine does not
+        // offer tunnel_info, which is the case for the Python one.
+        DirectStream.fetchTunnel(c) { [weak self] tunnel in
+            guard let self else { return }
+            guard let tunnel else {
+                AppBuild.log("no tunnel_info; using the engine's Annex-B stream over loopback")
+                self.startProxiedStream(c)
+                return
+            }
+            let direct = DirectStream()
+            direct.onNAL = { [weak self] nal in
+                nal.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress else { return }
+                    self?.hevc?.feedAnnexB(base.assumingMemoryBound(to: UInt8.self), raw.count)
+                }
+            }
+            if direct.start(tunnel) {
+                self.directStream = direct
+            } else {
+                AppBuild.log("direct stream did not start; using the engine's stream")
+                self.startProxiedStream(c)
+            }
+        }
+    }
+
+    /// The original route: the engine depacketizes and we read Annex-B over loopback.
+    private func startProxiedStream(_ c: ControlClient) {
         // Decode is explicit and unconditional; the layer only ever shows the newest picture.
         let vt = VideoDecoder()
         vt.onFrame = { [weak self] picture in self?.view.displayLayer.present(picture) }

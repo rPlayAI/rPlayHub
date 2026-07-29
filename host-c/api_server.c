@@ -595,6 +595,28 @@ static void ensure_media(void)
     if (!g_media) printf("  media stream failed to start\n");
 }
 
+/* Everything a player needs to talk to the device itself.
+ *
+ * The tunnel addresses are ordinary routes once the daemon has created the utun, so an
+ * unprivileged process can open sockets on them directly -- no interface handle, no privilege.
+ * Handing these out is what lets the player negotiate and receive RTP with no proxy in the data
+ * path at all. Note the addresses change every session: a fresh ULA prefix per tunnel, so a
+ * player must re-query rather than cache them across reconnects.
+ */
+static void method_tunnel_info(int fd, long id)
+{
+    const api_session *s = g_session;
+    send_line(fd,
+              "{\"id\":%ld,\"ok\":true,\"result\":{"
+              "\"device_addr\":\"%s\",\"our_addr\":\"%s\",\"rsd_port\":%ld,"
+              "\"services\":{\"displayservice\":%ld,\"hid\":%ld,\"screenshot\":%ld},"
+              "\"udid\":\"%s\",\"screen_width\":%d,\"screen_height\":%d}}",
+              id, s->tunnel_addr ? s->tunnel_addr : "",
+              s->our_addr ? s->our_addr : "", s->rsd_port,
+              s->display_port, s->hid_port, s->screenshot_port,
+              s->udid, s->screen_w, s->screen_h);
+}
+
 /* ------------------------------------------------------------------ server */
 
 static int listen_on(int port)
@@ -627,6 +649,7 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "ping"))              { method_ping(fd, id); return; }
     if (!strcmp(method, "list_devices"))      { method_list_devices(fd, id); return; }
     if (!strcmp(method, "stream_info"))       { method_stream_info(fd, id); return; }
+    if (!strcmp(method, "tunnel_info"))       { method_tunnel_info(fd, id); return; }
     if (!strcmp(method, "take_screenshot"))   { method_screenshot(fd, id); return; }
     if (!strcmp(method, "tap"))               { method_touch(fd, id, line, 0); return; }
     if (!strcmp(method, "swipe"))             { method_touch(fd, id, line, 1); return; }
