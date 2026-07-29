@@ -60,6 +60,9 @@ typedef struct {
     size_t     pending_consume;
     /* Set when a reply exceeded the reassembly buffer, so the caller can say so. */
     int        overflowed;
+    /* Bytes received since the last WINDOW_UPDATE. Without replenishing, the peer stops after
+     * exactly INITIAL_WINDOW bytes and the transfer stalls with no error anywhere. */
+    size_t     window_used;
 } rp_rxpc_session;
 
 /* Bind a session to a transport. The two buffers are caller-owned and must outlive the session;

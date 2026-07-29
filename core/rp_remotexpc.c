@@ -174,6 +174,29 @@ int rp_rxpc_recv(rp_rxpc_session *s, rp_xpc_obj *obj)
         size_t half = s->buf_cap / 2;
         uint8_t *buf = s->buf + (size_t)slot * half;
 
+        /* Replenish the flow-control window as data is consumed.
+         *
+         * HTTP/2 stops a sender once it has written INITIAL_WINDOW bytes without being told the
+         * receiver has consumed them. We advertised 1 MB and never sent a WINDOW_UPDATE, so any
+         * reply larger than that stalled exactly at the limit and looked like the device going
+         * silent mid-transfer. The RSD service map is ~25 kB and never came close; a full-screen
+         * screenshot is the first reply big enough to hit it.
+         *
+         * Both windows have to be replenished -- the stream's and the connection's. */
+        s->window_used += f.length;
+        if (s->window_used >= RP_RXPC_INITIAL_WINDOW / 4) {
+            uint8_t wu[32];
+            uint32_t inc = (uint32_t)s->window_used;
+            size_t n = rp_h2_write_window_update(f.stream, inc, wu, sizeof wu);
+            if (n && write_all(s, wu, n) != 0) return -1;
+            n = rp_h2_write_window_update(0, inc, wu, sizeof wu);
+            if (n && write_all(s, wu, n) != 0) return -1;
+            if (xpc_debug())
+                fprintf(stderr, "    [xpc] window update +%u on stream %u and connection\n",
+                        inc, f.stream);
+            s->window_used = 0;
+        }
+
         if (s->buf_len[slot] + f.length > half) {
             /* The reply is larger than the caller's buffer. Dropping it silently makes a service
              * look like it answered nothing, which is indistinguishable from a protocol fault --
