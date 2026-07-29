@@ -436,9 +436,15 @@ static void method_list_devices(int fd, long id)
     const api_session *s = g_session;
     send_line(fd,
               "{\"id\":%ld,\"ok\":true,\"result\":{\"devices\":[{"
-              "\"udid\":\"%s\",\"name\":\"%s\",\"product_version\":\"%s\","
+              "\"udid\":\"%s\",\"name\":\"%s\","
+              /* Both spellings of the same value. The app reads os_version, which is what
+               * mirror.py has always sent; this daemon sent only product_version, so the version
+               * silently read as absent in the sidebar. Emitting both keeps the two engines
+               * interchangeable, which is the whole point of them sharing a contract. */
+              "\"os_version\":\"%s\",\"product_version\":\"%s\","
               "\"screen_width\":%d,\"screen_height\":%d,\"connection\":\"usb\"}]}}",
-              id, s->udid, s->device_name, s->product_version, s->screen_w, s->screen_h);
+              id, s->udid, s->device_name, s->product_version, s->product_version,
+              s->screen_w, s->screen_h);
 }
 
 static void method_stream_info(int fd, long id)

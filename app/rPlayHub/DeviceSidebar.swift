@@ -21,7 +21,11 @@ struct DeviceRow {
         udid = json["udid"] as? String ?? json["id"] as? String ?? "?"
         id = json["id"] as? String ?? udid
         name = (json["name"] as? String) ?? (json["product_type"] as? String) ?? "iPhone"
-        version = json["os_version"] as? String ?? "?"
+        // Accept either spelling: mirror.py says os_version, cdhost historically said
+        // product_version. Reading only one meant the sidebar showed nothing for one engine.
+        version = (json["os_version"] as? String)
+            ?? (json["product_version"] as? String)
+            ?? "?"
         let transport = json["transport"] as? String ?? "?"
         detail = (json["product_type"] as? String).map { "\($0) · \(transport)" } ?? transport
         connected = json["connected"] as? Bool ?? true
