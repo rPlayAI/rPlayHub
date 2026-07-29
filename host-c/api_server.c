@@ -711,21 +711,33 @@ int api_serve(api_session *session)
     g_session = session;
     signal(SIGPIPE, SIG_IGN);      /* a viewer closing mid-write must not kill the daemon */
 
+    /* The Annex-B fan-out is optional now that a player can take RTP directly.
+     *
+     * Kept because a proxy is still the right shape for anything that is not the app -- ffplay,
+     * a recorder, a second viewer -- and because the Python engine's clients expect it. Set
+     * RPLAY_NO_VIDEO_PROXY=1 to leave it off and keep the daemon strictly out of the data path.
+     */
+    const char *nopx = getenv("RPLAY_NO_VIDEO_PROXY");
+    int want_proxy = !(nopx && *nopx == '1');
+
     int api_fd = listen_on(API_PORT);
-    int video_fd = listen_on(STREAM_PORT);
-    if (api_fd < 0 || video_fd < 0) {
+    int video_fd = want_proxy ? listen_on(STREAM_PORT) : -1;
+    if (api_fd < 0 || (want_proxy && video_fd < 0)) {
         fprintf(stderr, "  cannot listen on %d/%d: %s\n", API_PORT, STREAM_PORT, strerror(errno));
         return -1;
     }
     printf("  control: 127.0.0.1:%d (JSON lines)\n", API_PORT);
-    printf("  video:   127.0.0.1:%d (Annex-B; the stream starts when a viewer connects)\n",
-           STREAM_PORT);
+    if (want_proxy)
+        printf("  video:   127.0.0.1:%d (Annex-B fan-out, optional; a player may instead take "
+               "RTP directly)\n", STREAM_PORT);
+    else
+        printf("  video:   off (RPLAY_NO_VIDEO_PROXY=1) — players take RTP directly\n");
 
     for (;;) {
         fd_set rd;
         FD_ZERO(&rd);
         FD_SET(api_fd, &rd);
-        FD_SET(video_fd, &rd);
+        if (video_fd >= 0) FD_SET(video_fd, &rd);
         int maxfd = api_fd > video_fd ? api_fd : video_fd;
         if (select(maxfd + 1, &rd, NULL, NULL, NULL) < 0) {
             if (errno == EINTR) continue;
@@ -740,7 +752,7 @@ int api_serve(api_session *session)
                 spawn_client(fd);
             }
         }
-        if (FD_ISSET(video_fd, &rd)) {
+        if (video_fd >= 0 && FD_ISSET(video_fd, &rd)) {
             /* Accepted and held. The app treats a refused video port as a fatal disconnect and
              * retries in a loop, so refusing would look like a broken engine rather than one
              * whose streaming is not written yet. */
@@ -755,6 +767,6 @@ int api_serve(api_session *session)
         }
     }
     close(api_fd);
-    close(video_fd);
+    if (video_fd >= 0) close(video_fd);
     return 0;
 }

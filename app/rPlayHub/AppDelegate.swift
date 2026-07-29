@@ -440,10 +440,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // a viewer reading slowly can no longer apply backpressure to a real-time source that
         // cannot retransmit. Falls back to the loopback Annex-B stream when the engine does not
         // offer tunnel_info, which is the case for the Python one.
+        // RPLAYHUB_VIDEO selects the route explicitly:
+        //   direct  take RTP ourselves; fail rather than fall back
+        //   proxy   read Annex-B from the engine over loopback
+        //   auto    direct when the engine offers tunnel_info (default)
+        //
+        // The fallback exists because the Python engine has no tunnel_info, and because a proxy
+        // is still the right shape when something other than this app wants the stream -- ffplay,
+        // a recorder, a second window. Choosing it explicitly beats inferring it: a silent
+        // fallback makes "which path am I actually testing" unanswerable.
+        let route = ProcessInfo.processInfo.environment["RPLAYHUB_VIDEO"] ?? "auto"
+        if route == "proxy" {
+            AppBuild.log("video route: proxy (requested)")
+            startProxiedStream(c)
+            return
+        }
+
         DirectStream.fetchTunnel(c) { [weak self] tunnel in
             guard let self else { return }
             guard let tunnel else {
-                AppBuild.log("no tunnel_info; using the engine's Annex-B stream over loopback")
+                if route == "direct" {
+                    AppBuild.log("video route: direct requested but the engine offers no "
+                                 + "tunnel_info; not falling back")
+                    return
+                }
+                AppBuild.log("video route: proxy (engine offers no tunnel_info)")
                 self.startProxiedStream(c)
                 return
             }
@@ -457,8 +478,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if direct.start(tunnel) {
                 self.directStream = direct
+            } else if route == "direct" {
+                AppBuild.log("video route: direct requested but the stream did not start")
             } else {
-                AppBuild.log("direct stream did not start; using the engine's stream")
+                AppBuild.log("video route: falling back to proxy, direct did not start")
                 self.startProxiedStream(c)
             }
         }

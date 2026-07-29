@@ -107,6 +107,8 @@ engine as root. Overrides:
 RPLAYHUB_SIGN_IDENTITY=<sha1>     # pick the signing identity
 RPLAY_KEYFRAME_EVERY_S=1.5        # how often to request a keyframe (0 disables)
 RPLAYHUB_USB_CAPTURE=1            # opt in to the CoreMediaIO capture path
+RPLAYHUB_VIDEO=direct|proxy|auto  # how the player gets video (default auto)
+RPLAY_NO_VIDEO_PROXY=1            # daemon: do not host the Annex-B fan-out at all
 ```
 
 Pass these **after** `sudo` — `sudo` strips the environment, so `VAR=x sudo ...` silently tests the
@@ -128,3 +130,33 @@ input handling) is ordinary user code, and the split keeps the privileged part s
 It also means the player can be rebuilt, crashed and restarted without disturbing a live device
 session, and the same daemon serves either engine: `cdhost` and the Python `host/mirror.py` speak
 an identical contract, so the app cannot tell which it reached.
+
+---
+
+## Two ways the player gets video
+
+**Direct (default when available).** The player asks the daemon for the tunnel addresses via
+`tunnel_info`, then talks to the phone itself: negotiates the stream, binds its own RTP port, and
+decodes. The daemon handles no video packets at all — confirm with `stream_info`, which reports
+`streaming: false` and `rtp_packets: 0` while video is playing.
+
+**Proxy (fallback).** The daemon depacketizes and serves Annex-B on `:9877`; the player reads it
+over loopback. Required for the Python engine, which offers no `tunnel_info`, and still the right
+shape for anything that is not the app: `ffplay`, a recorder, a second viewer.
+
+```sh
+RPLAYHUB_VIDEO=direct   # take RTP ourselves; fail rather than fall back
+RPLAYHUB_VIDEO=proxy    # force the loopback route
+RPLAYHUB_VIDEO=auto     # direct when tunnel_info exists (default)
+```
+
+Choose explicitly when testing. A silent fallback makes "which path am I actually measuring"
+unanswerable, which matters because the two behave differently under load.
+
+Direct is preferred because of coupling, not the extra hop. A proxy makes the daemon a producer
+and the player a consumer, and that is unsafe for a real-time source that cannot retransmit: a
+player reading slowly applies backpressure that reaches the RTP thread, packets are dropped, and
+since the device sends one IDR per session the corruption is permanent — with nothing pointing at
+the player as the cause. Owning the socket removes the second consumer rather than mitigating it,
+and it also deletes the fan-out, the caches that let a late viewer decode, and the single viewer
+slot that a stray client can take.
