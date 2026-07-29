@@ -20,8 +20,12 @@
 #include "media.h"
 #include "../core/rp_xpc.h"
 
-/* Big enough for the largest reply we ask for, which is a full-screen PNG. */
-#define SVC_REASSEMBLY (8u << 20)
+/* Big enough for the largest reply we ask for, which is a full-screen PNG.
+ *
+ * rp_rxpc_recv splits this in half, one accumulator per HTTP/2 stream, so the usable size for a
+ * single reply is half of this. A 1170x2532 screenshot has run past 4 MB, so 32 MB leaves real
+ * headroom rather than the next round number up. */
+#define SVC_REASSEMBLY (32u << 20)
 
 static api_session *g_session;
 
@@ -267,9 +271,17 @@ static void method_screenshot(int fd, long id)
             fprintf(stderr, "  screenshot: no reply object at all\n");
         }
         int over = c.s.overflowed;
+        size_t needed = c.s.overflow_needed;
         svc_close(&c);
-        reply_error(fd, id, "device_error", over
-            ? "the screenshot was larger than the reassembly buffer" : stage);
+        if (over) {
+            char msg[160];
+            snprintf(msg, sizeof msg,
+                     "the screenshot needed at least %zu bytes but the buffer holds %u",
+                     needed, SVC_REASSEMBLY / 2);
+            reply_error(fd, id, "device_error", msg);
+        } else {
+            reply_error(fd, id, "device_error", stage);
+        }
         return;
     }
 

@@ -63,6 +63,8 @@ typedef struct {
     /* Bytes received since the last WINDOW_UPDATE. Without replenishing, the peer stops after
      * exactly INITIAL_WINDOW bytes and the transfer stalls with no error anywhere. */
     size_t     window_used;
+    /* How much was needed when a reply overflowed, so the caller can say by how much. */
+    size_t     overflow_needed;
 } rp_rxpc_session;
 
 /* Bind a session to a transport. The two buffers are caller-owned and must outlive the session;

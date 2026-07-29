@@ -201,6 +201,10 @@ int rp_rxpc_recv(rp_rxpc_session *s, rp_xpc_obj *obj)
             /* The reply is larger than the caller's buffer. Dropping it silently makes a service
              * look like it answered nothing, which is indistinguishable from a protocol fault --
              * so report it instead of discarding it quietly. */
+            if (xpc_debug())
+                fprintf(stderr, "    [xpc] OVERFLOW: %zu buffered + %zu incoming > %zu available\n",
+                        s->buf_len[slot], f.length, half);
+            s->overflow_needed = s->buf_len[slot] + f.length;
             s->buf_len[slot] = 0;
             s->overflowed = 1;
             return -1;
