@@ -20,22 +20,27 @@
 set -e
 
 PORT="${1:-5004}"
+CODEC="${2:-h264}"
+if [ "$CODEC" = "hevc" ] || [ "$CODEC" = "h265" ]; then PT=123; ENC=H265; else PT=100; ENC=H264; fi
 SDP="${TMPDIR:-/tmp}/rplayhub-live.sdp"
 
-# Payload type 123 is what our offer asks for; the device echoes it. It has to match or ffmpeg
-# will drop every packet without saying why.
+# The payload type has to match what the device actually sends or ffmpeg drops every packet in
+# silence -- which is how this script first appeared to receive nothing at all. Our offer carries
+# two banks, 123 for HEVC and 100 for H.264, and the device chooses; measured live, it chose 100.
+# Pass the codec as the second argument when it chooses otherwise.
 cat > "$SDP" <<EOF
 v=0
 o=- 0 0 IN IP4 127.0.0.1
 s=rplay-hub live RTP
 c=IN IP4 127.0.0.1
 t=0 0
-m=video $PORT RTP/AVP 123
-a=rtpmap:123 H265/90000
+m=video $PORT RTP/AVP $PT
+a=rtpmap:$PT $ENC/90000
 EOF
 
 echo "SDP:   $SDP"
 echo "port:  $PORT   (start the app with RPLAY_RTP_FORWARD=$PORT)"
+echo "codec: $ENC on payload type $PT"
 echo
 
 if ! command -v ffplay >/dev/null 2>&1; then

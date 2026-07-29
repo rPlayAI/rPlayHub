@@ -266,7 +266,16 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     static uint8_t offer[2048];
     rp_offer_params op = {0};
     op.ssrc = cfg->ssrc;
+    /* Which codec banks to offer. AUTO offers both and lets the device choose -- and the note
+     * in rp_media_offer.h claiming it then chooses HEVC is simply not true: a live session was
+     * measured arriving on payload type 100, the H.264 bank. That matters a great deal at the
+     * bitrate this device picks. H.264 needs roughly twice the bits of HEVC for equal quality,
+     * so ~2.3 Mbit/s at 1184x2544 is thin in HEVC and hopeless in H.264 -- and it falls apart
+     * under motion, which is exactly the symptom. RPLAY_CODEC=hevc offers only the HEVC bank. */
     op.codec = RP_OFFER_CODEC_AUTO;
+    const char *want_codec = getenv("RPLAY_CODEC");
+    if (want_codec && !strcmp(want_codec, "hevc")) op.codec = RP_OFFER_CODEC_HEVC;
+    else if (want_codec && !strcmp(want_codec, "h264")) op.codec = RP_OFFER_CODEC_H264;
     op.model = "Mac15,9";
     op.os_version = "2205.3.1";
     op.build = "25F80";
