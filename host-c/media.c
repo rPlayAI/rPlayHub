@@ -48,6 +48,8 @@ struct media_session {
      * prevent. */
     uint64_t lost_at_frame_start;
     unsigned emitted_in_packet;
+    int fwd_fd;                       /* -1 unless RPLAY_RTP_FORWARD is set */
+    struct sockaddr_in fwd_addr;
 
     int      negotiated;      /* the device is holding a stream slot for us */
     uint64_t packets, bytes, nals, keyframes;
@@ -101,6 +103,18 @@ static void *recv_loop(void *arg)
         if (!m->have_peer) { m->peer = from; m->have_peer = 1; }
         m->packets++;
         m->bytes += (uint64_t)n;
+
+        /* Optional: hand a verbatim copy of every RTP packet to a second, independent receiver.
+         * RPLAY_RTP_FORWARD=<port> mirrors the stream to 127.0.0.1:<port>, where ffmpeg or
+         * GStreamer can depacketize it with a stack that is not ours. Same packets, two
+         * implementations -- if a production RTP receiver renders the same corruption, our
+         * depacketizer is not the cause, and if it does not, it is.
+         *
+         * Fire and forget on loopback: a slow or absent consumer cannot apply backpressure to a
+         * UDP send, so this cannot perturb the measurement it exists to make. */
+        if (m->fwd_fd >= 0)
+            sendto(m->fwd_fd, pkt, (size_t)n, 0,
+                   (struct sockaddr *)&m->fwd_addr, sizeof m->fwd_addr);
 
         if (rp_rtp_is_rtcp(pkt, (size_t)n)) {
             rp_rtcp_note_rtcp(&m->rtcp, pkt, (size_t)n, now_ms());
@@ -176,6 +190,18 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     if (!m) return NULL;
     m->udp = m->svc = -1;
     m->on_nal = on_nal;
+    m->fwd_fd = -1;
+    const char *fwd = getenv("RPLAY_RTP_FORWARD");
+    if (fwd && *fwd) {
+        m->fwd_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (m->fwd_fd >= 0) {
+            memset(&m->fwd_addr, 0, sizeof m->fwd_addr);
+            m->fwd_addr.sin_family = AF_INET;
+            m->fwd_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            m->fwd_addr.sin_port = htons((uint16_t)atoi(fwd));
+            fprintf(stderr, "  mirroring RTP to 127.0.0.1:%s for an independent receiver\n", fwd);
+        }
+    }
     m->ctx = ctx;
     m->keyframe_every_s = cfg->keyframe_every_s;
 
@@ -342,6 +368,7 @@ long media_sock_write(void *ctx, const void *buf, size_t len) { return (long)sen
 
 void media_stop(media_session *m)
 {
+    if (m && m->fwd_fd >= 0) { close(m->fwd_fd); m->fwd_fd = -1; }
     if (!m) return;
 
     /* Tell the device to release the stream before dropping the sockets.
