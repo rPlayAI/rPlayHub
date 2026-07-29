@@ -42,7 +42,18 @@ static const uint8_t *rtp_payload(const uint8_t *pkt, size_t len, size_t *out_le
         off += 4 + 4 * words;
     }
     if (off >= len) return NULL;
-    *out_len = len - off;
+    size_t end = len;
+    /* Padding: the P bit means the last byte counts the padding bytes, all of which are part of
+     * the packet but NOT part of the payload. Without this they are copied into the NAL as if
+     * they were video, and a decoder handed those extra bytes produces exactly the kind of
+     * corruption that leaves the packet counters showing no loss at all. */
+    if (pkt[0] & 0x20) {
+        size_t pad = pkt[len - 1];
+        if (pad == 0 || pad > end - off) return NULL;   /* malformed; drop the packet */
+        end -= pad;
+    }
+    if (off >= end) return NULL;
+    *out_len = end - off;
     return pkt + off;
 }
 
@@ -92,10 +103,15 @@ static void depacketize(rp_rtp_session *s, const uint8_t *p, size_t n)
             while (i + 2 <= n) {
                 size_t size = ((size_t)p[i] << 8) | p[i + 1];
                 i += 2;
-                if (i + size > n) return;
+                /* The aggregation packet states each NAL's length itself, so this is the one
+                 * place the wire tells us what the size should be and we can check it. A NAL
+                 * claiming more bytes than the packet holds means we have misparsed something
+                 * upstream; counting it turns a silent discard into evidence. */
+                if (i + size > n) { s->malformed++; return; }
                 emit(s, p + i, size);
                 i += size;
             }
+            if (i != n) s->malformed++;   /* bytes left over that no length accounted for */
         } else if (type == HEVC_FU) {
             if (n < 3) return;
             uint8_t fuh = p[2];
@@ -110,6 +126,13 @@ static void depacketize(rp_rtp_session *s, const uint8_t *p, size_t n)
             if (s->fu_len && s->fu_len + add <= s->fu_cap) {
                 memcpy(s->fu + s->fu_len, p + 3, add);
                 s->fu_len += add;
+            } else if (s->fu_len) {
+                /* Does not fit. Previously the copy was skipped but fu_len was kept, so the end
+                 * marker emitted a NAL missing its middle -- structurally valid, silently wrong,
+                 * and indistinguishable downstream from a correctly received frame. Abandon the
+                 * unit instead: a dropped NAL is visible in the counters, a truncated one is not. */
+                s->truncated++;
+                s->fu_len = 0;
             }
             if ((fuh & 0x40) && s->fu_len) {   /* end */
                 emit(s, s->fu, s->fu_len);
@@ -128,7 +151,7 @@ static void depacketize(rp_rtp_session *s, const uint8_t *p, size_t n)
         while (i + 2 <= n) {
             size_t size = ((size_t)p[i] << 8) | p[i + 1];
             i += 2;
-            if (i + size > n) return;
+            if (i + size > n) { s->malformed++; return; }
             emit(s, p + i, size);
             i += size;
         }

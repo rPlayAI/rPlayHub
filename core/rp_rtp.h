@@ -62,6 +62,9 @@ typedef struct {
     /* Counters, which are how "the device is sending a poor stream" is told apart from "the
      * network is dropping packets" -- two problems with completely different fixes. */
     uint64_t received, lost, late, duplicates;
+    /* Frames whose declared length disagreed with the bytes actually present, and fragmented
+     * NALs abandoned because they exceeded the reassembly buffer. Both used to be silent. */
+    uint64_t malformed, truncated;
 } rp_rtp_session;
 
 /* `storage` must hold RP_RTP_REORDER_WINDOW * 1500 bytes plus RP_RTP_MAX_NAL, and outlive the

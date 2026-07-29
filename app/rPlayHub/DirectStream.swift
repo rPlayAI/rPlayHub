@@ -106,10 +106,10 @@ final class DirectStream {
     }
 
     var stats: (packets: UInt64, nals: UInt64, keyframes: UInt64,
-                lost: UInt64, ltrAcked: UInt64, mbps: Double) {
+                lost: UInt64, ltrAcked: UInt64, mbps: Double, bad: UInt64) {
         var p: UInt64 = 0, n: UInt64 = 0, k: UInt64 = 0, l: UInt64 = 0, a: UInt64 = 0
-        var mbps: Double = 0
-        media_stats(media, &p, &n, &k, &l, &a, &mbps)
-        return (p, n, k, l, a, mbps)
+        var mbps: Double = 0, bad: UInt64 = 0
+        media_stats(media, &p, &n, &k, &l, &a, &mbps, &bad)
+        return (p, n, k, l, a, mbps, bad)
     }
 }

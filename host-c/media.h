@@ -39,7 +39,10 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
 void media_stop(media_session *m);
 
 /* Live counters for stream_info. */
+/* `bad` counts access units the depacketizer rejected: a declared NAL length that disagreed
+ * with the bytes present, or a fragmented NAL too large to reassemble. Distinct from `lost`,
+ * which counts packets that never arrived -- these DID arrive and did not add up. */
 void media_stats(const media_session *m, uint64_t *packets, uint64_t *nals, uint64_t *keyframes,
-                 uint64_t *lost, uint64_t *ltr_acked, double *mbps);
+                 uint64_t *lost, uint64_t *ltr_acked, double *mbps, uint64_t *bad);
 
 #endif /* RP_MEDIA_H */

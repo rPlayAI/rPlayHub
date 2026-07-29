@@ -375,17 +375,19 @@ void media_stop(media_session *m)
 }
 
 void media_stats(const media_session *m, uint64_t *packets, uint64_t *nals, uint64_t *keyframes,
-                 uint64_t *lost, uint64_t *ltr_acked, double *mbps)
+                 uint64_t *lost, uint64_t *ltr_acked, double *mbps, uint64_t *bad)
 {
     if (!m) {
         if (packets) *packets = 0; if (nals) *nals = 0; if (keyframes) *keyframes = 0;
         if (lost) *lost = 0; if (ltr_acked) *ltr_acked = 0; if (mbps) *mbps = 0;
+        if (bad) *bad = 0;
         return;
     }
     if (packets) *packets = m->packets;
     if (nals) *nals = m->nals;
     if (keyframes) *keyframes = m->keyframes;
     if (lost) *lost = m->rtp.lost;
+    if (bad) *bad = m->rtp.malformed + m->rtp.truncated;
     if (ltr_acked) *ltr_acked = m->rtcp.ltr_acked;
     if (mbps) {
         struct timespec t;

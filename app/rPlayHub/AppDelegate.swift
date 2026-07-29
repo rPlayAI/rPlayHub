@@ -663,6 +663,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let pct = st.packets > 0 ? Double(st.lost) / Double(st.lost + st.packets) * 100 : 0
             health += String(format: "\n%.1f Mbit/s · %llu keyframes\n%llu lost (%.2f%%)",
                              st.mbps, st.keyframes, st.lost, pct)
+            // Arrived but did not add up: a NAL whose declared length disagreed with the bytes
+            // present, or one too large to reassemble. Separate from loss on purpose -- these
+            // packets were received, so a non-zero count here points at our parsing, not the link.
+            if st.bad > 0 { health += "\n\(st.bad) malformed (received, did not add up)" }
             // Log the first sample unconditionally, then on any change, then every 30 s.
             //
             // Logging only on change was wrong: the counter starts at zero, so a session with no
@@ -674,9 +678,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 loggedRTPOnce = true
                 lastRTPLogAt = now
                 AppBuild.log(String(format: "rtp: %llu lost of %llu (%.2f%%), %.1f Mbit/s, "
-                                            + "%llu keyframes, %llu ltr-acked, %d not shown",
+                                            + "%llu keyframes, %llu ltr-acked, %llu malformed, "
+                                            + "%d not shown",
                                     st.lost, st.lost + st.packets, pct, st.mbps,
-                                    st.keyframes, st.ltrAcked, skipped))
+                                    st.keyframes, st.ltrAcked, st.bad, skipped))
                 lastLoggedLoss = st.lost
             }
         }

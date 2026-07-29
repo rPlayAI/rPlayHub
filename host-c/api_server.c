@@ -454,19 +454,20 @@ static void method_stream_info(int fd, long id)
      * numbers for a stream that does not exist would make the app look connected to nothing. */
     uint64_t packets = 0, nals = 0, keys = 0, lost = 0, acks = 0;
     double mbps = 0;
-    media_stats(g_media, &packets, &nals, &keys, &lost, &acks, &mbps);
+    uint64_t bad = 0;
+    media_stats(g_media, &packets, &nals, &keys, &lost, &acks, &mbps, &bad);
     double loss_pct = (packets + lost) ? 100.0 * (double)lost / (double)(packets + lost) : 0.0;
     send_line(fd,
               "{\"id\":%ld,\"ok\":true,\"result\":{"
               "\"port\":%d,\"codec\":\"hevc\",\"container\":\"annexb\",\"viewers\":%d,"
               "\"nals\":%llu,\"rtp_packets\":%llu,\"keyframes\":%llu,\"rtp_lost\":%llu,"
-              "\"loss_pct\":%.2f,\"mbps\":%.2f,\"ltr_acked\":%llu,"
+              "\"loss_pct\":%.2f,\"mbps\":%.2f,\"ltr_acked\":%llu,\"rtp_malformed\":%llu,"
               "\"engine\":\"cdhostd\",\"streaming\":%s,\"viewer_drops\":%llu,"
               "\"display_service_port\":%ld,\"hid_service_port\":%ld}}",
               id, STREAM_PORT, viewer_count,
               (unsigned long long)nals, (unsigned long long)packets,
               (unsigned long long)keys, (unsigned long long)lost,
-              loss_pct, mbps, (unsigned long long)acks,
+              loss_pct, mbps, (unsigned long long)acks, (unsigned long long)bad,
               g_media ? "true" : "false", (unsigned long long)viewer_drops_total,
               s->display_port, s->hid_port);
 }
