@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var usb: USBMirror?
     private var usbAttempts = 0
     private var directStream: DirectStream?
+    /// Last RTP loss count written to the log, so only changes are recorded.
+    private var lastLoggedLoss: UInt64 = 0
     private var idleFlush: Timer?
     private var askedForCamera = false
 
@@ -648,6 +650,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let skipped = view.displayLayer.framesSkipped
         if skipped > 0 { health += "\n\(skipped) not shown (display behind)" }
         if let err = decoder.lastError { health += "\ndecode error: \(err)" }
+
+        // RTP health, on the direct path where we own the socket. This is the measurement that
+        // separates the two remaining explanations for the artifacts, and nothing else does:
+        // if `lost` climbs during a swipe, packets are being lost between the device and this
+        // process; if it stays at zero while the picture breaks up, nothing was lost and the
+        // encoder simply spent its budget -- and no amount of work on our side will fix that.
+        if let direct = directStream {
+            let st = direct.stats
+            let pct = st.packets > 0 ? Double(st.lost) / Double(st.lost + st.packets) * 100 : 0
+            health += String(format: "\n%.1f Mbit/s · %llu keyframes\n%llu lost (%.2f%%)",
+                             st.mbps, st.keyframes, st.lost, pct)
+            // Log only when loss actually moves, so the log is a timeline of events rather than
+            // a wall of identical lines -- the point is to correlate a jump with a swipe.
+            if st.lost != lastLoggedLoss {
+                AppBuild.log(String(format: "rtp: %llu lost of %llu (%.2f%%), %.1f Mbit/s, "
+                                            + "%llu keyframes, %llu ltr-acked, %d not shown",
+                                    st.lost, st.lost + st.packets, pct, st.mbps,
+                                    st.keyframes, st.ltrAcked, skipped))
+                lastLoggedLoss = st.lost
+            }
+        }
         controls.setHealth(health)
     }
 }
