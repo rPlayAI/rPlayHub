@@ -55,6 +55,11 @@ struct media_session {
     rp_ra_packet *ra_queue;
     uint8_t *ra_nal;
     unsigned emitted_in_packet;
+    /* Bytes per access unit. Device Hub's own capture has a median of 4.4 KB but a p90 of 11.6 KB
+     * and peaks of 60-119 KB: its encoder spends when motion demands it. If ours never reaches
+     * those peaks the encoder is being held down for us, which no amount of work on the receive
+     * path can fix -- and every counter would still read clean, exactly as they do. */
+    uint64_t frame_bytes, frame_max, frame_sum, frame_count;
     int fwd_fd;                       /* -1 unless RPLAY_RTP_FORWARD is set */
     struct sockaddr_in fwd_addr;
 
@@ -77,6 +82,7 @@ static int hevc_type(const uint8_t *nal, size_t n) { return n ? (nal[0] >> 1) & 
 /* The assembler delivers whole NALs and signals frame ends itself, so both paths converge on
  * the same media_nal_fn the consumer already sees. */
 static void ra_nal_cb(void *ctx, const uint8_t *nal, size_t len);
+static void frame_size_note(media_session *m);
 static void ra_frame_cb(void *ctx);
 
 static void nal_cb(void *ctx, const uint8_t *nal, size_t len)
@@ -96,6 +102,7 @@ static void nal_cb(void *ctx, const uint8_t *nal, size_t len)
      * until the packet is fully depacketized, so it is stamped afterwards, below. */
     if (m->on_nal) m->on_nal(m->ctx, framed, len + 4, is_param, is_key, 0);
     m->emitted_in_packet++;
+    m->frame_bytes += len;
 }
 
 /* ------------------------------------------------------------------ receive */
@@ -165,6 +172,7 @@ static void *recv_loop(void *arg)
             /* Announce the end of the access unit. A zero-length NAL carries no data and exists
              * only to say "that was the last one" -- which lets the consumer submit the picture
              * now instead of waiting for the next picture to start. */
+            frame_size_note(m);
             if (m->on_nal) m->on_nal(m->ctx, NULL, 0, 0, 0, 1);
             if (m->rtp.lost == m->lost_at_frame_start && m->rtp.lost == lost_before) {
                 uint8_t ack[32];
@@ -215,6 +223,21 @@ static void *rtcp_loop(void *arg)
 
 static int connect_service(media_session *m, const char *addr, long port);
 
+static void frame_size_note(media_session *m)
+{
+    if (!m->frame_bytes) return;
+    if (m->frame_bytes > m->frame_max) m->frame_max = m->frame_bytes;
+    m->frame_sum += m->frame_bytes;
+    m->frame_count++;
+    m->frame_bytes = 0;
+    if (m->frame_count % 300 == 0)
+        fprintf(stderr, "  frames %llu: mean %llu B, peak %llu B "
+                        "(Device Hub: mean 6947, p90 11650, peak 119368)\n",
+                (unsigned long long)m->frame_count,
+                (unsigned long long)(m->frame_sum / m->frame_count),
+                (unsigned long long)m->frame_max);
+}
+
 /* One NAL from the vendored assembler: frame it and hand it on, exactly as nal_cb does. */
 static void ra_nal_cb(void *ctx, const uint8_t *nal, size_t len)
 {
@@ -228,6 +251,7 @@ static void ra_nal_cb(void *ctx, const uint8_t *nal, size_t len)
 static void ra_frame_cb(void *ctx)
 {
     media_session *m = (media_session *)ctx;
+    frame_size_note(m);
     if (m->on_nal) m->on_nal(m->ctx, NULL, 0, 0, 0, 1);
 
     if (m->ra.lost == m->lost_at_frame_start) {
