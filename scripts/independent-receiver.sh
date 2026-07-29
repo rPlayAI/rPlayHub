@@ -20,14 +20,17 @@
 set -e
 
 PORT="${1:-5004}"
-CODEC="${2:-h264}"
-if [ "$CODEC" = "hevc" ] || [ "$CODEC" = "h265" ]; then PT=123; ENC=H265; else PT=100; ENC=H264; fi
+# The payload NUMBER is chosen by the device in its answer and does not have to match the bank
+# we offered -- a live HEVC session was measured on payload type 100, which is the number our
+# offer uses for its H.264 bank. Do not infer the codec from it; the payload STRUCTURE decides
+# (HEVC types 48/49, H.264 types 24/28), which is what our depacketizer keys on.
+PT="${2:-100}"
+ENC="${3:-H265}"
 SDP="${TMPDIR:-/tmp}/rplayhub-live.sdp"
 
-# The payload type has to match what the device actually sends or ffmpeg drops every packet in
-# silence -- which is how this script first appeared to receive nothing at all. Our offer carries
-# two banks, 123 for HEVC and 100 for H.264, and the device chooses; measured live, it chose 100.
-# Pass the codec as the second argument when it chooses otherwise.
+# The number here must equal what the device actually sends or ffmpeg discards every packet in
+# silence -- which is why this harness first appeared to receive nothing while the mirror was
+# demonstrably delivering 3 Mbit/s.  usage: independent-receiver.sh [port] [payload-type] [H265|H264]
 cat > "$SDP" <<EOF
 v=0
 o=- 0 0 IN IP4 127.0.0.1
