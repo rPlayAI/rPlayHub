@@ -29,6 +29,24 @@ typedef struct {
     long        display_port;    /* displayservice, from RSD */
     uint32_t    ssrc;            /* offer field 5.1 AND our RTCP SSRC — they must be equal */
     double      keyframe_every_s;/* 0 disables periodic keyframe requests */
+    /* Called when an access unit arrived damaged, so the consumer can stop decoding until the
+     * next keyframe anchors the reference chain again. Optional; NULL to ignore.
+     *
+     * Feeding a damaged access unit to the decoder is worse than dropping it. With references at
+     * −1/−2 and one IDR per session, a picture whose reference never arrived decodes to garbage
+     * that every following picture then predicts from — VideoToolbox reports
+     * kVTVideoDecoderBadDataErr (−12909) for the first one and nothing at all for the rest. The
+     * consumer already knows how to wait for a keyframe; it just was never told to start. */
+    void      (*on_discontinuity)(void *ctx);
+    /* The active picture rectangle changed.
+     *
+     * The encoder drops coded resolution under motion without changing the SPS: it renders a
+     * smaller picture into the top-left of the same frame and signals the live rectangle out of
+     * band, in the RTP header extension's profile field. avconferenced passes the equivalent to
+     * its decoder per frame as ActiveVideoResolution + ContentAnalyzerCropRectangle{X:0,Y:0} and
+     * crops to it. Decoding is unaffected -- the full frame still decodes consistently, so the
+     * reference chain is intact; only what is *shown* has to be cropped. */
+    void      (*on_active_rect)(void *ctx, uint32_t width, uint32_t height);
 } media_config;
 
 /* Called on the receive thread for every NAL, already framed with a start code.

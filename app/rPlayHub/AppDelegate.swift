@@ -488,6 +488,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard framed.count > 4 else { return }
                 decoder?.handle(nal: framed.subdata(in: 4..<framed.count))
             }
+            // Packets went missing inside an access unit, so stop decoding until a keyframe
+            // anchors the chain again rather than predicting from a reference nobody received.
+            direct.onDiscontinuity = { [weak decoder] in decoder?.signalDiscontinuity() }
+            direct.onActiveRect = { [weak self] w, h in
+                AppBuild.log("active rect: \(w)x\(h)")
+                self?.view.displayLayer.setActiveRect(width: w, height: h)
+            }
             if direct.start(tunnel) {
                 self.directStream = direct
             } else if route == "direct" {
@@ -689,12 +696,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 AppBuild.log(String(format: "rtp: %llu lost of %llu (%.2f%%), %.1f Mbit/s, "
                                             + "%llu keyframes, %llu ltr-acked, %llu malformed, "
                                             + "%llu late, %llu dup, %d not shown, "
-                                            + "%d decoded, %d failed",
+                                            + "%d decoded, %d failed, %d discontinuities, "
+                                            + "%d dropped after loss, %d presented, %d superseded",
                                     st.lost, st.lost + st.packets, pct, st.mbps,
                                     st.keyframes, st.ltrAcked, st.bad,
                                     st.late, st.dup, skipped,
                                     videoDecoder?.framesDecoded ?? 0,
-                                    videoDecoder?.decodeFailures ?? 0))
+                                    videoDecoder?.decodeFailures ?? 0,
+                                    hevc?.discontinuities ?? 0,
+                                    hevc?.framesBeforeKeyframe ?? 0,
+                                    view?.displayLayer.framesPresented ?? 0,
+                                    view?.displayLayer.framesSkipped ?? 0))
                 lastLoggedLoss = st.lost
             }
         }

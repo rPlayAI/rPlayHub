@@ -25,6 +25,10 @@ final class DirectStream {
     /// has to infer the boundary from the NEXT picture's first slice, which cannot arrive until
     /// the next picture does -- a whole frame of latency, and a guess where RTP states a fact.
     var onEndOfFrame: (() -> Void)?
+    /// An access unit did not arrive intact. Called on the receive thread.
+    var onDiscontinuity: (() -> Void)?
+    /// The coded picture shrank (or grew). Called on the receive thread with the live rectangle.
+    var onActiveRect: ((Int, Int) -> Void)?
     /// Reported once when the stream is up.
     var onStarted: ((String) -> Void)?
 
@@ -79,6 +83,21 @@ final class DirectStream {
         cfg.display_port = tunnel.displayPort
         cfg.ssrc = ssrc
         cfg.keyframe_every_s = Self.keyframeInterval
+        // The transport knows an access unit arrived damaged; the decoder never did. Without this
+        // the reference chain stays broken until the periodic keyframe request happens to fire,
+        // which at the default cadence is up to three seconds of wrong pictures.
+        cfg.on_discontinuity = { ctx in
+            guard let ctx else { return }
+            Unmanaged<DirectStream>.fromOpaque(ctx).takeUnretainedValue().onDiscontinuity?()
+        }
+        // The encoder shrinks the coded picture under motion without changing the SPS, and says so
+        // only in the RTP extension. Showing the whole frame when only its top-left corner is live
+        // is the mosaic this project spent four days chasing.
+        cfg.on_active_rect = { ctx, w, h in
+            guard let ctx else { return }
+            Unmanaged<DirectStream>.fromOpaque(ctx).takeUnretainedValue()
+                .onActiveRect?(Int(w), Int(h))
+        }
 
         let ctx = Unmanaged.passUnretained(self).toOpaque()
         media = media_start(&cfg, { ctx, annexb, len, _, _, endOfFrame in

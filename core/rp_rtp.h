@@ -97,3 +97,25 @@ int  rp_rtp_header(const uint8_t *pkt, size_t len,
 #endif
 
 #endif /* RP_RTP_H */
+
+/* The RTP header extension this device puts on every video packet.
+ *
+ * Four bytes -- [u16 packets-in-this-access-unit][u16 global frame index] -- behind a 2-byte
+ * profile field. The profile is the part that matters and the part we discarded for months.
+ *
+ * The encoder drops coded resolution under motion WITHOUT changing the SPS: it renders a smaller
+ * picture into the top-left of the same 1184x2576 frame and says so out of band. Captured from
+ * avconferenced, it passes VTDecompressionSessionDecodeFrameWithOptions a per-frame
+ * `ActiveVideoResolution` and a `ContentAnalyzerCropRectangle` at X=0,Y=0, and crops to it. We
+ * decoded the whole frame and displayed all of it, which is the mosaic.
+ *
+ * The profile takes exactly three values against exactly three observed resolutions. Returns 0 if
+ * the packet carries no extension. */
+uint16_t rp_rtp_ext_profile(const uint8_t *pkt, size_t len);
+
+/* Active picture rectangle for a given extension profile, or 0x0 if unknown.
+ *
+ * The mapping is a hypothesis until scripts/correlate-resolution.py proves it against Apple's own
+ * per-frame ground truth; RPLAY_ACTIVE_MAP overrides it as "profile:WxH,profile:WxH" so a wrong
+ * guess costs a restart rather than a rebuild. */
+void rp_rtp_active_rect(uint16_t profile, uint32_t *w, uint32_t *h);

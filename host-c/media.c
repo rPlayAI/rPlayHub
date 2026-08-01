@@ -44,6 +44,14 @@ struct media_session {
     media_nal_fn on_nal;
     void        *ctx;
     double       keyframe_every_s;
+    void       (*on_discontinuity)(void *ctx);
+    void       (*on_active_rect)(void *ctx, uint32_t width, uint32_t height);
+    uint16_t     last_ext_profile;
+    /* When the last loss-triggered keyframe request went out, so a burst of damaged frames asks
+     * once rather than once per frame. Asking per frame would make the storm worse: each request
+     * costs another ~130 kB IDR, delivered as ~110 back-to-back packets. */
+    uint64_t     last_disc_pli_ms;
+    uint64_t     discontinuities;
 
     /* Only intact frames are acknowledged: telling the encoder to re-anchor on a frame we could
      * not reconstruct corrupts everything after it, which is the exact failure LTR exists to
@@ -83,6 +91,7 @@ static int hevc_type(const uint8_t *nal, size_t n) { return n ? (nal[0] >> 1) & 
  * the same media_nal_fn the consumer already sees. */
 static void ra_nal_cb(void *ctx, const uint8_t *nal, size_t len);
 static void frame_size_note(media_session *m);
+static void note_discontinuity(media_session *m);
 static void ra_frame_cb(void *ctx);
 
 static void nal_cb(void *ctx, const uint8_t *nal, size_t len)
@@ -149,7 +158,17 @@ static void *recv_loop(void *arg)
             rp_rtcp_note_rtcp(&m->rtcp, pkt, (size_t)n, now_ms());
             continue;
         }
-        rp_rtcp_note_rtp(&m->rtcp, pkt, (size_t)n);
+        rp_rtcp_note_rtp(&m->rtcp, pkt, (size_t)n, now_ms());
+
+        /* Watch the extension profile: it is how this device says the coded picture shrank. */
+        uint16_t prof = rp_rtp_ext_profile(pkt, (size_t)n);
+        if (prof && prof != m->last_ext_profile) {
+            m->last_ext_profile = prof;
+            uint32_t aw = 0, ah = 0;
+            rp_rtp_active_rect(prof, &aw, &ah);
+            fprintf(stderr, "  active rect: profile 0x%04x -> %ux%u\n", prof, aw, ah);
+            if (aw && ah && m->on_active_rect) m->on_active_rect(m->ctx, aw, ah);
+        }
 
         if (m->use_ra) {
             /* The assembler owns sequencing, fragment reassembly and the frame boundary, and
@@ -179,6 +198,11 @@ static void *recv_loop(void *arg)
                 size_t an = rp_rtcp_build_ltr_ack(&m->rtcp, ts, ack, sizeof ack);
                 if (an && m->have_peer)
                     sendto(m->udp, ack, an, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+            } else {
+                /* The same test that decides not to acknowledge also decides that what we just
+                 * handed the consumer cannot be decoded safely. Only the first half was ever
+                 * acted on. */
+                note_discontinuity(m);
             }
             m->lost_at_frame_start = m->rtp.lost;
         }
@@ -191,7 +215,17 @@ static void *recv_loop(void *arg)
 static void *rtcp_loop(void *arg)
 {
     media_session *m = arg;
-    uint64_t last_rr = 0, last_pli = 0;
+    uint64_t last_rr = 0, last_pli = 0, last_rctl = 0;
+    /* What to ask the encoder for, in bits per second. The device answers TX/RXMaxBitrate = 6 Mbps
+     * and Device Hub asks for exactly that. RPLAY_RCTL=0 disables sending RCTL at all, so the
+     * before/after can be compared without rebuilding. */
+    const char *rctl_env = getenv("RPLAY_RCTL");
+    int rctl_on = !(rctl_env && rctl_env[0] == '0' && rctl_env[1] == '\0');
+    uint32_t rctl_target = 6000000;
+    if (rctl_env && rctl_env[0] && !(rctl_env[0] == '0' && rctl_env[1] == '\0')) {
+        long v = strtol(rctl_env, NULL, 10);
+        if (v > 0) rctl_target = (uint32_t)v;
+    }
     while (!m->stop) {
         struct timespec s = {0, 200 * 1000 * 1000};
         nanosleep(&s, NULL);
@@ -206,6 +240,27 @@ static void *rtcp_loop(void *arg)
             if (n) sendto(m->udp, buf, n, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
             last_rr = t;
         }
+        /* Rate-control feedback, on a free-running 50 ms timer.
+         *
+         * Measured from Device Hub's own capture: mean interval 50.16 ms, std 5.9 ms, and only 112
+         * of 290 landed within 5 ms of a frame — a timer, not a frame-driven send. Always alone in
+         * its own datagram, never compounded with SR/RR/SDES, so it is sent here rather than
+         * appended to the receiver report. */
+        if (rctl_on && t - last_rctl >= 50) {
+            size_t n = rp_rtcp_build_rctl(&m->rtcp, t, rctl_target, buf, sizeof buf);
+            ssize_t sent = -1;
+            if (n) sent = sendto(m->udp, buf, n, 0,
+                                 (struct sockaddr *)&m->peer, sizeof m->peer);
+            static int reported = 0;
+            if (!reported) {
+                reported = 1;
+                fprintf(stderr, "  rctl: on=%d target=%u built=%zu sent=%zd%s%s\n",
+                        rctl_on, rctl_target, n, sent,
+                        sent < 0 ? " errno=" : "", sent < 0 ? strerror(errno) : "");
+            }
+            last_rctl = t;
+        }
+
         /* Periodic keyframes. The device sends exactly one IDR unprompted, so without asking,
          * any corruption stays on screen for the rest of the session. It answers a PLI once the
          * request carries the SSRC it registered. */
@@ -238,6 +293,27 @@ static void frame_size_note(media_session *m)
                 (unsigned long long)m->frame_max);
 }
 
+/* This access unit did not arrive intact.
+ *
+ * Two things follow, and neither used to happen. The consumer is told, so it can stop decoding
+ * until a keyframe re-anchors the reference chain — decoding onwards from a missing reference
+ * produces a picture that is wrong and stays wrong. And a keyframe is requested immediately
+ * rather than waiting for the periodic timer, which at the default cadence could be three
+ * seconds away: three seconds of pictures predicted from a reference nobody has. */
+static void note_discontinuity(media_session *m)
+{
+    m->discontinuities++;
+    if (m->on_discontinuity) m->on_discontinuity(m->ctx);
+
+    uint64_t t = now_ms();
+    if (t - m->last_disc_pli_ms < 250) return;   /* one ask per burst, not one per frame */
+    m->last_disc_pli_ms = t;
+    uint8_t buf[64];
+    size_t n = rp_rtcp_build_pli(&m->rtcp, buf, sizeof buf);
+    if (n && m->have_peer)
+        sendto(m->udp, buf, n, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+}
+
 /* One NAL from the vendored assembler: frame it and hand it on, exactly as nal_cb does. */
 static void ra_nal_cb(void *ctx, const uint8_t *nal, size_t len)
 {
@@ -259,6 +335,8 @@ static void ra_frame_cb(void *ctx)
         size_t an = rp_rtcp_build_ltr_ack(&m->rtcp, m->ra.last_rtp_time, ack, sizeof ack);
         if (an && m->have_peer)
             sendto(m->udp, ack, an, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+    } else {
+        note_discontinuity(m);
     }
     m->lost_at_frame_start = m->ra.lost;
 }
@@ -288,6 +366,8 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     }
     m->ctx = ctx;
     m->keyframe_every_s = cfg->keyframe_every_s;
+    m->on_discontinuity = cfg->on_discontinuity;
+    m->on_active_rect = cfg->on_active_rect;
 
     m->rtp_storage = malloc((size_t)RP_RTP_REORDER_WINDOW * 1500 + RP_RTP_MAX_NAL);
     m->rxpc_reassembly = malloc(1 << 20);
@@ -410,6 +490,50 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     }
     rp_xpc_dict_end(&w);
     rp_xpc_dict_end(&w);
+
+    /* streamConfig — the encoding settings the device otherwise picks alone.
+     *
+     * A sibling of `options` and `negotiatorOffer`, and the one lever with real headroom: at the
+     * negotiated 1184x2576 the ~2-4 Mbps the device grants is around 0.03 bits/pixel, several
+     * times below what moving UI content needs, which is why a fast swipe outruns the encoder.
+     * Device Hub measures the same, so this is a budget to escape rather than a bug to fix.
+     * Asking for half the coded width and height quarters the pixel count and puts the same
+     * bitrate near 0.12 bits/pixel.
+     *
+     * The values are PLAIN scalars, not the {"int": n} wrappers `options` uses. Sending wrapped
+     * values here hung startmediastream once — the device reads an integer and finds a
+     * dictionary. host/screen.py carries the same warning.
+     *
+     * Omitted entirely unless asked for, so the default path stays byte-identical to Apple's. */
+    {
+        static const struct { const char *env, *key; } knobs[] = {
+            { "RPLAY_WIDTH",             "CustomWidth"       },
+            { "RPLAY_HEIGHT",            "CustomHeight"      },
+            { "RPLAY_FPS",               "Framerate"         },
+            { "RPLAY_VIDEO_RESOLUTION",  "VideoResolution"   },
+            { "RPLAY_MAX_BITRATE",       "TXMaxBitrate"      },
+            { "RPLAY_MIN_BITRATE",       "TXMinBitrate"      },
+            { "RPLAY_KEYFRAME_INTERVAL", "KeyFrameInterval"  },
+        };
+        int any = 0;
+        for (size_t i = 0; i < sizeof knobs / sizeof knobs[0]; i++)
+            if (getenv(knobs[i].env)) { any = 1; break; }
+        if (any) {
+            rp_xpc_key(&w, "streamConfig");
+            rp_xpc_dict_begin(&w);
+            for (size_t i = 0; i < sizeof knobs / sizeof knobs[0]; i++) {
+                const char *raw = getenv(knobs[i].env);
+                if (!raw || !*raw) continue;
+                char *end = NULL;
+                long v = strtol(raw, &end, 10);
+                if (end == raw || *end) continue;      /* not a number: ignore, do not guess */
+                rp_xpc_set_int64(&w, knobs[i].key, (int64_t)v);
+                fprintf(stderr, "  streamConfig %s=%ld\n", knobs[i].key, v);
+            }
+            rp_xpc_dict_end(&w);
+        }
+    }
+
     rp_xpc_set_string(&w, "receiverIP", cfg->our_addr);
     rp_xpc_set_uint64(&w, "receiverPort", (uint64_t)recv_port);
     rp_xpc_set_string(&w, "senderIP", cfg->device_addr);

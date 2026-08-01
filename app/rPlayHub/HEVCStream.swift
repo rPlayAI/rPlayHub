@@ -121,6 +121,8 @@ final class HEVCStream {
     private(set) var nalsSeen = 0
     /// Frames discarded because no keyframe has arrived to anchor them yet.
     private(set) var framesBeforeKeyframe = 0
+    /// Times the transport reported an access unit that did not arrive intact.
+    private(set) var discontinuities = 0
     var decodeFailures: Int { decoder.decodeFailures }
     var lastError: String? { decoder.lastError }
     var framesDecoded: Int { decoder.framesDecoded }
@@ -143,6 +145,24 @@ final class HEVCStream {
 
     init(decoder: VideoDecoder) {
         self.decoder = decoder
+    }
+
+    /// The transport lost packets inside an access unit, so the reference chain is broken.
+    ///
+    /// Decoding onwards from here is worse than decoding nothing. Every following picture predicts
+    /// from one whose reference never arrived, so the decoder reports
+    /// kVTVideoDecoderBadDataErr (−12909) for the first and then silently produces wrong pictures
+    /// for the rest — which is exactly the symptom this stream shows, because until now the
+    /// transport counted the loss and handed the damaged unit over anyway.
+    ///
+    /// The waiting-for-keyframe state already exists for session start and does precisely the
+    /// right thing; it simply was never re-entered mid-stream.
+    func signalDiscontinuity() {
+        lock.lock()
+        defer { lock.unlock() }
+        accessUnit.removeAll(keepingCapacity: true)
+        awaitingKeyframe = true
+        discontinuities += 1
     }
 
     /// Feed raw Annex-B bytes, as the direct RTP path produces them.

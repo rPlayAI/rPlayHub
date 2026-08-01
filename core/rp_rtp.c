@@ -1,5 +1,7 @@
 #include "rp_rtp.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define HEVC_AP  48
@@ -281,4 +283,43 @@ void rp_rtp_flush(rp_rtp_session *s)
         }
     }
     s->fu_len = 0;
+}
+
+uint16_t rp_rtp_ext_profile(const uint8_t *pkt, size_t len)
+{
+    if (len < 12 || !(pkt[0] & 0x10)) return 0;
+    size_t off = 12 + 4u * (size_t)(pkt[0] & 0x0F);
+    if (off + 4 > len) return 0;
+    return (uint16_t)((pkt[off] << 8) | pkt[off + 1]);
+}
+
+void rp_rtp_active_rect(uint16_t profile, uint32_t *w, uint32_t *h)
+{
+    /* Observed with avconferenced: 1184x2576 (native), 1088x1920, 720x1280, and exactly three
+     * profile values. The pairing below is the obvious one and is NOT yet proven -- see the header.
+     * RPLAY_ACTIVE_MAP replaces it wholesale. */
+    static const struct { uint16_t profile; uint32_t w, h; } table[] = {
+        { 0x9011, 1184, 2576 },
+        { 0x9211, 1088, 1920 },
+        { 0x9001,  720, 1280 },
+    };
+    *w = *h = 0;
+
+    const char *env = getenv("RPLAY_ACTIVE_MAP");
+    if (env && *env) {
+        /* "0x9011:1184x2576,0x9211:1088x1920" */
+        const char *p = env;
+        while (*p) {
+            unsigned prof = 0, ew = 0, eh = 0;
+            if (sscanf(p, "%x:%ux%u", &prof, &ew, &eh) == 3 && (uint16_t)prof == profile) {
+                *w = ew; *h = eh; return;
+            }
+            const char *comma = strchr(p, ',');
+            if (!comma) break;
+            p = comma + 1;
+        }
+        return;
+    }
+    for (size_t i = 0; i < sizeof table / sizeof table[0]; i++)
+        if (table[i].profile == profile) { *w = table[i].w; *h = table[i].h; return; }
 }
