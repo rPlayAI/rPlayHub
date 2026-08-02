@@ -168,6 +168,19 @@ static int usbmux_list_devices(int fd, char *udid_out, size_t udid_len) {
          * works -- but not equally well. Over wifi displayservice is unreliable: it times out
          * starting a media stream far more often, and a tunnel that dies mid-session is common.
          * Taking whichever entry happened to be first made that luck rather than a choice. */
+        /* RPLAY_UDID picks the device explicitly. Without it the USB preference below decides,
+         * which is fine with one phone attached and wrong the moment there are two: the phone
+         * you want may be the one on wifi, and there was no way to say so. A prefix match is
+         * enough -- nobody wants to type a full UDID. */
+        const char *want = getenv("RPLAY_UDID");
+        if (want && *want) {
+            if (strncmp(ser, want, strlen(want)) != 0) continue;
+            long long v = 0; CFNumberGetValue(dict_get(dev, "DeviceID"), kCFNumberLongLongType, &v);
+            first_id = (int)v;
+            strncpy(udid_out, ser, udid_len - 1);
+            chose_usb = strcmp(conn, "USB") == 0;
+            continue;
+        }
         int is_usb = strcmp(conn, "USB") == 0;
         if (first_id < 0 || (is_usb && !chose_usb)) {
             long long v = 0; CFNumberGetValue(dict_get(dev, "DeviceID"), kCFNumberLongLongType, &v);
