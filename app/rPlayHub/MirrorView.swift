@@ -31,6 +31,12 @@ final class MirrorView: NSView {
         didSet { needsLayout = true }
     }
 
+    /// The coded size of the frame currently on screen, published by VideoLayer as it enqueues
+    /// that exact picture. Zero means "not known yet, treat the frame as full size".
+    var activeSize: CGSize = .zero {
+        didSet { if activeSize != oldValue { needsLayout = true } }
+    }
+
     var control: ControlClient?
 
     /// Right-click commands on the screen itself. When the screen is embedded in the window that
@@ -168,11 +174,37 @@ final class MirrorView: NSView {
             displayLayer.frame = clipLayer.bounds
             return
         }
-        // Scale the whole coded frame so its top-left screen region exactly fills clipLayer,
-        // pushing the alignment padding off the bottom-right where the clip discards it.
-        let full = CGSize(width: screen.width / fraction.width,
-                          height: screen.height / fraction.height)
+        // Scale the whole coded frame so its live top-left region exactly fills clipLayer,
+        // pushing everything else off the bottom-right where the clip discards it.
+        //
+        // Which region is live depends on the tier, and the two cases genuinely differ:
+        //
+        //  - At full size the frame is the screen plus alignment padding (1170x2532 of picture
+        //    inside 1184x2576), so the live part is deviceSize.
+        //  - Below it the encoder squeezes the WHOLE screen into the top-left activeSize and
+        //    greys out the rest -- measured on a real capture: cropping a 720x1280-tier frame
+        //    to exactly 720x1280 yields a complete home screen with no padding. So the live
+        //    part is activeSize, and applying deviceSize/videoSize on top of it over-scales.
+        let coded = CGSize(width: videoSize.width, height: videoSize.height)
+        let live: CGSize
+        if activeSize.width > 0, activeSize.height > 0, activeSize != coded {
+            live = activeSize
+        } else {
+            live = CGSize(width: coded.width * fraction.width, height: coded.height * fraction.height)
+        }
+        guard live.width > 0, live.height > 0 else {
+            displayLayer.frame = clipLayer.bounds
+            return
+        }
+        let full = CGSize(width: screen.width * coded.width / live.width,
+                          height: screen.height * coded.height / live.height)
+        // No implicit animation. The frame changes whenever the encoder flaps between tiers, and
+        // letting Core Animation interpolate turns each switch into a visible zoom -- the picture
+        // appears to breathe rather than simply being drawn at the right size.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         displayLayer.frame = CGRect(x: 0, y: 0, width: full.width, height: full.height)
+        CATransaction.commit()
     }
 
     // MARK: - input

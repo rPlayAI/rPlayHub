@@ -1,5 +1,77 @@
 # Rendering artifacts — handoff
 
+**RESOLVED 2026-08-02.** Everything below the next section is the investigation that led here.
+Much of it reaches conclusions this section overturns; it is kept because the eliminations are
+sound and re-doing them would cost another week, but read this first.
+
+## Root cause
+
+The device appends a **per-frame trailer** to the last slice NAL of every access unit, carrying
+the resolution the encoder actually coded that picture at:
+
+    [width:u16be][height:u16be][00 ...][4-byte session tag]
+    04a0 0a10 0000030000049209e403   = 1184x2576
+    0440 0780 0000030000049209e403   = 1088x1920
+    02d0 0500 0000030000049209e403   =  720x1280
+
+Under motion the encoder downshifts, squeezing the whole screen into the top-left of the coded
+frame and greying out the rest. The SPS never changes. The trailer is the only place on the wire
+that says so — not the SPS, not an SEI, not the RTP header extension.
+
+Measured, on `reference/captures/devicehub-iphone13-ios27.pcap`:
+
+| stream | slice NALs carrying the trailer |
+|---|---|
+| the wire | **601 / 601** |
+| what `avconferenced` feeds VideoToolbox | **0 / 1368** |
+
+`avconferenced` strips it and passes the size to its decoder as `ActiveVideoResolution`.
+
+### Why it took so long
+
+The trailer bytes are *harmless*. They sit past `rbsp_slice_trailing_bits`, so every decoder
+ignores them: ffmpeg decodes the unstripped stream with **zero warnings and exit 0**, and
+stripping them alone produces byte-identical pictures. Every integrity check therefore passed
+while the picture was wrong, which sent the investigation into loss, reordering, LTR, the
+depacketizer and the reference chain — all genuinely fine, all eliminated at length.
+
+The size is what matters, and acting on it needs a switch that is invisible to any capture of
+`Create` / `DecodeFrame`:
+
+```swift
+spec["NegotiationDetails"] = "RVRA1:0;SW:1;FLS"
+vtSessionSetProperty(session, "VideoResolutionAdaptationType" as CFString, 3 as CFNumber)
+```
+
+`VideoResolutionAdaptationType = 3` gates resolution adaptation in AppleVideoDecoder. Without it
+`ActiveVideoResolution` is silently discarded — replaying 401 of Apple's own captured frames with
+and without it gave **0 of 401 frames differing**, which looked like proof the key was inert and
+was really proof that RVRA was off. `avconferenced` sets it *after* creation via the private
+`VTDecompressionSessionSetProperty`, and the interposer only hooked `Create` and `DecodeFrame`,
+so no capture ever showed it. Found by Kimi K3; confirmed here offline — the same capture that
+decodes to a mosaic on a plain session decodes clean on an RVRA session, all 601 frames.
+
+### The display geometry
+
+Two tiers behave differently, and conflating them makes the picture vibrate:
+
+- **Full size**: the frame is screen plus alignment padding (1170x2532 inside 1184x2576), so the
+  live region is `deviceSize`.
+- **Below it**: the encoder squeezes the *whole* screen into the top-left `activeSize` with no
+  padding — cropping a 720x1280-tier frame to exactly 720x1280 yields a complete home screen.
+
+So the live region is `deviceSize` at full tier and `activeSize` below it, never both. The size
+travels attached to the pixel buffer it describes (`kRPActiveSize`) and is published only by the
+display layer as that picture is enqueued: publishing it from the parser as well races ahead of
+the frame on screen and the picture visibly resizes.
+
+### What is device-specific
+
+The tier list `{1184x2576, 1088x1920, 720x1280}` is this iPhone 13's. Another device needs its
+own; a trailer whose size is not in the list is left alone rather than mis-stripped.
+
+---
+
 Status as of 2026-07-28. Written to start a fresh session without repeating a day of work.
 
 ## The symptom

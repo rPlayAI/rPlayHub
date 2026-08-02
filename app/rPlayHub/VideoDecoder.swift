@@ -30,11 +30,38 @@ import IOSurface
 import QuartzCore
 import VideoToolbox
 
+/// VTDecompressionSessionSetProperty is exported by VideoToolbox but is in neither the SDK
+/// headers nor its .tbd, so resolve it at runtime. avconferenced uses it -- not the documented
+/// VTSessionSetProperty -- to switch the hardware decoder into resolution-adaptation mode.
+private let vtSessionSetProperty: (VTDecompressionSession, CFString, CFTypeRef) -> OSStatus = {
+    typealias Fn = @convention(c) (VTDecompressionSession, CFString, CFTypeRef) -> OSStatus
+    guard let sym = dlsym(dlopen(nil, RTLD_LAZY), "VTDecompressionSessionSetProperty") else {
+        return { _, _, _ in -1 }
+    }
+    return unsafeBitCast(sym, to: Fn.self)
+}()
+
+/// The key the active size travels under, attached to each decoded picture.
+let kRPActiveSize = "RPActiveSize" as CFString
+
 /// Decodes access units into pictures. One session per format description; a new format
 /// description (new parameter sets) transparently rebuilds it.
 final class VideoDecoder {
     /// Called on the decoding thread for every picture, in decode order.
     var onFrame: ((CVPixelBuffer) -> Void)?
+
+    /// The coded size of the next access unit, from the trailer the device appends to its last
+    /// slice NAL (HEVCStream.parseActiveRectTrailer). Under motion the encoder drops the coded
+    /// picture below the SPS size and squeezes the whole screen into the top-left corner; the
+    /// trailer is the only place on the wire that says so. In RVRA mode the decoder needs this
+    /// per frame. nil means no trailer seen yet, and the SPS size stands.
+    var activeSize: (width: Int, height: Int)?
+
+    /// The size belonging to the picture currently in flight, so it can be attached to that
+    /// exact pixel buffer. A shared "current size" read later describes whichever frame has
+    /// since been parsed, not the one on screen -- which is what makes the picture vibrate
+    /// while the encoder flaps between tiers.
+    private var sizeForCallback: (width: Int, height: Int)?
 
     private(set) var framesDecoded = 0
     private(set) var decodeFailures = 0
@@ -116,9 +143,32 @@ final class VideoDecoder {
         guard let desc = CMSampleBufferGetFormatDescription(sample),
               let session = ensureSession(for: desc) else { return }
 
+        // Per-frame coded resolution, exactly as avconferenced passes it. This is inert on an
+        // ordinary session -- verified by replaying 401 of Apple's own captured frames with and
+        // without it, which came back byte-identical. It only does anything once
+        // VideoResolutionAdaptationType has put the decoder into RVRA mode below.
+        let dims = CMVideoFormatDescriptionGetDimensions(desc)
+        let aw = activeSize?.width ?? Int(dims.width)
+        let ah = activeSize?.height ?? Int(dims.height)
+        sizeForCallback = (aw, ah)
+        let frameOptions = [
+            "ActiveVideoResolution": ["Width": aw, "Height": ah],
+            "ContentAnalyzerCropRectangle": ["X": 0, "Y": 0, "Width": aw, "Height": ah],
+        ] as CFDictionary
+
         var flags = VTDecodeInfoFlags()
-        let status = VTDecompressionSessionDecodeFrame(
-            session, sampleBuffer: sample, flags: [], frameRefcon: nil, infoFlagsOut: &flags)
+        let status: OSStatus
+        if #available(macOS 15.0, *) {
+            status = VTDecompressionSessionDecodeFrame(
+                session, sampleBuffer: sample, flags: [], frameOptions: frameOptions,
+                frameRefcon: nil, infoFlagsOut: &flags)
+        } else {
+            // Older SDKs do not surface the frameOptions overload. RVRA needs it, so the tier
+            // switches will smear here -- the session properties above are set either way, and
+            // a still screen is unaffected.
+            status = VTDecompressionSessionDecodeFrame(
+                session, sampleBuffer: sample, flags: [], frameRefcon: nil, infoFlagsOut: &flags)
+        }
         if status != noErr {
             decodeFailures += 1
             lastError = "decode failed (\(status))"
@@ -141,12 +191,18 @@ final class VideoDecoder {
         // every single frame -- 1184x2544 of it -- purely so the picture could be assigned as
         // CALayer contents. Handing pictures to AVSampleBufferDisplayLayer instead removes the
         // reason that conversion existed: it takes YCbCr directly. This is what rplay does.
-        let spec: [String: Any] = [
+        let hevc = CMFormatDescriptionGetMediaSubType(desc) == kCMVideoCodecType_HEVC
+        var spec: [String: Any] = [
             // Require, not merely enable. A software fallback keeps up on a still home screen and
             // falls behind exactly when a swipe raises the bitrate, which is the shape of the
             // symptom -- better to fail loudly at session creation than to decode slowly.
             kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder as String: true,
         ]
+        if hevc {
+            spec["NegotiationDetails"] = "RVRA1:0;SW:1;FLS"
+            spec["DecoderUsage"] = 1
+            spec["NumberOfTiles"] = 1
+        }
 
         // Set RPLAYHUB_LIVE_FRAMES=<dir> to write what the LIVE decoder produced, straight from
         // the CVPixelBuffer, before it reaches the display layer.
@@ -167,6 +223,11 @@ final class VideoDecoder {
                     return
                 }
                 me.framesDecoded += 1
+                if let sz = me.sizeForCallback {
+                    CVBufferSetAttachment(image, kRPActiveSize,
+                                          ["w": sz.width, "h": sz.height] as CFDictionary,
+                                          .shouldPropagate)
+                }
                 me.dumpIfAsked(image)
                 me.onFrame?(image)
             },
@@ -184,6 +245,19 @@ final class VideoDecoder {
             decodeFailures += 1
             lastError = "could not create a decoder (\(status))"
             return nil
+        }
+        if hevc {
+            // The switch that makes everything above mean anything. AppleVideoDecoder gates
+            // resolution adaptation on VideoResolutionAdaptationType, and until it is set every
+            // ActiveVideoResolution is ignored -- so each downshift smears until the next
+            // keyframe. Verified offline: the same wire capture that decodes to a mosaic on a
+            // plain session decodes clean on this one, all 601 frames.
+            vtSessionSetProperty(created, "NegotiationDetails" as CFString,
+                                 "RVRA1:0;SW:1;FLS" as CFString)
+            vtSessionSetProperty(created, "DecoderUsage" as CFString, 0 as CFNumber)
+            let st = vtSessionSetProperty(created, "VideoResolutionAdaptationType" as CFString,
+                                          3 as CFNumber)
+            AppBuild.log("RVRA: \(st == noErr ? "on" : "rejected (\(st))")")
         }
         session = created
         format = desc
@@ -207,6 +281,9 @@ final class VideoDecoder {
 /// sample's presentation timestamp and holds the picture until that time arrives. For a live
 /// mirror there is nothing to synchronise against, so waiting only adds delay.
 final class VideoLayer: AVSampleBufferDisplayLayer {
+    /// The coded size of the picture being enqueued right now, read back off that picture.
+    var onPresentSize: ((CGSize) -> Void)?
+
     /// Pictures decoded but not shown. Not a decode loss: the decoder consumed every one of them,
     /// so the reference chain is intact — these were superseded before a display refresh came
     /// round, which is the point of the design rather than a failure of it.
@@ -236,9 +313,6 @@ final class VideoLayer: AVSampleBufferDisplayLayer {
     // whatever is pending when the screen is actually about to refresh. Same decode path, same
     // reference chain, but the picture shown is the most recent one that exists at the moment the
     // display can use it, and nothing is enqueued that will never be seen.
-    /// The live picture rectangle, as the encoder last declared it. The decoded frame is always
-    /// full size; only this sub-rectangle, anchored top-left, holds the current image.
-    private var activeSize: CGSize?
     private var pending: CVPixelBuffer?
     private var pendingAt: CFTimeInterval = 0
     private let pendingLock = NSLock()
@@ -280,38 +354,6 @@ final class VideoLayer: AVSampleBufferDisplayLayer {
         displayLink = link
     }
 
-    /// The coded picture changed size. Rescale so the live region fills the layer, matching what
-    /// avconferenced does with ContentAnalyzerCropRectangle{X:0,Y:0,W,H}.
-    func setActiveRect(width: Int, height: Int) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.activeSize = CGSize(width: width, height: height)
-            self.applyActiveRect()
-        }
-    }
-
-    private func applyActiveRect() {
-        // NOT contentsRect: that applies to a layer's `contents`, and AVSampleBufferDisplayLayer
-        // renders its own content and ignores it. Setting it looked like a fix and did nothing.
-        // An anchored scale works on any layer, and the superlayer clips what spills out.
-        guard let full = format.map({ CMVideoFormatDescriptionGetDimensions($0) }),
-              full.width > 0, full.height > 0 else { return }
-        var active = activeSize ?? CGSize(width: CGFloat(full.width), height: CGFloat(full.height))
-        // RPLAYHUB_ACTIVE_RECT=WxH forces a fixed rectangle, so the cropping can be verified on its
-        // own without depending on the wire signal being decoded correctly.
-        if let forced = ProcessInfo.processInfo.environment["RPLAYHUB_ACTIVE_RECT"] {
-            let p = forced.lowercased().split(separator: "x").compactMap { Double($0) }
-            if p.count == 2 { active = CGSize(width: p[0], height: p[1]) }
-        }
-        let fx = max(0.05, min(1.0, active.width / CGFloat(full.width)))
-        let fy = max(0.05, min(1.0, active.height / CGFloat(full.height)))
-        // Anchor at the top-left corner, which is where the live region lives
-        // (ContentAnalyzerCropRectangle is always X=0, Y=0), then scale it up to fill.
-        anchorPoint = CGPoint(x: 0, y: 0)
-        position = CGPoint(x: frame.origin.x, y: frame.origin.y)
-        transform = CATransform3DMakeScale(1.0 / fx, 1.0 / fy, 1)
-    }
-
     /// One display refresh. Take whatever the decoder has produced most recently and show it.
     private func displayTick() {
         pendingLock.lock()
@@ -337,6 +379,13 @@ final class VideoLayer: AVSampleBufferDisplayLayer {
 
     /// Build the sample buffer and hand it to the layer. Runs on the display link.
     private func enqueueForDisplay(_ picture: CVPixelBuffer) {
+        // The active size rides on the picture itself, so the view's transform is always the one
+        // that belongs to the frame being shown. This is the only place it is published.
+        if let d = CVBufferCopyAttachment(picture, kRPActiveSize, nil) as? [String: Int],
+           let w = d["w"], let h = d["h"] {
+            onPresentSize?(CGSize(width: w, height: h))
+        }
+
         var desc = format
         if desc == nil || !CMVideoFormatDescriptionMatchesImageBuffer(desc!, imageBuffer: picture) {
             var made: CMVideoFormatDescription?

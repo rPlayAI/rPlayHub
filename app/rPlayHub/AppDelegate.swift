@@ -491,10 +491,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Packets went missing inside an access unit, so stop decoding until a keyframe
             // anchors the chain again rather than predicting from a reference nobody received.
             direct.onDiscontinuity = { [weak decoder] in decoder?.signalDiscontinuity() }
-            direct.onActiveRect = { [weak self] w, h in
-                AppBuild.log("active rect: \(w)x\(h)")
-                self?.view.displayLayer.setActiveRect(width: w, height: h)
-            }
+            // Deliberately unused. This came from rp_rtp_active_rect's reading of the RTP
+            // header extension, and that mapping was measured to be wrong -- it flips tiers
+            // several times a second on a still screen. The real per-frame size comes from the
+            // trailer on the last slice NAL (HEVCStream.parseActiveRectTrailer), which agrees
+            // with what avconferenced passes its decoder. Left unwired rather than deleted so
+            // the C side keeps a place to publish from if the extension is ever decoded.
             if direct.start(tunnel) {
                 self.directStream = direct
             } else if route == "direct" {
@@ -556,6 +558,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // padding, so fall back to it rather than showing nothing.
             if self.view.deviceSize == .zero { self.view.deviceSize = size }
             self.applySizing()
+        }
+        // ONE publisher for the active size, and it is the display layer -- the size arrives
+        // attached to the very picture being enqueued. Wiring the parser's callback here as well
+        // looks equivalent and is not: parsing runs on the receive thread, ahead of decode and
+        // display, so it would keep re-sizing the layer to describe a frame that is not on
+        // screen yet, and the picture visibly vibrates while the encoder flaps between tiers.
+        view.displayLayer.onPresentSize = { [weak self] size in
+            guard let self else { return }
+            if self.view.activeSize != size { self.view.activeSize = size }
         }
         hevc = decoder
 

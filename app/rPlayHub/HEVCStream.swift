@@ -308,6 +308,19 @@ final class HEVCStream {
         onAccessUnit?(accessUnit)
         guard let format else { return }
 
+        // Strip the per-frame trailer and hand its size to the decoder. The device appends the
+        // coded resolution to the last slice NAL of every access unit; avconferenced removes it
+        // before decoding (measured: 601/601 slice NALs on the wire carry it, 0/1368 of what
+        // avconferenced feeds VideoToolbox does). The bytes themselves are harmless -- they sit
+        // past rbsp_slice_trailing_bits and every decoder ignores them, which is why stripping
+        // alone changes nothing -- but the size is the only signal that the encoder downshifted.
+        if !accessUnit.isEmpty,
+           let (w, h, cut) = Self.parseActiveRectTrailer(accessUnit[accessUnit.count - 1]) {
+            let last = accessUnit.count - 1
+            accessUnit[last] = accessUnit[last].prefix(cut)
+            decoder.activeSize = (w, h)
+        }
+
         // Length-prefixed (HVCC-style) is what the format description declares.
         var payload = Data()
         payload.reserveCapacity(accessUnit.reduce(0) { $0 + $1.count + 4 })
@@ -325,6 +338,37 @@ final class HEVCStream {
         // the display layer's business, and skipping *there* is free.
         decoder.decode(sample)
         framesEnqueued += 1
+    }
+
+    /// Find the coded-resolution trailer at the end of a slice NAL, returning
+    /// (width, height, byte offset where the trailer starts) or nil.
+    ///
+    ///     [width:u16be][height:u16be][00 ...][4-byte session tag]
+    ///     04a0 0a10 0000030000049209e403   = 1184x2576
+    ///     0440 0780 0000030000049209e403   = 1088x1920
+    ///     02d0 0500 0000030000049209e403   =  720x1280
+    ///
+    /// Matching against the tiers this encoder family actually uses, plus a zero byte after the
+    /// pair, is what keeps entropy-coded slice data from matching by accident: five fixed bytes
+    /// over a ~20-byte window is far too specific to hit by chance, and a false positive would
+    /// truncate real slice data.
+    static func parseActiveRectTrailer(_ nal: Data) -> (Int, Int, Int)? {
+        let tiers: [(Int, Int)] = [(1184, 2576), (1088, 1920), (720, 1280)]
+        let bytes = [UInt8](nal)
+        let n = bytes.count
+        guard n > 24 else { return nil }
+        for (w, h) in tiers {
+            let pat = [UInt8(w >> 8), UInt8(w & 0xff), UInt8(h >> 8), UInt8(h & 0xff)]
+            var i = n - 5
+            while i >= max(1, n - 24) {
+                if bytes[i] == pat[0], bytes[i + 1] == pat[1],
+                   bytes[i + 2] == pat[2], bytes[i + 3] == pat[3], bytes[i + 4] == 0 {
+                    return (w, h, i)
+                }
+                i -= 1
+            }
+        }
+        return nil
     }
 
     private func makeSampleBuffer(_ payload: Data,
