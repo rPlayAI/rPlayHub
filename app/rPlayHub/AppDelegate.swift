@@ -582,8 +582,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // re-query on every refresh tick.
                 for r in rows where r.productType == nil {
                     DeviceInfo.fetch(udid: r.udid) { [weak self] result in
-                        if case .success(let info) = result, let pt = info.productType {
-                            self?.sidebar.setModel(pt, forUDID: r.udid)
+                        guard case .success(let info) = result, let pt = info.productType,
+                              let self else { return }
+                        self.sidebar.setModel(pt, forUDID: r.udid)
+                        // Also the crop, and it OVERRIDES whatever is there. onFormat below
+                        // fills deviceSize with the coded size as a stopgap the moment the SPS
+                        // arrives, which is always before this answer comes back; leaving that
+                        // in place makes visibleFraction 1x1 and the alignment padding shows as
+                        // black bands. A real screen size outranks the frame it was padded into.
+                        if let native = DeviceModel.screenSize(for: pt),
+                           self.view.deviceSize != native {
+                            self.view.deviceSize = native
+                            self.applySizing()
+                            AppBuild.log("screen size from model \(pt): "
+                                       + "\(Int(native.width))x\(Int(native.height))")
                         }
                     }
                 }

@@ -120,7 +120,9 @@ final class DiagnosticsPanel: NSView {
         h.distribution = .fill
         h.spacing = 8
         h.translatesAutoresizingMaskIntoConstraints = false
-        h.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
+        // No width constraint here: it would reference `stack` before this row has been added to
+        // it, and activating a constraint between views with no common ancestor throws. The
+        // caller adds first, then constrains.
         return h
     }
 
@@ -140,7 +142,11 @@ final class DiagnosticsPanel: NSView {
 
         for section in info.sections {
             stack.addArrangedSubview(header(section.title))
-            for (k, v) in section.rows { stack.addArrangedSubview(row(k, v)) }
+            for (k, v) in section.rows {
+                let r = row(k, v)
+                stack.addArrangedSubview(r)
+                r.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
+            }
         }
         if !info.unavailable.isEmpty {
             stack.addArrangedSubview(header("Unavailable"))
