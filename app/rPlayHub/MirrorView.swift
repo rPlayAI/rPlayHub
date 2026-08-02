@@ -211,23 +211,29 @@ final class MirrorView: NSView {
         // Turn the clip, not the display layer: the crop maths below is expressed in the
         // device's own frame, and rotating underneath it would mean redoing all of it per angle.
         clipLayer.transform = CATransform3DMakeRotation(CGFloat(rotation) * .pi / 2, 0, 0, 1)
+        // Everything below is laid out INSIDE the clip, whose own coordinate space is always the
+        // device's upright shape -- the rotation is applied to the clip as a whole. screenRect()
+        // returns the on-screen footprint, which is turned on its side at a quarter turn, so
+        // using it for the contents made the picture a fraction of its proper size and mostly
+        // black. clipSize is the space the contents actually live in.
+        let clipSize = rotation % 2 == 1
+            ? CGSize(width: screen.height, height: screen.width)
+            : CGSize(width: screen.width, height: screen.height)
         if rotation % 2 == 1 {
-            // A quarter turn swaps which side is which, so the clip has to be laid out in the
-            // unrotated shape and then turned into place.
-            clipLayer.bounds = CGRect(x: 0, y: 0, width: screen.height, height: screen.width)
+            clipLayer.bounds = CGRect(origin: .zero, size: clipSize)
             clipLayer.position = CGPoint(x: screen.midX, y: screen.midY)
         }
 
         // Round the screen corners and mask the cutout, so the mirror reads as a phone rather
         // than as a rectangle of video. Both are pure presentation -- the picture underneath is
         // untouched, and taps still map to the full screen including behind the cutout.
-        clipLayer.cornerRadius = screen.width * DeviceModel.cornerFraction(for: productType)
+        clipLayer.cornerRadius = clipSize.width * DeviceModel.cornerFraction(for: productType)
         cutoutLayer.frame = clipLayer.bounds
-        if let c = DeviceModel.cutoutRect(for: productType), screen.width > 0 {
-            let w = screen.width * c.w
-            let h = screen.height * c.h
-            let top = screen.height * c.top
-            let rect = CGRect(x: (screen.width - w) / 2, y: top, width: w, height: h)
+        if let c = DeviceModel.cutoutRect(for: productType), clipSize.width > 0 {
+            let w = clipSize.width * c.w
+            let h = clipSize.height * c.h
+            let top = clipSize.height * c.top
+            let rect = CGRect(x: (clipSize.width - w) / 2, y: top, width: w, height: h)
             // A notch hangs off the top edge, so only its bottom corners are round; an island
             // floats free and is a capsule.
             let path: CGPath
@@ -275,8 +281,8 @@ final class MirrorView: NSView {
             displayLayer.frame = clipLayer.bounds
             return
         }
-        let full = CGSize(width: screen.width * coded.width / live.width,
-                          height: screen.height * coded.height / live.height)
+        let full = CGSize(width: clipSize.width * coded.width / live.width,
+                          height: clipSize.height * coded.height / live.height)
         // No implicit animation. The frame changes whenever the encoder flaps between tiers, and
         // letting Core Animation interpolate turns each switch into a visible zoom -- the picture
         // appears to breathe rather than simply being drawn at the right size.
