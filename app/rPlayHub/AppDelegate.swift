@@ -593,9 +593,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.deviceLabel = "\(model) · iOS \(os)"
                     // The real screen size, which is smaller than the coded frame: the encoder
                     // pads up to 16-pixel alignment. MirrorView crops and maps clicks with it.
-                    if let s = d["screen_size"] as? [String: Any],
-                       let w = (s["w"] as? NSNumber)?.doubleValue,
-                       let h = (s["h"] as? NSNumber)?.doubleValue, w > 0, h > 0 {
+                    //
+                    // Two spellings, same reason as os_version/product_version above: mirror.py
+                    // nests it as screen_size{w,h}, cdhost emits flat screen_width/screen_height.
+                    // Reading only the nested one left deviceSize at zero against the C daemon,
+                    // visibleFraction fell back to 1x1, and the padding was never cropped -- the
+                    // black bands at the top and bottom of the picture were the alignment rows.
+                    let nested = d["screen_size"] as? [String: Any]
+                    let w = (nested?["w"] as? NSNumber)?.doubleValue
+                        ?? (d["screen_width"] as? NSNumber)?.doubleValue
+                    let h = (nested?["h"] as? NSNumber)?.doubleValue
+                        ?? (d["screen_height"] as? NSNumber)?.doubleValue
+                    if let w, let h, w > 0, h > 0 {
                         self.view.deviceSize = CGSize(width: w, height: h)
                         self.applySizing()
                     }
