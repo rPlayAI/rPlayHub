@@ -52,6 +52,7 @@ final class DeviceSidebar: NSView {
         case screenshot
         case record
         case home
+        case rotate
         case pin
         case copyUDID
         case reconnect

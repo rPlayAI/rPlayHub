@@ -551,6 +551,29 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
     int count = rp_xpc_dict_count(&services);
     printf("  %d services\n", count);
 
+    /* RPLAY_DUMP_SERVICES=1 lists every advertised service and its port. The three below are
+     * what mirroring needs, but the device offers far more -- pairing, restart, diagnostics,
+     * app and process listing -- and there is no other way to see what this OS version
+     * actually exposes. Names change between releases, so guessing them is not an option. */
+    if (getenv("RPLAY_DUMP_SERVICES")) {
+        size_t cursor = 0;
+        const char *key = NULL;
+        rp_xpc_obj entry;
+        while (rp_xpc_dict_next(&services, &cursor, &key, &entry) == 0) {
+            rp_xpc_obj portv;
+            const char *ps = NULL;
+            uint64_t p = 0;
+            if (rp_xpc_dict_get(&entry, "Port", &portv) == 0) {
+                if (rp_xpc_get_string(&portv, &ps) == 0) printf("    %-60s %s\n", key, ps);
+                else if (rp_xpc_get_uint64(&portv, &p) == 0)
+                    printf("    %-60s %llu\n", key, (unsigned long long)p);
+                else printf("    %-60s (port unreadable)\n", key);
+            } else {
+                printf("    %-60s (no port)\n", key);
+            }
+        }
+    }
+
     /* The three the mirroring product actually depends on. */
     static const char *want[] = {
         "com.apple.coredevice.screencaptureservice",

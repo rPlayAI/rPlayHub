@@ -32,15 +32,23 @@ enum AppBuild {
         NSLog("rPlayHub: \(message)")
     }
 
-    static let logPath: String = {
-        // Beside the engine's logs, so one directory holds both halves of a session.
-        let root = (Bundle.main.bundlePath as NSString)
-            .deletingLastPathComponent as NSString      // .../build/DerivedData/.../Debug
-        var dir = root as String
-        while !dir.isEmpty, dir != "/", !FileManager.default.fileExists(atPath: dir + "/scripts/live.sh") {
+    /// The checkout this build came from, or nil when running from an installed copy.
+    ///
+    /// Found by walking up from the bundle looking for a file only the repo has. The app needs it
+    /// to reach `host/`, which is where the device-management protocols still live in Python --
+    /// a shipped build has no such directory and must say so rather than silently doing nothing.
+    static let repoRoot: String? = {
+        var dir = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
+        while !dir.isEmpty, dir != "/" {
+            if FileManager.default.fileExists(atPath: dir + "/scripts/live.sh") { return dir }
             dir = (dir as NSString).deletingLastPathComponent
         }
-        let logs = (dir == "/" || dir.isEmpty) ? NSTemporaryDirectory() : dir + "/logs"
+        return nil
+    }()
+
+    static let logPath: String = {
+        // Beside the engine's logs, so one directory holds both halves of a session.
+        let logs = repoRoot.map { $0 + "/logs" } ?? NSTemporaryDirectory()
         try? FileManager.default.createDirectory(atPath: logs, withIntermediateDirectories: true)
         return logs + "/app.log"
     }()

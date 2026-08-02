@@ -16,6 +16,7 @@ final class ControlPanel: NSView {
     enum Action {
         case pin
         case home
+        case rotate
         case screenshot
         case record
     }
@@ -24,6 +25,7 @@ final class ControlPanel: NSView {
 
     private let pinButton = NSButton()
     private let homeButton = NSButton()
+    private let rotateButton = NSButton()
     private let shotButton = NSButton()
     private let recordButton = NSButton()
     private let statusLabel = NSTextField(labelWithString: "")
@@ -55,8 +57,9 @@ final class ControlPanel: NSView {
             switch action {
             case .pin: return 0
             case .home: return 1
-            case .screenshot: return 2
-            case .record: return 3
+            case .rotate: return 2
+            case .screenshot: return 3
+            case .record: return 4
             }
         }()
         target.action = #selector(buttonHit(_:))
@@ -69,6 +72,7 @@ final class ControlPanel: NSView {
 
         makeButton("Pin Window on Top", "pin", .pin, pinButton)
         makeButton("Home", "house", .home, homeButton)
+        makeButton("Rotate", "rotate.right", .rotate, rotateButton)
         makeButton("Screenshot", "camera", .screenshot, shotButton)
         makeButton("Record", "record.circle", .record, recordButton)
 
@@ -87,7 +91,7 @@ final class ControlPanel: NSView {
         healthLabel.maximumNumberOfLines = 6
 
         let stack = NSStackView(views: [
-            header, pinButton, homeButton, shotButton, recordButton,
+            header, pinButton, homeButton, rotateButton, shotButton, recordButton,
             statusHeader, statusLabel, healthLabel,
         ])
         stack.orientation = .vertical
@@ -101,7 +105,7 @@ final class ControlPanel: NSView {
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
-        for b in [pinButton, homeButton, shotButton, recordButton] {
+        for b in [pinButton, homeButton, rotateButton, shotButton, recordButton] {
             b.translatesAutoresizingMaskIntoConstraints = false
             b.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
         }
@@ -111,7 +115,8 @@ final class ControlPanel: NSView {
         switch sender.tag {
         case 0: onAction?(.pin)
         case 1: onAction?(.home)
-        case 2: onAction?(.screenshot)
+        case 2: onAction?(.rotate)
+        case 3: onAction?(.screenshot)
         default: onAction?(.record)
         }
     }

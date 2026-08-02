@@ -15,7 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var view: MirrorView!
     private var sidebar: DeviceSidebar!
-    private var controls: ControlPanel!
+    private var inspector: InspectorPane!
+    private var controls: ControlPanel { inspector.controls }
     private var isPinned = false
     private var stream: StreamClient?
     private var control: ControlClient?
@@ -79,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the right. Ours puts the live screen in the middle and our own controls on the right.
         view = MirrorView(frame: rect)
         sidebar = DeviceSidebar(frame: NSRect(x: 0, y: 0, width: 250, height: rect.height))
-        controls = ControlPanel(frame: NSRect(x: 0, y: 0, width: 260, height: rect.height))
+        inspector = InspectorPane(frame: NSRect(x: 0, y: 0, width: 260, height: rect.height))
 
         sidebar.onCommand = { [weak self] command, device in
             self?.perform(command, on: device)
@@ -89,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch action {
             case .pin:        self?.perform(.pin, on: nil)
             case .home:       self?.perform(.home, on: nil)
+            case .rotate:     self?.perform(.rotate, on: nil)
             case .screenshot: self?.perform(.screenshot, on: nil)
             case .record:     self?.perform(.record, on: nil)
             }
@@ -101,17 +103,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         split.autoresizingMask = [.width, .height]
         split.addArrangedSubview(sidebar)
         split.addArrangedSubview(view)
-        split.addArrangedSubview(controls)
+        split.addArrangedSubview(inspector)
         // Embedded: the screen sits next to the device list, so the controls pane is hidden and
         // right-clicking the screen is how you reach them. View > Show Controls brings it back.
-        controls.isHidden = true
+        inspector.isHidden = true
         split.setHoldingPriority(NSLayoutConstraint.Priority(260), forSubviewAt: 0)
         split.setHoldingPriority(NSLayoutConstraint.Priority(240), forSubviewAt: 1)
         split.setHoldingPriority(NSLayoutConstraint.Priority(260), forSubviewAt: 2)
 
         // Without explicit widths the split view squeezes the side panes and the rows clip.
         // Equal-constant at a lower priority sets the resting width; the >= keeps them usable.
-        for (pane, width) in [(sidebar as NSView, 250.0), (controls as NSView, 260.0)] {
+        for (pane, width) in [(sidebar as NSView, 250.0), (inspector as NSView, 260.0)] {
             pane.translatesAutoresizingMaskIntoConstraints = false
             let resting = pane.widthAnchor.constraint(equalToConstant: width)
             resting.priority = NSLayoutConstraint.Priority(700)
@@ -255,8 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleControls(_ sender: NSMenuItem) {
-        controls.isHidden.toggle()
-        sender.title = controls.isHidden ? "Show Controls" : "Hide Controls"
+        inspector.isHidden.toggle()
+        sender.title = inspector.isHidden ? "Show Controls" : "Hide Controls"
     }
 
     private func perform(_ command: DeviceSidebar.Command, on device: DeviceRow?) {
@@ -280,6 +282,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.present(title: "Screenshot failed", text: "\(e)")
                 }
             }
+
+        case .rotate:
+            // Not wired yet, and saying so beats a button that appears to work. Two pieces are
+            // missing: the daemon has no rotate verb (cdhost implements neither this nor
+            // press_button -- both were written against the Python engine), and rotating the
+            // view means remapping tap and swipe coordinates with it, or every touch lands in
+            // the wrong place. Doing half of that is worse than doing none.
+            present(title: "Rotate is not implemented",
+                    text: "The daemon has no rotate command yet, and view rotation still needs "
+                        + "input coordinates remapped to match.")
 
         case .home:
             guard let control else { present(title: "Not connected",
