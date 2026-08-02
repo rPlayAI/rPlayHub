@@ -376,6 +376,68 @@ static int hid_send(rp_rxpc_session *s, const uint8_t report[58])
     return rp_rxpc_send(s, body, w.len, 0);
 }
 
+/* Hardware-style buttons, expressed as the gestures that actually perform them.
+ *
+ * The device advertises a "mainScreenButtons" HID surface (_ServiceID 1026) alongside the
+ * touchscreen, but its report format is not known and guessing at one risks sending the phone
+ * something arbitrary. On every iPhone this code targets, Home and App Switcher ARE gestures --
+ * a swipe up from the bottom edge, short for one and held for the other -- so they go through
+ * the touchscreen surface whose format is verified. Verified live: an edge swipe from an open
+ * app returns to the home screen.
+ *
+ * Buttons that are genuinely not gestures (lock, volume, Siri) are refused rather than faked. */
+static void method_button(int fd, long id, const char *line)
+{
+    const api_session *sess = g_session;
+    if (!sess->hid_port) {
+        reply_error(fd, id, "unavailable", "the device did not offer universalhidservice");
+        return;
+    }
+    char button[32] = {0};
+    if (json_string_field(line, "button", button, sizeof button) != 0 || !button[0]) {
+        reply_error(fd, id, "bad_request", "button is required");
+        return;
+    }
+
+    /* Both start at the bottom edge; the switcher travels further and dwells. */
+    double to_y;
+    long duration;
+    if (!strcmp(button, "home")) {
+        to_y = 0.50; duration = 160;
+    } else if (!strcmp(button, "app_switcher")) {
+        to_y = 0.35; duration = 420;
+    } else {
+        reply_error(fd, id, "not_implemented",
+                    "only home and app_switcher are gestures; lock, volume and siri need the "
+                    "mainScreenButtons HID report format, which is not decoded yet");
+        return;
+    }
+
+    svc_conn c;
+    if (svc_open(&c, sess->tunnel_addr, sess->hid_port) != 0) {
+        reply_error(fd, id, "unavailable", "cannot reach universalhidservice");
+        return;
+    }
+
+    uint8_t report[58];
+    const double from_y = 0.995, x = 0.5;
+    const int steps = 20;
+    for (int i = 0; i <= steps; i++) {
+        double t = (double)i / (double)steps;
+        uint16_t px = (uint16_t)(x * 65535.0);
+        uint16_t py = (uint16_t)((from_y + (to_y - from_y) * t) * 65535.0);
+        touch_report(report, TS_STATE_CONTACT, px, py);
+        if (hid_send(&c.s, report) != 0) break;
+        struct timespec sl = {0, (long)(duration * 1000000L / (steps + 1))};
+        nanosleep(&sl, NULL);
+    }
+    touch_report(report, TS_STATE_RELEASE, (uint16_t)(x * 65535.0), (uint16_t)(to_y * 65535.0));
+    hid_send(&c.s, report);
+    svc_close(&c);
+
+    send_line(fd, "{\"id\":%ld,\"ok\":true,\"result\":{}}", id);
+}
+
 static void method_touch(int fd, long id, const char *line, int is_swipe)
 {
     const api_session *sess = g_session;
@@ -660,6 +722,7 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "ping"))              { method_ping(fd, id); return; }
     if (!strcmp(method, "list_devices"))      { method_list_devices(fd, id); return; }
     if (!strcmp(method, "stream_info"))       { method_stream_info(fd, id); return; }
+    if (!strcmp(method, "press_button"))     { method_button(fd, id, line); return; }
     if (!strcmp(method, "tunnel_info"))       { method_tunnel_info(fd, id); return; }
     if (!strcmp(method, "take_screenshot"))   { method_screenshot(fd, id); return; }
     if (!strcmp(method, "tap"))               { method_touch(fd, id, line, 0); return; }

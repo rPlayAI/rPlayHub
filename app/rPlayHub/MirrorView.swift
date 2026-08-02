@@ -46,6 +46,19 @@ final class MirrorView: NSView {
     /// status bar sits in a black band that reads as a video artifact rather than as a phone.
     private let cutoutLayer = CAShapeLayer()
 
+    /// Quarter-turns applied to the picture, 0-3, clockwise.
+    ///
+    /// The device is not rotated by this -- iOS orientation follows the phone's own sensors and
+    /// there is no remote verb for it. What this does is turn the view, which is the useful half:
+    /// a phone lying in a dock, or an app that has locked itself to landscape, can be watched the
+    /// right way up. Input is rotated with it, so a tap still lands where it looks like it will.
+    private(set) var rotation = 0
+
+    func rotate() {
+        rotation = (rotation + 1) % 4
+        needsLayout = true
+    }
+
     var control: ControlClient?
 
     /// Right-click commands on the screen itself. When the screen is embedded in the window that
@@ -163,7 +176,8 @@ final class MirrorView: NSView {
     /// Where the device screen sits inside the view, aspect-fit. Clicks map against THIS, never
     /// against `bounds` — that is the classic off-by-a-letterbox bug.
     private func screenRect() -> CGRect {
-        let content = presentedSize
+        var content = presentedSize
+        if rotation % 2 == 1 { content = CGSize(width: content.height, height: content.width) }
         guard content.width > 0, content.height > 0 else { return bounds }
         let scale = min(bounds.width / content.width, bounds.height / content.height)
         let w = content.width * scale
@@ -176,8 +190,17 @@ final class MirrorView: NSView {
         let r = screenRect()
         guard r.width > 0, r.height > 0, r.contains(p) else { return nil }
         // The view is flipped, so its origin is top-left like the device's — no inversion needed.
-        let fx = (p.x - r.minX) / r.width
-        let fy = (p.y - r.minY) / r.height
+        var fx = (p.x - r.minX) / r.width
+        var fy = (p.y - r.minY) / r.height
+        // Undo the view rotation so the fraction is in the device's own frame. Without this a tap
+        // lands wherever the unrotated picture had that point, which is the worst kind of broken:
+        // it looks like it worked and hits something else.
+        switch rotation {
+        case 1: (fx, fy) = (fy, 1 - fx)
+        case 2: (fx, fy) = (1 - fx, 1 - fy)
+        case 3: (fx, fy) = (1 - fy, fx)
+        default: break
+        }
         return CGPoint(x: min(max(fx, 0), 1), y: min(max(fy, 0), 1))
     }
 
@@ -185,6 +208,15 @@ final class MirrorView: NSView {
         super.layout()
         let screen = screenRect()
         clipLayer.frame = screen
+        // Turn the clip, not the display layer: the crop maths below is expressed in the
+        // device's own frame, and rotating underneath it would mean redoing all of it per angle.
+        clipLayer.transform = CATransform3DMakeRotation(CGFloat(rotation) * .pi / 2, 0, 0, 1)
+        if rotation % 2 == 1 {
+            // A quarter turn swaps which side is which, so the clip has to be laid out in the
+            // unrotated shape and then turned into place.
+            clipLayer.bounds = CGRect(x: 0, y: 0, width: screen.height, height: screen.width)
+            clipLayer.position = CGPoint(x: screen.midX, y: screen.midY)
+        }
 
         // Round the screen corners and mask the cutout, so the mirror reads as a phone rather
         // than as a rectangle of video. Both are pure presentation -- the picture underneath is

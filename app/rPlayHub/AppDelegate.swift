@@ -328,14 +328,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
         case .rotate:
-            // Not wired yet, and saying so beats a button that appears to work. Two pieces are
-            // missing: the daemon has no rotate verb (cdhost implements neither this nor
-            // press_button -- both were written against the Python engine), and rotating the
-            // view means remapping tap and swipe coordinates with it, or every touch lands in
-            // the wrong place. Doing half of that is worse than doing none.
-            present(title: "Rotate is not implemented",
-                    text: "The daemon has no rotate command yet, and view rotation still needs "
-                        + "input coordinates remapped to match.")
+            // Turns the view, not the device: iOS orientation follows the phone's own sensors
+            // and CoreDevice exposes no verb to override it. Rotating what we show is the half
+            // that is ours to do, and MirrorView rotates the input mapping with it.
+            view.rotate()
+            applySizing()
 
         case .home:
             guard let control else { present(title: "Not connected",
