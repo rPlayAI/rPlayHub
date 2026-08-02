@@ -121,22 +121,40 @@ enum DeviceModel {
         }
     }
 
-    /// Screen corner rounding, as a fraction of screen width. Measured off the real devices:
-    /// an iPhone 13 Pro is 47.33pt on a 390pt-wide screen.
+    /// Screen corner rounding, as a fraction of screen width.
+    ///
+    /// Measured off Apple's framebuffer masks (the per-device PDFs in Xcode's simulator
+    /// profiles, which hold the screen as an alpha shape): the corner curve reaches 159px in
+    /// from the edge on an iPhone 13 Pro's 1170px screen, and 211px on an iPhone 16 Pro's
+    /// 1206px. The corners are continuous curves rather than circular arcs, so this is the
+    /// curve's extent, which is what a cornerRadius has to be set to for the silhouette to
+    /// match. The 47.33pt figure used here before was the nominal radius and came out too
+    /// square.
     static func cornerFraction(for productType: String?) -> CGFloat {
         switch cutout(for: productType) {
-        case .none: return 0
-        case .notch, .island: return 47.33 / 390.0
+        case .none:   return 0
+        case .notch:  return 159.0 / 1170.0
+        case .island: return 211.0 / 1206.0
         }
     }
 
-    /// The cutout rectangle, in fractions of the screen. Width and height are fractions of screen
-    /// width and height; `top` is how far below the top edge it starts.
+    /// The rectangle to paint black over the picture, in fractions of the screen, or nil when
+    /// there is nothing to paint.
+    ///
+    /// Only notch devices need it, and the reason is physical. On a notched phone the display
+    /// does not exist behind the notch, but the framebuffer still allocates those pixels, so
+    /// they arrive in the stream as picture that the real device never shows -- Apple ships a
+    /// mask that cuts them out. A Dynamic Island is different: the display DOES extend behind
+    /// it and iOS draws the island itself, so those pixels arrive already black. Painting over
+    /// them achieved nothing except a chance to get the shape slightly wrong.
+    ///
+    /// Checked on Apple's own masks: the iPhone 13 Pro mask cuts a 484x101px hole out of
+    /// 1170x2532, and the iPhone 16 Pro mask has no central cutout whatsoever -- only rounded
+    /// corners.
     static func cutoutRect(for productType: String?) -> (w: CGFloat, h: CGFloat, top: CGFloat)? {
         switch cutout(for: productType) {
-        case .none:   return nil
-        case .notch:  return (162.0 / 390.0, 33.0 / 844.0, 0)
-        case .island: return (125.0 / 393.0, 37.0 / 852.0, 11.0 / 852.0)
+        case .none, .island: return nil
+        case .notch:         return (484.0 / 1170.0, 101.0 / 2532.0, 0)
         }
     }
 
