@@ -203,8 +203,13 @@ final class MirrorView: NSView {
                 path = CGPath(roundedRect: rect, cornerWidth: h / 2, cornerHeight: h / 2,
                               transform: nil)
             } else {
-                path = CGPath(roundedRect: rect.insetBy(dx: 0, dy: -h),
-                              cornerWidth: h * 0.55, cornerHeight: h * 0.55, transform: nil)
+                // A notch hangs off the top edge, so it is drawn taller than it shows and the
+                // clip takes the overhang -- that is what leaves only its bottom corners round.
+                // insetBy(dy:) grows BOTH edges, which made the visible part 2h and the notch
+                // look far too deep; extend upward only.
+                let overhung = CGRect(x: rect.minX, y: -h, width: w, height: h * 2)
+                path = CGPath(roundedRect: overhung, cornerWidth: h * 0.55,
+                              cornerHeight: h * 0.55, transform: nil)
             }
             cutoutLayer.path = path
             cutoutLayer.isHidden = false
