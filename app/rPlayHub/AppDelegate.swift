@@ -295,7 +295,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sender.title = inspector.isHidden ? "Show Controls" : "Hide Controls"
     }
 
+    /// The subset of actions a simulator understands. Boot and shutdown are ours to perform;
+    /// a screenshot works even with Simulator.app closed, which is worth keeping.
+    private func performSimulator(_ command: DeviceSidebar.Command, on device: DeviceRow) {
+        switch command {
+        case .reconnect:
+            let booting = !device.connected
+            let err = booting ? Simulator.boot(device.udid)
+                              : Simulator.shutdown(device.udid)
+            if let err {
+                present(title: booting ? "Could not boot" : "Could not shut down", text: err)
+            }
+            if let control { refreshDevices(control) }
+
+        case .screenshot:
+            let path = NSTemporaryDirectory() + "\(device.name) \(Int(Date().timeIntervalSince1970)).png"
+            if let err = Simulator.screenshot(device.udid, to: path) {
+                present(title: "Screenshot failed", text: err)
+            } else {
+                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            }
+
+        case .copyUDID:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(device.udid, forType: .string)
+
+        default:
+            // Mirroring a simulator needs a frame source we do not have: it is not a display on
+            // this Mac (checked -- booting one adds no screen), simctl's recordVideo buffers to
+            // disk instead of streaming, and screenshots come back at about 1.5 a second. The
+            // routes left are Simulator.app's window through ScreenCaptureKit, or SimulatorKit,
+            // which is private.
+            present(title: "Not available for simulators",
+                    text: "Boot, Shut Down, Screenshot and Copy UDID work. Live mirroring and "
+                        + "input need a frame source for simulators, which is not built yet.")
+        }
+    }
+
     private func perform(_ command: DeviceSidebar.Command, on device: DeviceRow?) {
+        // A simulator answers to almost none of this: no tunnel, no pairing, no HID surfaces.
+        // Route the few that do mean something and say so plainly for the rest, rather than
+        // sending a tap into a daemon that is talking to a different device entirely.
+        if let device, device.isSimulator {
+            performSimulator(command, on: device)
+            return
+        }
         switch command {
         case .openInNewTab, .openInNewWindow:
             // One live stream, one MirrorView: this moves the view rather than making a second
@@ -572,7 +616,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch result {
             case .success(let devices):
                 let rows = devices.map(DeviceRow.init(json:))
-                self.sidebar.update(rows)
+                // Simulators share the list, as they do in Device Hub. They come from simctl
+                // rather than the engine -- a simulator never touches CoreDevice -- so the two
+                // sources are merged here rather than pretended to be one upstream.
+                self.sidebar.update(rows + Simulator.list().map(DeviceRow.init(simulator:)))
                 // The engine's device list has no product type, so the subtitle would stay blank.
                 // Lockdown knows it, and asking costs nothing the user waits on: the row fills in
                 // when the answer arrives. Only for rows that still lack one, so this does not

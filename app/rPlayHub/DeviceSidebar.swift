@@ -18,6 +18,22 @@ struct DeviceRow {
     let udid: String
     /// Raw identifier, kept so the row can pick a matching glyph.
     var productType: String?
+    /// Simulators share the list with real devices, as they do in Device Hub, but almost every
+    /// action differs -- there is no tunnel, no pairing, and booting is ours to do.
+    var isSimulator = false
+
+    /// A simulator row. `connected` doubles as "booted", which is the state that matters: a
+    /// shutdown simulator can be listed but not looked at.
+    init(simulator s: Simulator) {
+        udid = s.udid
+        id = s.udid
+        name = s.name
+        detail = "Simulator"
+        version = s.runtime
+        connected = s.isBooted
+        productType = nil
+        isSimulator = true
+    }
 
     init(json: [String: Any]) {
         udid = json["udid"] as? String ?? json["id"] as? String ?? "?"
@@ -239,8 +255,12 @@ extension DeviceSidebar: NSTableViewDataSource, NSTableViewDelegate {
             let d = rows[row]
             title.stringValue = d.name
             subtitle.stringValue = d.detail
-            icon.image = NSImage(systemSymbolName: DeviceModel.symbol(for: d.productType),
-                                 accessibilityDescription: nil)
+            let glyph = d.isSimulator
+                ? (d.name.contains("iPad") ? "ipad" : "iphone")
+                : DeviceModel.symbol(for: d.productType)
+            icon.image = NSImage(systemSymbolName: glyph, accessibilityDescription: nil)
+            // Booted simulators get the accent like a connected phone; shutdown ones stay grey,
+            // which is how Device Hub separates "you can look at this" from "you cannot".
             icon.contentTintColor = d.connected ? .controlAccentColor : .tertiaryLabelColor
         }
 
