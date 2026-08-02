@@ -1,0 +1,90 @@
+-rw-r--r--  1 rplayai  wheel  5694770 Aug  1 00:49 /tmp/avconferenced.vtc
+=== /tmp/avconferenced.vtc ===
+1 session creations, 1 formats, 430 decode calls
+
+--- VTDecompressionSessionCreateWithOptions at t=11.824s (format #1) ---
+  arg0: <ptr 0x0 unreadable 0000000000000000>
+  arg1: <CMVideoFormatDescription 0x829af5cb0 [0x1f9a84880]> {
+	mediaType:'vide' 
+	mediaSubType:'hvc1' 
+	mediaSpecific: {
+		codecType: 'hvc1'		dimensions: 1184 x 2576 
+	} 
+	extensions: {{
+    BitsPerComponent = 8;
+    CVFieldCount = 1;
+    CVImageBufferChromaLocationBottomField = Left;
+    CVImageBufferChromaLocationTopField = Left;
+    FullRangeVideo = 1;
+    SampleDescriptionExtensionAtoms =     {
+        hvcC = {length = 133, bytes = 0x01016000 0000b000 00000000 96f000fc ... 44014807 2f05b240 };
+    };
+}}
+}
+  arg2: {
+    DecoderUsage = 1;
+    NegotiationDetails = "VRAE:0;SW:1;FLS";
+    NumberOfTiles = 1;
+    RequireHardwareAcceleratedVideoDecoder = 1;
+}
+  arg3: {
+    IOSurfaceProperties =     {
+    };
+}
+  arg4: <ptr 0x11cd85d40 word=0x77360001bd535d6c>
+  arg5: {
+    FigThreadPriorityOfClientThread = 22;
+}
+  arg6: <ptr 0x11cd85d38 word=0x0000000827001440>
+  arg7: <ptr 0xfffff0003ffff800 unreadable 0000000000000000>
+
+--- format #1: hvc1 (HEVC) 1184x2576, NAL length prefix 4 bytes, 3 parameter sets ---
+  [0] VPS          24 B  40011c01ffff016000000300b000000300000300960cc090
+  [1] SPS          63 B  420111016000000300b000000300000300964800942002845880cee45218b9fc
+  [2] PPS           8 B  440148072f05b240
+  extensions: {
+    BitsPerComponent = 8;
+    CVFieldCount = 1;
+    CVImageBufferChromaLocationBottomField = Left;
+    CVImageBufferChromaLocationTopField = Left;
+    FullRangeVideo = 1;
+    SampleDescriptionExtensionAtoms =     {
+        hvcC = {length = 133, bytes = 0x01016000 0000b000 00000000 96f000fc ... 44014807 2f05b240 };
+    };
+}
+
+--- decoder input: 430 frames over 13.26s (32.4 fps) ---
+  total 5665740 B, mean 13176 B, median 6494 B, peak 118616 B, 3.42 Mbit/s
+  keyframes (sync samples): 430
+  decode flags seen: {1: 430}
+  inter-frame arrival: median 30.9 ms, p95 55.9 ms, max 192.0 ms
+
+     #     t(s)    bytes          pts  sync  NAL units
+     0    0.000   118616            0     Y  VPS:24 SPS:63 PPS:8 IDR_N_LP:118505
+     1    0.002     1277     83333333     Y  TRAIL_R:1273
+     2    0.003      366    100000000     Y  TRAIL_R:362
+     3    0.004      269    116666666     Y  TRAIL_R:265
+     4    0.009      832    150000000     Y  TRAIL_R:828
+     5    0.036      600    166666666     Y  TRAIL_R:596
+     6    0.105     1216    233333333     Y  TRAIL_R:1212
+     7    0.122     1422    250000000     Y  TRAIL_R:1418
+     8    0.140     2206    300000000     Y  TRAIL_R:2202
+     9    0.195     2676    316666666     Y  TRAIL_R:2672
+    10    0.206     3158    333333333     Y  TRAIL_R:3154
+    11    0.229     5411    350000000     Y  TRAIL_R:5407
+    12    0.242     9721    400000000     Y  TRAIL_R:9717
+    13    0.267    30941    416666666     Y  TRAIL_R:30937
+    14    0.301    29037    450000000     Y  TRAIL_R:29033
+    15    0.366    29500    483333333     Y  TRAIL_R:29496
+    16    0.378      456    500000000     Y  TRAIL_R:452
+    17    0.390      995    550000000     Y  TRAIL_R:991
+    18    0.445     1657    600000000     Y  TRAIL_R:1653
+    19    0.490     3745    616666666     Y  TRAIL_R:3741
+    20    0.509    30023    633333333     Y  TRAIL_R:30019
+    21    0.526    42762    650000000     Y  TRAIL_R:42758
+    22    0.542     1565    700000000     Y  TRAIL_R:1561
+    23    0.617    58051    775000000     Y  TRAIL_R:58047
+    24    0.668    43650    825000000     Y  TRAIL_R:43646
+[1m==>[0m to compare against our own depacketization of the same session:
+    python3 scripts/decode-vtcap.py /tmp/avconferenced.vtc --annexb /tmp/avc-theirs.h265
+    # then diff /tmp/avc-theirs.h265 against build/validate-ours-*/video.h265
