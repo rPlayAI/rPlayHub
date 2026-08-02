@@ -18,6 +18,22 @@
 #define API_PORT    9876
 #define STREAM_PORT 9877
 
+/* One attached device, as usbmuxd reports it.
+ *
+ * The daemon streams from exactly one device, but the sidebar should show every device the Mac
+ * can see -- Device Hub does, and a list that hides the phone you are looking for is worse than
+ * no list. Only the bound one can be mirrored; the rest are listed so they can be selected. */
+typedef struct {
+    char udid[64];
+    char connection[16];          /* "USB" or "Network", as usbmuxd spells it */
+} api_device;
+
+#define API_MAX_DEVICES 16
+
+/* Fills `out` with the attached devices, returning how many. Implemented in cdhost.c because
+ * that is where the usbmux client lives; declared here because the API server is what needs it. */
+int usbmux_enumerate(api_device *out, int max);
+
 /* Everything the server needs to answer questions about the session it belongs to. */
 typedef struct {
     const char *udid;

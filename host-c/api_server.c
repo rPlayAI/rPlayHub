@@ -496,17 +496,47 @@ static void method_ping(int fd, long id)
 static void method_list_devices(int fd, long id)
 {
     const api_session *s = g_session;
-    send_line(fd,
-              "{\"id\":%ld,\"ok\":true,\"result\":{\"devices\":[{"
-              "\"udid\":\"%s\",\"name\":\"%s\","
-              /* Both spellings of the same value. The app reads os_version, which is what
-               * mirror.py has always sent; this daemon sent only product_version, so the version
-               * silently read as absent in the sidebar. Emitting both keeps the two engines
-               * interchangeable, which is the whole point of them sharing a contract. */
-              "\"os_version\":\"%s\",\"product_version\":\"%s\","
-              "\"screen_width\":%d,\"screen_height\":%d,\"connection\":\"usb\"}]}}",
-              id, s->udid, s->device_name, s->product_version, s->product_version,
-              s->screen_w, s->screen_h);
+    api_device devs[API_MAX_DEVICES];
+    int n = usbmux_enumerate(devs, API_MAX_DEVICES);
+
+    /* Every attached device, not just the one this daemon bound to. The sidebar used to show a
+     * single hardcoded entry built from the session, so a Mac with two phones showed one and the
+     * other looked disconnected -- and "connection" always read "usb" even over wifi. Only the
+     * bound device carries a name, version and screen size, because those come from lockdown
+     * during startup; the rest are listed by udid so they can at least be seen and selected. */
+    char buf[4096];
+    int off = snprintf(buf, sizeof buf, "{\"id\":%ld,\"ok\":true,\"result\":{\"devices\":[", id);
+    int wrote = 0;
+    for (int i = 0; i < n && off < (int)sizeof buf - 512; i++) {
+        int bound = s->udid && !strcmp(devs[i].udid, s->udid);
+        off += snprintf(buf + off, sizeof buf - off,
+                        "%s{\"udid\":\"%s\",\"name\":\"%s\","
+                        "\"os_version\":\"%s\",\"product_version\":\"%s\","
+                        "\"screen_width\":%d,\"screen_height\":%d,"
+                        "\"connection\":\"%s\",\"bound\":%s}",
+                        wrote ? "," : "", devs[i].udid,
+                        bound ? s->device_name : devs[i].udid,
+                        bound ? s->product_version : "",
+                        bound ? s->product_version : "",
+                        bound ? s->screen_w : 0, bound ? s->screen_h : 0,
+                        strcmp(devs[i].connection, "Network") ? "usb" : "wifi",
+                        bound ? "true" : "false");
+        wrote++;
+    }
+    /* usbmuxd can be unreachable while the session is very much alive -- it is a separate daemon
+     * and the tunnel does not depend on it once up. Reporting nothing then would blank a sidebar
+     * that is actively mirroring, so fall back to the session we know we have. */
+    if (!wrote && s->udid) {
+        off += snprintf(buf + off, sizeof buf - off,
+                        "{\"udid\":\"%s\",\"name\":\"%s\","
+                        "\"os_version\":\"%s\",\"product_version\":\"%s\","
+                        "\"screen_width\":%d,\"screen_height\":%d,"
+                        "\"connection\":\"usb\",\"bound\":true}",
+                        s->udid, s->device_name, s->product_version, s->product_version,
+                        s->screen_w, s->screen_h);
+    }
+    snprintf(buf + off, sizeof buf - off, "]}}");
+    send_line(fd, "%s", buf);
 }
 
 static void method_stream_info(int fd, long id)

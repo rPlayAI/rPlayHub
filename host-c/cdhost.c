@@ -181,6 +181,46 @@ static int usbmux_list_devices(int fd, char *udid_out, size_t udid_len) {
     CFRelease(reply);
     return first_id;
 }
+/* Every attached device, for the sidebar. Separate from usbmux_list_devices above, which
+ * chooses ONE device to bind the session to; this one reports them all and judges none. A phone
+ * appearing twice (USB and Network) is collapsed to a single entry preferring USB, because it is
+ * one phone and showing it twice would be a bug rather than a feature. */
+int usbmux_enumerate(api_device *out, int max)
+{
+    int fd = usbmux_connect();
+    if (fd < 0) return 0;
+    CFMutableDictionaryRef req = usbmux_msg("ListDevices");
+    CFDictionaryRef reply = usbmux_request(fd, req, 1);
+    CFRelease(req);
+    if (!reply) { close(fd); return 0; }
+
+    int n = 0;
+    CFArrayRef list = dict_get(reply, "DeviceList");
+    for (CFIndex i = 0; list && i < CFArrayGetCount(list) && n < max; i++) {
+        CFDictionaryRef dev = CFArrayGetValueAtIndex(list, i);
+        CFDictionaryRef props = dict_get(dev, "Properties");
+        char ser[128] = "", conn[32] = "";
+        dict_get_cstr(props, "SerialNumber", ser, sizeof ser);
+        dict_get_cstr(props, "ConnectionType", conn, sizeof conn);
+        if (!ser[0]) continue;
+
+        int existing = -1;
+        for (int k = 0; k < n; k++) if (!strcmp(out[k].udid, ser)) { existing = k; break; }
+        if (existing >= 0) {
+            /* Same phone on both transports: keep USB, which is the more reliable one. */
+            if (!strcmp(conn, "USB")) snprintf(out[existing].connection,
+                                               sizeof out[existing].connection, "%s", conn);
+            continue;
+        }
+        snprintf(out[n].udid, sizeof out[n].udid, "%s", ser);
+        snprintf(out[n].connection, sizeof out[n].connection, "%s", conn[0] ? conn : "USB");
+        n++;
+    }
+    CFRelease(reply);
+    close(fd);
+    return n;
+}
+
 static int usbmux_connect_port(int fd, int device_id, int port) {
     CFMutableDictionaryRef req = usbmux_msg("Connect");
     dict_set_int(req, "DeviceID", device_id);
