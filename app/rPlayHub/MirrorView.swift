@@ -37,6 +37,15 @@ final class MirrorView: NSView {
         didSet { if activeSize != oldValue { needsLayout = true } }
     }
 
+    /// The device whose body we draw around the picture. Setting it redraws the bezel.
+    var productType: String? {
+        didSet { if productType != oldValue { needsLayout = true } }
+    }
+
+    /// Covers the notch or island. The device streams the pixels behind them, so without this the
+    /// status bar sits in a black band that reads as a video artifact rather than as a phone.
+    private let cutoutLayer = CAShapeLayer()
+
     var control: ControlClient?
 
     /// Right-click commands on the screen itself. When the screen is embedded in the window that
@@ -98,11 +107,18 @@ final class MirrorView: NSView {
     private func setUpLayers() {
         buildContextMenu()
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
+        // Clear, not black. The screen keeps the device's aspect ratio, so it rarely fills the
+        // pane exactly and the leftover margin is drawn by this layer. Black made that margin
+        // read as part of the picture -- edges the video appeared to have and did not. Device
+        // Hub lets its window background show there, and so do we.
+        layer?.backgroundColor = NSColor.clear.cgColor
         layer?.masksToBounds = true
 
         clipLayer.masksToBounds = true
         clipLayer.backgroundColor = NSColor.black.cgColor
+        // Above the video, inside the clip, so it rounds off with the screen corners.
+        cutoutLayer.fillColor = NSColor.black.cgColor
+        cutoutLayer.zPosition = 10
 
         // .resize, not .resizeAspect: the layer frame below is computed to the video's exact
         // aspect ratio already, so gravity-driven letterboxing would fight the crop maths.
@@ -122,6 +138,7 @@ final class MirrorView: NSView {
         // No timebase and no scheduling. The layer simply shows the newest decoded picture; the
         // decoder, not the layer, decides what gets decoded, and it decodes everything.
         clipLayer.addSublayer(displayLayer)
+        clipLayer.addSublayer(cutoutLayer)
         layer?.addSublayer(clipLayer)
     }
 
@@ -169,6 +186,32 @@ final class MirrorView: NSView {
         let screen = screenRect()
         clipLayer.frame = screen
 
+        // Round the screen corners and mask the cutout, so the mirror reads as a phone rather
+        // than as a rectangle of video. Both are pure presentation -- the picture underneath is
+        // untouched, and taps still map to the full screen including behind the cutout.
+        clipLayer.cornerRadius = screen.width * DeviceModel.cornerFraction(for: productType)
+        cutoutLayer.frame = clipLayer.bounds
+        if let c = DeviceModel.cutoutRect(for: productType), screen.width > 0 {
+            let w = screen.width * c.w
+            let h = screen.height * c.h
+            let top = screen.height * c.top
+            let rect = CGRect(x: (screen.width - w) / 2, y: top, width: w, height: h)
+            // A notch hangs off the top edge, so only its bottom corners are round; an island
+            // floats free and is a capsule.
+            let path: CGPath
+            if c.top > 0 {
+                path = CGPath(roundedRect: rect, cornerWidth: h / 2, cornerHeight: h / 2,
+                              transform: nil)
+            } else {
+                path = CGPath(roundedRect: rect.insetBy(dx: 0, dy: -h),
+                              cornerWidth: h * 0.55, cornerHeight: h * 0.55, transform: nil)
+            }
+            cutoutLayer.path = path
+            cutoutLayer.isHidden = false
+        } else {
+            cutoutLayer.isHidden = true
+        }
+
         let fraction = visibleFraction
         guard fraction.width > 0, fraction.height > 0 else {
             displayLayer.frame = clipLayer.bounds
@@ -179,19 +222,18 @@ final class MirrorView: NSView {
         //
         // Which region is live depends on the tier, and the two cases genuinely differ:
         //
-        //  - At full size the frame is the screen plus alignment padding (1170x2532 of picture
-        //    inside 1184x2576), so the live part is deviceSize.
-        //  - Below it the encoder squeezes the WHOLE screen into the top-left activeSize and
-        //    greys out the rest -- measured on a real capture: cropping a 720x1280-tier frame
-        //    to exactly 720x1280 yields a complete home screen with no padding. So the live
-        //    part is activeSize, and applying deviceSize/videoSize on top of it over-scales.
+        // The padding fraction is the same at every tier: the encoder scales the screen and its
+        // alignment padding together, so the active rect always contains both. Measured on a real
+        // capture, screen/active came out 0.9882x0.9829 at 1184x2576, 0.9890x0.9833 at 1088x1920
+        // and 0.9889x0.9836 at 720x1280 -- one ratio, not two cases.
+        //
+        // An earlier version treated reduced tiers as pure screen with no padding. That put the
+        // padding back on screen as black edges and shifted the scale slightly on every
+        // downshift, which under a swipe reads as the picture twitching.
         let coded = CGSize(width: videoSize.width, height: videoSize.height)
-        let live: CGSize
-        if activeSize.width > 0, activeSize.height > 0, activeSize != coded {
-            live = activeSize
-        } else {
-            live = CGSize(width: coded.width * fraction.width, height: coded.height * fraction.height)
-        }
+        let active = (activeSize.width > 0 && activeSize.height > 0) ? activeSize : coded
+        let live = CGSize(width: active.width * fraction.width,
+                          height: active.height * fraction.height)
         guard live.width > 0, live.height > 0 else {
             displayLayer.frame = clipLayer.bounds
             return

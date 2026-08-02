@@ -95,6 +95,51 @@ enum DeviceModel {
         return names[productType] ?? productType
     }
 
+    /// What sits at the top of the screen and is not part of the picture.
+    ///
+    /// The device streams the full rectangle including the area behind the notch or island, so
+    /// that region arrives as real pixels. Device Hub covers it, which is why its mirror reads as
+    /// a physical phone rather than a video of one.
+    enum Cutout {
+        case none                      // home-button devices: nothing to cover
+        case notch                     // hangs off the top edge
+        case island                    // floats below the top edge
+    }
+
+    static func cutout(for productType: String?) -> Cutout {
+        guard let productType else { return .none }
+        switch productType {
+        case "iPhone12,8", "iPhone14,6":                       // SE 2, SE 3
+            return .none
+        case "iPhone15,2", "iPhone15,3",                       // 14 Pro, Pro Max
+             "iPhone15,4", "iPhone15,5",                       // 15, 15 Plus
+             "iPhone16,1", "iPhone16,2",                       // 15 Pro, Pro Max
+             "iPhone17,1", "iPhone17,2", "iPhone17,3", "iPhone17,4":
+            return .island
+        default:
+            return productType.hasPrefix("iPhone") ? .notch : .none
+        }
+    }
+
+    /// Screen corner rounding, as a fraction of screen width. Measured off the real devices:
+    /// an iPhone 13 Pro is 47.33pt on a 390pt-wide screen.
+    static func cornerFraction(for productType: String?) -> CGFloat {
+        switch cutout(for: productType) {
+        case .none: return 0
+        case .notch, .island: return 47.33 / 390.0
+        }
+    }
+
+    /// The cutout rectangle, in fractions of the screen. Width and height are fractions of screen
+    /// width and height; `top` is how far below the top edge it starts.
+    static func cutoutRect(for productType: String?) -> (w: CGFloat, h: CGFloat, top: CGFloat)? {
+        switch cutout(for: productType) {
+        case .none:   return nil
+        case .notch:  return (162.0 / 390.0, 33.0 / 844.0, 0)
+        case .island: return (125.0 / 393.0, 37.0 / 852.0, 11.0 / 852.0)
+        }
+    }
+
     /// The SF Symbol that suits this device class. Device Hub draws a device glyph per row.
     static func symbol(for productType: String?) -> String {
         guard let productType else { return "iphone" }

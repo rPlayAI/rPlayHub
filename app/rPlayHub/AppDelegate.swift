@@ -585,6 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         guard case .success(let info) = result, let pt = info.productType,
                               let self else { return }
                         self.sidebar.setModel(pt, forUDID: r.udid)
+                        self.view.productType = pt
                         // Also the crop, and it OVERRIDES whatever is there. onFormat below
                         // fills deviceSize with the coded size as a stopgap the moment the SPS
                         // arrives, which is always before this answer comes back; leaving that
