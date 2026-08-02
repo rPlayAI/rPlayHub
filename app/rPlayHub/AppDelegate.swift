@@ -16,6 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var view: MirrorView!
     private var sidebar: DeviceSidebar!
     private var inspector: InspectorPane!
+    private var split: NSSplitView!
+    private let screenWindow = ScreenWindow()
+    private var strip: ControlStrip!
+    private var stage: NSView!
     private var controls: ControlPanel { inspector.controls }
     private var isPinned = false
     private var stream: StreamClient?
@@ -96,17 +100,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        let split = NSSplitView(frame: NSRect(x: 0, y: 0, width: 250 + rect.width + 260,
+        split = NSSplitView(frame: NSRect(x: 0, y: 0, width: 250 + rect.width + 260,
                                               height: rect.height))
         split.isVertical = true
         split.dividerStyle = .thin
         split.autoresizingMask = [.width, .height]
+        // Screen with its actions directly underneath, as Device Hub arranges them: the buttons
+        // act on the picture, so they sit with it rather than off in the inspector.
+        strip = ControlStrip()
+        strip.onAction = { [weak self] action in
+            switch action {
+            case .pin:        self?.perform(.pin, on: nil)
+            case .home:       self?.perform(.home, on: nil)
+            case .rotate:     self?.perform(.rotate, on: nil)
+            case .screenshot: self?.perform(.screenshot, on: nil)
+            case .record:     self?.perform(.record, on: nil)
+            }
+        }
+        stage = NSView()
+        for sub in [view as NSView, strip as NSView] {
+            sub.translatesAutoresizingMaskIntoConstraints = false
+            stage.addSubview(sub)
+        }
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: stage.topAnchor),
+            view.leadingAnchor.constraint(equalTo: stage.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: stage.trailingAnchor),
+            strip.topAnchor.constraint(equalTo: view.bottomAnchor),
+            strip.leadingAnchor.constraint(equalTo: stage.leadingAnchor),
+            strip.trailingAnchor.constraint(equalTo: stage.trailingAnchor),
+            strip.bottomAnchor.constraint(equalTo: stage.bottomAnchor),
+        ])
+
         split.addArrangedSubview(sidebar)
-        split.addArrangedSubview(view)
+        split.addArrangedSubview(stage)
         split.addArrangedSubview(inspector)
-        // Embedded: the screen sits next to the device list, so the controls pane is hidden and
-        // right-clicking the screen is how you reach them. View > Show Controls brings it back.
-        inspector.isHidden = true
+        // Visible by default, as Device Hub's inspector is. It was hidden while the pane held
+        // only buttons that duplicated the screen's right-click menu; now that the Info tab
+        // reports what the device actually is, hiding it means the first thing anyone wants is
+        // behind a menu item they have to find. View > Hide Controls still puts it away.
         split.setHoldingPriority(NSLayoutConstraint.Priority(260), forSubviewAt: 0)
         split.setHoldingPriority(NSLayoutConstraint.Priority(240), forSubviewAt: 1)
         split.setHoldingPriority(NSLayoutConstraint.Priority(260), forSubviewAt: 2)
@@ -205,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .success(let info):
                     self.isRecording = false
                     self.recordItem?.title = "Start Recording"
-                    self.controls.setRecording(false)
+                    self.strip.setRecording(false)
                     self.lastRecordingPath = info["path"] as? String
                     let nals = info["nals"] as? Int ?? 0
                     let bytes = info["bytes"] as? Int ?? 0
@@ -231,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .success(let info):
                     self.isRecording = true
                     self.recordItem?.title = "Stop Recording"
-                    self.controls.setRecording(true)
+                    self.strip.setRecording(true)
                     self.lastRecordingPath = info["path"] as? String
                 case .failure(let e):
                     self.present(title: "Could not start recording", text: "\(e)")
@@ -263,10 +295,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func perform(_ command: DeviceSidebar.Command, on device: DeviceRow?) {
         switch command {
+        case .openInNewTab, .openInNewWindow:
+            // One live stream, one MirrorView: this moves the view rather than making a second
+            // one, because two views cannot share a display layer and decoding the stream twice
+            // would double the only expensive thing in this app.
+            // The stage carries the screen AND its action strip, so the detached window gets
+            // both -- a screen in a window of its own with no way to act on it would be worse
+            // than not detaching at all.
+            screenWindow.open(stage: stage, from: split, title: window.title,
+                              tabbedWith: command == .openInNewTab ? window : nil)
+
         case .pin:
             isPinned.toggle()
             window.level = isPinned ? .floating : .normal
-            controls.setPinned(isPinned)
+            strip.setPinned(isPinned)
 
         case .record:
             toggleRecording()

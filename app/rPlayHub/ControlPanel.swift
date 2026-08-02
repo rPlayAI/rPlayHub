@@ -90,10 +90,11 @@ final class ControlPanel: NSView {
         healthLabel.lineBreakMode = .byWordWrapping
         healthLabel.maximumNumberOfLines = 6
 
-        let stack = NSStackView(views: [
-            header, pinButton, homeButton, rotateButton, shotButton, recordButton,
-            statusHeader, statusLabel, healthLabel,
-        ])
+        // The buttons live in ControlStrip now, under the screen where Device Hub puts them --
+        // they act on the picture, so they belong beside it. `header` and the button instances
+        // stay so setPinned/setRecording keep working for callers that have not moved over.
+        _ = header
+        let stack = NSStackView(views: [statusHeader, statusLabel, healthLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -105,10 +106,7 @@ final class ControlPanel: NSView {
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
-        for b in [pinButton, homeButton, rotateButton, shotButton, recordButton] {
-            b.translatesAutoresizingMaskIntoConstraints = false
-            b.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
-        }
+
     }
 
     @objc private func buttonHit(_ sender: NSButton) {

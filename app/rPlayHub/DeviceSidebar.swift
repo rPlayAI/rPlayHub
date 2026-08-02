@@ -49,6 +49,8 @@ final class DeviceSidebar: NSView {
     var onCommand: ((Command, DeviceRow?) -> Void)?
 
     enum Command: String {
+        case openInNewTab
+        case openInNewWindow
         case screenshot
         case record
         case home
@@ -124,6 +126,9 @@ final class DeviceSidebar: NSView {
             item.representedObject = command.rawValue
             menu.addItem(item)
         }
+        add("Open in New Tab", .openInNewTab)
+        add("Open in New Window", .openInNewWindow)
+        menu.addItem(.separator())
         add("Take Screenshot", .screenshot)
         add("Start / Stop Recording", .record)
         add("Press Home", .home)
