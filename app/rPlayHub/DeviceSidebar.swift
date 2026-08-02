@@ -12,10 +12,12 @@ import AppKit
 struct DeviceRow {
     let id: String
     let name: String          // "iPhone13"
-    let detail: String        // "iPhone 13 Pro" — the model, as Device Hub shows it
+    var detail: String        // "iPhone 13 Pro" — the model, as Device Hub shows it
     let version: String       // "27.0", right-aligned like Device Hub
     let connected: Bool
     let udid: String
+    /// Raw identifier, kept so the row can pick a matching glyph.
+    var productType: String?
 
     init(json: [String: Any]) {
         udid = json["udid"] as? String ?? json["id"] as? String ?? "?"
@@ -26,8 +28,15 @@ struct DeviceRow {
         version = (json["os_version"] as? String)
             ?? (json["product_version"] as? String)
             ?? "?"
-        let transport = json["transport"] as? String ?? "?"
-        detail = (json["product_type"] as? String).map { "\($0) · \(transport)" } ?? transport
+        // Device Hub shows the marketing name here ("iPhone 13 Pro"), not the identifier and not
+        // the transport. When the engine reports no product type at all the row would read "?",
+        // so fall back to the device class rather than a question mark.
+        productType = json["product_type"] as? String
+        detail = DeviceModel.name(for: productType)
+            ?? (json["device_class"] as? String)
+            ?? (json["transport"] as? String)
+            ?? ""
+
         connected = json["connected"] as? Bool ?? true
     }
 }
@@ -181,6 +190,20 @@ final class DeviceSidebar: NSView {
         }
     }
 
+    /// Fill in a row's subtitle once lockdown has told us what the device actually is. The
+    /// engine's device list carries no product type, so the sidebar starts without one.
+    func setModel(_ productType: String, forUDID udid: String) {
+        func patch(_ list: inout [DeviceRow]) {
+            for i in list.indices where list[i].udid == udid {
+                list[i].productType = productType
+                list[i].detail = DeviceModel.name(for: productType) ?? list[i].detail
+            }
+        }
+        patch(&allRows)
+        patch(&rows)
+        table.reloadData()
+    }
+
     func selectedRow() -> DeviceRow? {
         let i = table.selectedRow
         return (i >= 0 && i < rows.count) ? rows[i] : nil
@@ -200,21 +223,25 @@ extension DeviceSidebar: NSTableViewDataSource, NSTableViewDelegate {
         subtitle.font = .systemFont(ofSize: 11)
         subtitle.textColor = .secondaryLabelColor
 
-        let dot = NSTextField(labelWithString: "")
-        dot.font = .systemFont(ofSize: 11)
+        let icon = NSImageView()
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 22).isActive = true
 
         if rows.isEmpty {
             // An empty list is a state worth naming, not a blank panel.
             title.stringValue = "No device"
             subtitle.stringValue = "waiting for the engine"
-            dot.stringValue = "○"
-            dot.textColor = .tertiaryLabelColor
+            icon.image = NSImage(systemSymbolName: "iphone", accessibilityDescription: nil)
+            icon.contentTintColor = .tertiaryLabelColor
         } else {
             let d = rows[row]
             title.stringValue = d.name
             subtitle.stringValue = d.detail
-            dot.stringValue = d.connected ? "●" : "○"
-            dot.textColor = d.connected ? .systemGreen : .tertiaryLabelColor
+            icon.image = NSImage(systemSymbolName: DeviceModel.symbol(for: d.productType),
+                                 accessibilityDescription: nil)
+            icon.contentTintColor = d.connected ? .controlAccentColor : .tertiaryLabelColor
         }
 
         let text = NSStackView(views: [title, subtitle])
@@ -234,7 +261,7 @@ extension DeviceSidebar: NSTableViewDataSource, NSTableViewDelegate {
         version.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let spacer = NSView()
-        let stack = NSStackView(views: [dot, text, spacer, version])
+        let stack = NSStackView(views: [icon, text, spacer, version])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 6

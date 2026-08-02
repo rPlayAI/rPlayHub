@@ -21,6 +21,9 @@ struct DeviceInfo {
     /// Keys lockdown refused, kept apart so the panel can say "could not read" rather than
     /// silently showing a shorter list than last time.
     let unavailable: [String]
+    /// The raw identifier, before any prettying. The sidebar needs it to name the model and pick
+    /// a glyph, and the formatted rows have already lost it.
+    let productType: String?
 
     enum Failure: Error, LocalizedError {
         case noCheckout
@@ -130,6 +133,7 @@ struct DeviceInfo {
             // simply absent, which otherwise looks like the device not reporting them.
             unavailable.insert("session (\(s))", at: 0)
         }
-        return DeviceInfo(sections: sections, unavailable: unavailable)
+        let productType = (json["default"] as? [String: Any])?["ProductType"] as? String
+        return DeviceInfo(sections: sections, unavailable: unavailable, productType: productType)
     }
 }

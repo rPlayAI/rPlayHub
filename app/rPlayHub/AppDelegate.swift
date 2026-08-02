@@ -123,9 +123,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             stage.addSubview(sub)
         }
         NSLayoutConstraint.activate([
-            view.topAnchor.constraint(equalTo: stage.topAnchor),
-            view.leadingAnchor.constraint(equalTo: stage.leadingAnchor),
-            view.trailingAnchor.constraint(equalTo: stage.trailingAnchor),
+            // Breathing room around the screen, as Device Hub leaves. Flush against the title
+            // bar the picture reads as part of the window chrome rather than as a device.
+            view.topAnchor.constraint(equalTo: stage.topAnchor, constant: 16),
+            view.leadingAnchor.constraint(equalTo: stage.leadingAnchor, constant: 12),
+            view.trailingAnchor.constraint(equalTo: stage.trailingAnchor, constant: -12),
             strip.topAnchor.constraint(equalTo: view.bottomAnchor),
             strip.leadingAnchor.constraint(equalTo: stage.leadingAnchor),
             strip.trailingAnchor.constraint(equalTo: stage.trailingAnchor),
@@ -572,7 +574,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             switch result {
             case .success(let devices):
-                self.sidebar.update(devices.map(DeviceRow.init(json:)))
+                let rows = devices.map(DeviceRow.init(json:))
+                self.sidebar.update(rows)
+                // The engine's device list has no product type, so the subtitle would stay blank.
+                // Lockdown knows it, and asking costs nothing the user waits on: the row fills in
+                // when the answer arrives. Only for rows that still lack one, so this does not
+                // re-query on every refresh tick.
+                for r in rows where r.productType == nil {
+                    DeviceInfo.fetch(udid: r.udid) { [weak self] result in
+                        if case .success(let info) = result, let pt = info.productType {
+                            self?.sidebar.setModel(pt, forUDID: r.udid)
+                        }
+                    }
+                }
                 if let d = devices.first {
                     let model = d["product_type"] as? String ?? "iPhone"
                     let os = d["os_version"] as? String ?? "?"
