@@ -682,6 +682,21 @@ void cdhost_rebind(const char *udid)
 
     printf("\nrebinding to %s -- restarting\n", udid);
     fflush(stdout);
+
+    /* Close everything before exec, or the new image inherits it.
+     *
+     * File descriptors survive execv unless they carry FD_CLOEXEC, and none of ours do. The
+     * listening sockets on 9876 and 9877 came through still bound, so the replacement process
+     * failed to bind them ("Address already in use") and then ran on with no API server at all --
+     * pumping packets, answering nothing. The utun and the tunnel socket came through too.
+     *
+     * Closing from 3 upward is blunt and exactly right here: the process is about to be replaced,
+     * so there is nothing left to preserve, and stdin/stdout/stderr must stay for the new image
+     * to report anything. */
+    int maxfd = getdtablesize();
+    if (maxfd < 3 || maxfd > 65536) maxfd = 4096;
+    for (int fd = 3; fd < maxfd; fd++) close(fd);
+
     execv(g_self, args);
     /* Only reached if exec failed; the caller has already replied, so say why and carry on
      * serving the device we still have rather than dying silently. */
@@ -857,7 +872,13 @@ int main(int argc, char **argv) {
     /* Same ports and same JSON contract as the Python engine, so the existing app connects to
      * this without being told which engine it reached. That is what makes the port checkable a
      * method at a time rather than all at once. */
-    api_serve(&session);
+    /* A daemon that cannot serve is not a daemon. This return value used to be dropped, so a
+     * failure to bind 9876 left it running the pump loop forever -- printing packet counts,
+     * answering nothing, and looking alive to anyone reading the terminal. */
+    if (api_serve(&session) < 0) {
+        fprintf(stderr, "  api server did not start; shutting down\n");
+        return 1;
+    }
 
     while (!pump.failed) {
         sleep(2);

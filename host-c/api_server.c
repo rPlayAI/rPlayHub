@@ -861,6 +861,8 @@ int api_serve(api_session *session)
     int video_fd = want_proxy ? listen_on(STREAM_PORT) : -1;
     if (api_fd < 0 || (want_proxy && video_fd < 0)) {
         fprintf(stderr, "  cannot listen on %d/%d: %s\n", API_PORT, STREAM_PORT, strerror(errno));
+        fprintf(stderr, "  another cdhost is probably still running -- this one can serve nobody,\n"
+                        "  so it is stopping rather than pumping packets for no viewer.\n");
         return -1;
     }
     printf("  control: 127.0.0.1:%d (JSON lines)\n", API_PORT);
