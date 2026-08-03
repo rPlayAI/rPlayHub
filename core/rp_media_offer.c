@@ -1,5 +1,6 @@
 #include "rp_media_offer.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
 
@@ -8,7 +9,36 @@
 #define DECODER_NAME            "Viceroy 1.7.0"
 #define NEGOTIATOR_MODE_VIDEO   5
 #define RES_ENTRY_CODEC_CAP_ID  50115
-#define HEVC_FEATURES           "FLS;SW:1;"
+/* The feature-list string the device negotiates against.
+ *
+ * "FLS;SW:1;" is what Apple's own HEVC bank sends and is reproduced exactly. It carries no RVRA
+ * token, so the encoder uses its default -- which is ON, and that is what makes the stream
+ * undecodable by anything but AppleVideoDecoder: under motion it drops coded resolution and
+ * predicts across the change, which standard HEVC cannot express. ffmpeg decodes the result
+ * without a single warning and produces garbage.
+ *
+ * Apple's full string, recovered from AVConference's __cstring section, shows the knobs:
+ *
+ *   FLS;VRA:0;MVRA:0;RVRA1:1;AS:2;MS:-1;LTR;CABAC;CR:3;LF:-1;PR;CH1:4;CH:4;FA:5;
+ *   AR:667/375,375/667;XR:3/2,2/3;
+ *
+ * alongside _VideoTransmitter_h264HwEncoderSupportsRVRA1 -- so RVRA1 is an encoder capability
+ * negotiated here, not a decoder setting. Asking for RVRA1:0 should get a stream that any HEVC
+ * decoder can handle, which is the whole cross-platform question.
+ *
+ * RPLAY_HEVC_FEATURES overrides it so that can be tested against the phone without a rebuild:
+ *
+ *   RPLAY_HEVC_FEATURES="FLS;VRA:0;MVRA:0;RVRA1:0;SW:1;" sudo ./host-c/cdhost
+ *
+ * Untested as of writing. If the device rejects the offer or ignores the token, the default is
+ * unchanged and mirroring behaves exactly as before. */
+#define HEVC_FEATURES_DEFAULT   "FLS;SW:1;"
+
+static const char *hevc_features(void)
+{
+    const char *e = getenv("RPLAY_HEVC_FEATURES");
+    return (e && *e) ? e : HEVC_FEATURES_DEFAULT;
+}
 #define AVC_FEATURES            "FLS;VRAE:0;SW:1;"
 #define HEVC_PAYLOAD_TYPE       123
 #define AVC_PAYLOAD_TYPE        100
@@ -101,7 +131,7 @@ static size_t codec_bank(uint8_t *out, size_t cap, uint32_t payload_type,
 size_t rp_media_blob_video(const rp_offer_params *p, uint8_t *out, size_t cap)
 {
     uint8_t hevc[256], avc[256], vs[1024];
-    size_t nh = codec_bank(hevc, sizeof hevc, HEVC_PAYLOAD_TYPE, HEVC_FEATURES, HEVC_FLAGS, 4);
+    size_t nh = codec_bank(hevc, sizeof hevc, HEVC_PAYLOAD_TYPE, hevc_features(), HEVC_FLAGS, 4);
     size_t na = codec_bank(avc, sizeof avc, AVC_PAYLOAD_TYPE, AVC_FEATURES, AVC_FLAGS, 2);
     if (!nh || !na) return 0;
 
