@@ -41,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isRecording = false
     private var lastRecordingPath: String?
     private var retryTimer: Timer?
+    /// True from the start of connect() until it has either got video or given up.
+    private var connecting = false
     private var statusTimer: Timer?
     private var deviceLabel = "no device"
     /// Which device the daemon is currently bound to, so re-selecting it is a no-op.
@@ -526,6 +528,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func connect() {
+        // One connect at a time.
+        //
+        // connect() finishes asynchronously -- tunnel_info is a round trip -- so two calls can be
+        // in flight at once: a reconnect scheduled after switching device, and the retry timer
+        // firing a second later. Both then negotiate a media stream, and the device permits one
+        // per session, so the second killed the first and no packets arrived at all. Overlap is
+        // the failure, not the second call.
+        guard !connecting else {
+            AppBuild.log("connect already in progress; ignoring")
+            return
+        }
+        connecting = true
+
         // Tear down the previous receiver before building another.
         //
         // directStream was assigned and never stopped -- not here, not in reconnect(). Each retry
@@ -567,7 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control = c
         view.control = c
 
-        if usbRunning { return }
+        if usbRunning { connecting = false; return }
 
         refreshDevices(c)
 
@@ -630,6 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // trailer on the last slice NAL (HEVCStream.parseActiveRectTrailer), which agrees
             // with what avconferenced passes its decoder. Left unwired rather than deleted so
             // the C side keeps a place to publish from if the extension is ever decoded.
+            self.connecting = false
             if direct.start(tunnel) {
                 self.directStream = direct
                 // Video is flowing, so stop retrying. Without this the 2-second retry timer keeps
@@ -793,6 +809,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleRetry(because reason: String) {
+        // Whatever went wrong, this connect attempt is over. Leaving the flag set would be worse
+        // than the overlap it prevents: the app would never try again.
+        connecting = false
         stream?.stop()
         stream = nil
         deviceLabel = reason
