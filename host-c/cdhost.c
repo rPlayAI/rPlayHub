@@ -658,7 +658,42 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
     return count;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+
+    /* Flags rather than environment only, because sudo strips the environment.
+     *
+     * `RPLAY_UDID=... sudo ./cdhost` sets the variable for sudo, which then discards it, so the
+     * daemon binds whatever it would have anyway -- silently, and three runs were lost to that
+     * before anyone noticed. `sudo env VAR=... ./cdhost` works, but a flag cannot be got wrong.
+     * The environment variables still work for anything already using them. */
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--udid") && i + 1 < argc) {
+            setenv("RPLAY_UDID", argv[++i], 1);
+        } else if (!strcmp(argv[i], "--hevc-features") && i + 1 < argc) {
+            setenv("RPLAY_HEVC_FEATURES", argv[++i], 1);
+        } else if (!strcmp(argv[i], "--dump-services")) {
+            setenv("RPLAY_DUMP_SERVICES", "1", 1);
+        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            printf("usage: cdhost [--udid <prefix>] [--hevc-features <string>] [--dump-services]\n"
+                   "\n"
+                   "  --udid            which device to bind; a prefix is enough. Without it the\n"
+                   "                    USB device wins, which is wrong when the phone you want\n"
+                   "                    is the one on wifi.\n"
+                   "  --hevc-features   override the offer's feature-list string. Try\n"
+                   "                    \"FLS;VRA:0;MVRA:0;RVRA1:0;SW:1;\" to ask the encoder not\n"
+                   "                    to adapt resolution -- see doc/RVRA-AND-PORTABILITY.md.\n"
+                   "  --dump-services   print every service RSD advertises, with ports.\n");
+            return 0;
+        } else {
+            fprintf(stderr, "unknown argument: %s (try --help)\n", argv[i]);
+            return 2;
+        }
+    }
+
+    if (getenv("RPLAY_UDID"))
+        printf("binding device matching \"%s\"\n", getenv("RPLAY_UDID"));
+    if (getenv("RPLAY_HEVC_FEATURES"))
+        printf("HEVC features overridden: %s\n", getenv("RPLAY_HEVC_FEATURES"));
 
     printf("== Layer 0: usbmux ==\n");
     int mux = usbmux_connect();
