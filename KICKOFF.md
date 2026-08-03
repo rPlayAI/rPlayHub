@@ -48,8 +48,10 @@ tooling in `scripts/`.
   reusable) and `doc/` (its architecture notes, `sdk-api.md`, and `_claude-memory/` findings).
 - `scripts/` — `mirror_check.py` verifies a running engine end to end; `tarplay_client.py` is
   rplay's reference client.
-- `doc/` — `RSD-SERVICES.md` (**all 85 services the device advertises, in tables, with which are
-  used, which a planned feature needs, and which are unverified guesses**),
+- `doc/` — `RVRA-AND-PORTABILITY.md` (**read before planning the C port's video path**: this
+  stream only decodes correctly on Apple hardware, ffmpeg produces silent garbage, and the way out
+  may be one token in our offer), `RSD-SERVICES.md` (**all 85 services the device advertises, in
+  tables, with which are used, which a planned feature needs, and which are unverified guesses**),
   `rsd-services-ios27.json` (the raw map), `RENDERING-HANDOFF.md` (the resolution-switch
   investigation, resolved — read its top section before touching video),
   `REMOTEPAIRING-PROTOCOL.md` (the direct-wifi pairing door, from a symbol-dump RE),
@@ -66,6 +68,12 @@ usbmux → lockdown (+TLS) → CoreDeviceProxy CDTunnel → utun → RSD (Remote
 
 Everything above the tunnel is transport-agnostic: the tunnel is just raw IPv6 packets, so a new
 transport (RemotePairing, relay) is one new file and nothing above it changes.
+
+**Decoding is the exception, and it is not a seam.** It lives entirely in
+`app/rPlayHub/VideoDecoder.swift` on VideoToolbox; `core/hwdecoder.h` is a vendored AirPlay header
+that nothing here implements. Swapping in ffmpeg does NOT work: the device negotiates RVRA and
+ffmpeg decodes the result to garbage with zero warnings. See `doc/RVRA-AND-PORTABILITY.md` —
+turning RVRA off in the offer is the cheapest thing to try and is untested.
 
 ## Verified live — be precise, don't overclaim
 
