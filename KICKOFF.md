@@ -48,8 +48,14 @@ tooling in `scripts/`.
   reusable) and `doc/` (its architecture notes, `sdk-api.md`, and `_claude-memory/` findings).
 - `scripts/` — `mirror_check.py` verifies a running engine end to end; `tarplay_client.py` is
   rplay's reference client.
-- `doc/` — `REMOTEPAIRING-PROTOCOL.md` (the direct-wifi pairing door, from a symbol-dump RE),
-  `COREDEVICE-SCREEN-STREAMING.md`.
+- `doc/` — `RSD-SERVICES.md` (**all 85 services the device advertises, in tables, with which are
+  used, which a planned feature needs, and which are unverified guesses**),
+  `rsd-services-ios27.json` (the raw map), `RENDERING-HANDOFF.md` (the resolution-switch
+  investigation, resolved — read its top section before touching video),
+  `REMOTEPAIRING-PROTOCOL.md` (the direct-wifi pairing door, from a symbol-dump RE),
+  `COREDEVICE-SCREEN-STREAMING.md`, `devicehub_video_architecture_and_diagnosis.md`.
+- `builds/known-good-*/` — snapshots of `rPlayHub.app` and `cdhost` that demonstrably worked, each
+  with a README stating what did and did not work at that commit.
 
 ## Stack
 
@@ -63,22 +69,55 @@ transport (RemotePairing, relay) is one new file and nothing above it changes.
 
 ## Verified live — be precise, don't overclaim
 
-- iPhone 12 Pro (iOS 26.5.2) over USB, and iPhone 13 Pro (iOS 27) over WIFI (udid
-  `DEVICE-UDID-REDACTED`): transport → RSD, 85 services. ✅
-- screenshot (PNG) ✅ · tap/swipe ✅ (opened Safari)
-- HEVC screen record → decodable `.h265` of the real screen ✅ but **GLITCHY** (RTP reorder done;
-  RTCP PLI/RR feedback deferred → residual artifacts are packet loss).
-- **Live engine written, NOT yet run against a phone** — `host/mirror.py`. Offline logic is
-  unit-tested (video fan-out with cached VPS/SPS/PPS for late joiners, request dispatch, coordinate
-  clamping); the live path needs one `sudo` run. **No window yet** — `ffplay` is the stand-in.
+Updated 2026-08-02. The C engine (`host-c/cdhost`) is what runs now; `host/mirror.py` still works
+and still serves the same contract, but the app is developed against the C one.
+
+- iPhone 13 Pro (iOS 27, udid `00008110-...`) over wifi, and iPhone 12 Pro (iOS 26.5.2) over USB:
+  transport → RSD, 85 services. ✅ Catalogued in `doc/RSD-SERVICES.md`.
+- **Live mirroring, clean, no artifacts under fast swipes.** ✅ 1170×2532 at 30–50 fps, 0.0% loss
+  measured over long sessions. This was broken for days; see "The resolution switch" below, which
+  is the single most expensive thing in this file to rediscover.
+- Screenshot ✅ · tap / swipe ✅ · **Home** ✅ (a real bottom-edge gesture) · recording ✅
+- **Diagnostics tab** ✅ — model, build, ECID, serial, battery, storage. Reads lockdown over
+  usbmuxd, so it answers while the tunnel is down and even while Apple's Device Hub holds the
+  device.
+- **Simulators listed** ✅ (via `simctl`) — boot, shut down, screenshot, copy UDID. **No live
+  mirroring**: a booted simulator is not a display on this Mac (checked — the screen count does not
+  change), `recordVideo` buffers to disk rather than streaming (a fifo got zero bytes), and
+  screenshots come back at ~1.5/s. Live needs Simulator.app's window via ScreenCaptureKit, or the
+  private SimulatorKit.
+- **Rotate turns the VIEW, not the device.** Verified against the full service catalogue: there is
+  no orientation, accelerometer or motion service. Nothing advertised can rotate a physical device.
+- Lock / volume / Siri: **refused, not faked.** They need the `mainScreenButtons` HID report format
+  (`_ServiceID 1026`), which is not decoded. Keyboard (`_ServiceID 512`) is advertised and unused.
+- **Pair / Unpair / Restart: NOT built.** Restart and Shutdown have no blocker —
+  `com.apple.mobile.diagnostics_relay.shim.remote`, a classic documented protocol. Pairing is
+  blocked on the RemotePairing handshake, which is designed only.
 - **RemotePairing direct-wifi door: NOT built** (handshake designed only).
 - **Relay / remote-Xcode: NOT built, and the Xcode half is NOT verified** — see
   `host/rplayhub/transport/relay.py` for the two candidate mechanisms and why neither is a
   feature yet.
+- **Device discovery is usbmuxd-only.** Device Hub discovers through CoreDevice (remoted, Bonjour)
+  and therefore sees devices we cannot. This is the same gap the remote-device goal has to close.
 
 ## Run
 
-Live engine (root, long-running):
+The C engine and the app — this is the product:
+
+```
+sudo RPLAY_UDID=00008110 ./host-c/cdhost            # engine; RPLAY_UDID picks the device
+xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug \
+    -derivedDataPath build/dd build && open build/dd/Build/Products/Debug/rPlayHub.app
+```
+
+`RPLAY_UDID` (a prefix is enough) matters as soon as two phones are attached: cdhost binds ONE
+device at startup and otherwise prefers USB, so the phone you want may be the one it ignores.
+`RPLAY_DUMP_SERVICES=1` prints the service catalogue at startup.
+
+Known-good binaries are kept in `builds/known-good-*/` with a README stating what worked at that
+commit. Compare against those before concluding something regressed.
+
+The Python engine still serves the same contract:
 
 ```
 sudo python3 host/mirror.py DEVICE-UDID-REDACTED
@@ -90,6 +129,77 @@ One-shot actions (root, per action):
 
 `sudo python3 host/tunnel_up.py <udid> {shot out.png | tap fx fy | swipe fx0 fy0 fx1 fy1 | record out.h265 secs}`
 (fx/fy are 0..1 screen fractions. Omit udid to auto-pick the first device.)
+
+## The resolution switch — the fix that took four days (2026-08-02)
+
+Mirroring was garbled under any fast swipe. Every integrity check passed while the picture was
+wrong, which sent the investigation into loss, reordering, LTR, the depacketizer and the reference
+chain — all genuinely fine, all eliminated at length.
+
+**The device appends a trailer to the last slice NAL of every access unit**, carrying the
+resolution the encoder actually coded that picture at:
+
+```
+[width:u16be][height:u16be][00 ...][4-byte session tag]
+04a0 0a10 0000030000049209e403   = 1184x2576
+0440 0780 0000030000049209e403   = 1088x1920
+02d0 0500 0000030000049209e403   =  720x1280
+```
+
+Under motion the encoder downshifts and squeezes the whole screen into the top-left of the coded
+frame. The SPS never changes. Measured: 601/601 slice NALs on the wire carry the trailer, and
+0/1368 access units that `avconferenced` feeds VideoToolbox still have it — Apple strips it and
+passes the size to its decoder as `ActiveVideoResolution`.
+
+Three things must all be true:
+
+1. strip the trailer before decoding,
+2. pass the size per frame as `ActiveVideoResolution`,
+3. **put the decoder in RVRA mode first** —
+   `VTDecompressionSessionSetProperty(session, "VideoResolutionAdaptationType", 3)`, plus
+   `NegotiationDetails = "RVRA1:0;SW:1;FLS"`.
+
+Number 3 is what defeated every earlier attempt. Passing `ActiveVideoResolution` to an ordinary
+session changes nothing — replaying 401 of Apple's own captured frames with and without it gave
+**0 of 401 differing**, which reads as "the key is inert" and actually means "RVRA is off, so the
+key is discarded". `avconferenced` sets the switch AFTER creation via the private
+`VTDecompressionSessionSetProperty`, so an interposer hooking only `Create` and `DecodeFrame` can
+never see it. Found by Kimi K3; confirmed here offline, where the same wire bytes decode to a
+mosaic on a plain session and cleanly on an RVRA one, all 601 frames.
+
+The trailer bytes are harmless in themselves — they sit past `rbsp_slice_trailing_bits`, ffmpeg
+decodes the unstripped stream with zero warnings, and stripping alone yields byte-identical
+pictures. That is exactly why every conformance check passed while the picture was wrong.
+
+### Display geometry that goes with it
+
+- **The padding fraction is invariant across tiers.** screen/active measured 0.9882x0.9829 at
+  1184x2576, 0.9890x0.9833 at 1088x1920, 0.9889x0.9836 at 720x1280 — the encoder scales screen and
+  padding together. Treating reduced tiers as "pure screen" put the padding back on screen and
+  made the picture twitch on every downshift.
+- **The notch must be covered; the Dynamic Island must not.** On a notched phone the display does
+  not exist behind the notch but the framebuffer still allocates those pixels, so they arrive as
+  picture the real device never shows. An island sits over a display that DOES extend behind it and
+  iOS draws it black itself. Confirmed from Apple's own framebuffer masks (the per-device PDFs in
+  Xcode's simulator profiles): the iPhone 13 Pro mask cuts a 484x101px hole out of 1170x2532; the
+  iPhone 16 Pro mask has no central cutout at all.
+- **cdhost never populates `screen_w`/`screen_h`** — they are declared, read, and never assigned,
+  and the wire shows `"screen_width":0`. The app works around it with a per-model table.
+  Implementing `getdisplayinfo` would retire that.
+
+## Getting the service catalogue without restarting anything
+
+RSD can be handshaked directly over the tunnel `cdhost` already holds — there is no need to restart
+the daemon with a dump flag:
+
+```python
+info = json_rpc("tunnel_info")                      # device_addr + rsd_port from :9876
+peer = rsd.enumerate_services(info["device_addr"], info["rsd_port"])
+services = peer["Services"]                          # 85 of them, name -> {Port}
+```
+
+This was blocked on a daemon restart for hours before anyone tried it. **Ports are per-session** and
+a cached one is what made `startmediastream` time out for days — always look up by name.
 
 ## Key gotchas (already solved — keep them)
 
