@@ -46,11 +46,18 @@ struct Simulator {
                                      isAvailable: true))
             }
         }
-        // Booted first, then by name: the one you are using should not be somewhere in a list of
-        // thirty-seven.
-        return out.sorted {
-            $0.isBooted != $1.isBooted ? $0.isBooted
-                                       : $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        // Booted first, then iPhones before iPads, then newest runtime, then name. Thirty-seven
+        // rows sorted purely alphabetically buries every iPhone under the iPads, which is the
+        // opposite of what anyone is looking for. Device Hub shows a shorter list than this and
+        // it is not clear what it filters on -- ordering is the part that is clearly ours to fix.
+        func rank(_ s: Simulator) -> Int { s.name.contains("iPad") ? 1 : 0 }
+        return out.sorted { a, b in
+            if a.isBooted != b.isBooted { return a.isBooted }
+            if rank(a) != rank(b) { return rank(a) < rank(b) }
+            if a.runtime != b.runtime {
+                return a.runtime.compare(b.runtime, options: .numeric) == .orderedDescending
+            }
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
     }
 

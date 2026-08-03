@@ -598,6 +598,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.directStream = direct
             } else if route == "direct" {
                 AppBuild.log("video route: direct requested but the stream did not start")
+                // Say so on screen. A black window with the reason only in a log file is what
+                // made the same device limitation look like a fresh bug several times over.
+                self.deviceLabel = "no video — the device did not start a stream"
+                self.updateStatus()
             } else {
                 AppBuild.log("video route: falling back to proxy, direct did not start")
                 self.startProxiedStream(c)

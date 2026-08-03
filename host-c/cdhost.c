@@ -703,6 +703,25 @@ int main(int argc, char **argv) {
     if (dev < 0) { fprintf(stderr, "no devices\n"); return 1; }
     printf("  -> using DeviceID=%d udid=%s\n", dev, udid);
 
+    /* Warn when the chosen device cannot mirror, and name the alternatives.
+     *
+     * iOS 26 does not support screen viewing -- Apple's own Device Hub says so, and the device
+     * simply answers startmediastream with nothing. Preferring USB then picks an iOS 26 phone
+     * over an iOS 27 one attached at the same time, fails, and says only "media stream failed to
+     * start", which reads as a bug in this daemon rather than a device limitation. Several
+     * sessions were lost to exactly that. */
+    {
+        api_device all[API_MAX_DEVICES];
+        int n = usbmux_enumerate(all, API_MAX_DEVICES);
+        if (n > 1) {
+            printf("  %d devices attached:\n", n);
+            for (int i = 0; i < n; i++)
+                printf("      %s  %-8s%s\n", all[i].udid, all[i].connection,
+                       strcmp(all[i].udid, udid) ? "" : "   <- bound");
+            printf("  pass --udid <prefix> to bind a different one\n");
+        }
+    }
+
     printf("\n== Layer 1: lockdown ==\n");
     conn_t lk = {mux, NULL};
     if (usbmux_connect_port(mux, dev, LOCKDOWN_PORT) < 0) { fprintf(stderr, "lockdown connect failed\n"); return 1; }
@@ -716,6 +735,13 @@ int main(int argc, char **argv) {
         printf("  %-15s = %s\n", keys[i], val);
         if (!strcmp(keys[i], "DeviceName")) snprintf(devname, sizeof devname, "%s", val);
         if (!strcmp(keys[i], "ProductVersion")) snprintf(prodver, sizeof prodver, "%s", val);
+    }
+    if (atoi(prodver) > 0 && atoi(prodver) < 27) {
+        printf("\n  ⚠️  iOS %s cannot mirror. Screen viewing is unsupported before iOS 27 --\n"
+               "      Apple's Device Hub reports the same, and the device answers\n"
+               "      startmediastream with nothing. Everything else here still works;\n"
+               "      the screen will stay black. Use --udid to bind an iOS 27 device.\n",
+               prodver);
     }
 
     printf("\n== Layer 1.5: TLS session ==\n");
