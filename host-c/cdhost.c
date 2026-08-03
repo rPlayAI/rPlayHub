@@ -663,19 +663,46 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
  * relative when run as ./host-c/cdhost, and the working directory is not guaranteed later. */
 static char g_self[PATH_MAX];
 
+/* Every flag that takes a value, and the variable it sets.
+ *
+ * One table drives parsing, --help and the rebind re-exec together. Selecting a device in the app
+ * re-executes this daemon, so a flag the rebind path does not know about is silently dropped at
+ * that point and the session continues on the default -- which looks exactly like the device
+ * ignoring the override. Adding a knob here carries it across a rebind by construction. */
+static const struct { const char *flag, *env, *help; } g_flags[] = {
+    { "--udid", "RPLAY_UDID",
+      "which device to bind; a prefix is enough. Without it the USB device\n"
+      "                    wins, which is wrong when the phone you want is on wifi." },
+    { "--hevc-features", "RPLAY_HEVC_FEATURES",
+      "override the offer's feature-list string. \"FLS;VRA:0;MVRA:0;RVRA1:0;SW:1;\"\n"
+      "                    asks the encoder not to adapt resolution -- it does anyway, see\n"
+      "                    doc/RVRA-AND-PORTABILITY.md." },
+    { "--rctl", "RPLAY_RCTL",
+      "target bitrate in bits/s to report in RTCP RCTL, 50 times a second.\n"
+      "                    Default 6000000, the ceiling the device itself negotiates. \"0\"\n"
+      "                    stops sending RCTL at all." },
+    { "--max-bitrate", "RPLAY_MAX_BITRATE",
+      "streamConfig TXMaxBitrate, in bits/s. Sent only when given, so the\n"
+      "                    default offer stays byte-identical to Apple's." },
+    { "--min-bitrate", "RPLAY_MIN_BITRATE", "streamConfig TXMinBitrate, in bits/s." },
+};
+#define N_FLAGS ((int)(sizeof g_flags / sizeof g_flags[0]))
+
 void cdhost_rebind(const char *udid)
 {
     if (!g_self[0] || !udid || !*udid) return;
 
-    const char *features = getenv("RPLAY_HEVC_FEATURES");
-    char *args[8];
+    char *args[2 * N_FLAGS + 4];
     int n = 0;
     args[n++] = g_self;
     args[n++] = (char *)"--udid";
     args[n++] = (char *)udid;
-    if (features && *features) {
-        args[n++] = (char *)"--hevc-features";
-        args[n++] = (char *)features;
+    for (int i = 0; i < N_FLAGS; i++) {
+        if (!strcmp(g_flags[i].flag, "--udid")) continue;   /* the caller's choice wins */
+        const char *v = getenv(g_flags[i].env);
+        if (!v || !*v) continue;
+        args[n++] = (char *)g_flags[i].flag;
+        args[n++] = (char *)v;
     }
     if (getenv("RPLAY_DUMP_SERVICES")) args[n++] = (char *)"--dump-services";
     args[n] = NULL;
@@ -714,22 +741,28 @@ int main(int argc, char **argv) {
     if (!realpath(argv[0], g_self)) snprintf(g_self, sizeof g_self, "%s", argv[0]);
 
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--udid") && i + 1 < argc) {
-            setenv("RPLAY_UDID", argv[++i], 1);
-        } else if (!strcmp(argv[i], "--hevc-features") && i + 1 < argc) {
-            setenv("RPLAY_HEVC_FEATURES", argv[++i], 1);
-        } else if (!strcmp(argv[i], "--dump-services")) {
+        int matched = 0;
+        for (int f = 0; f < N_FLAGS; f++) {
+            if (strcmp(argv[i], g_flags[f].flag)) continue;
+            if (i + 1 >= argc) {
+                fprintf(stderr, "%s needs a value\n", g_flags[f].flag);
+                return 2;
+            }
+            setenv(g_flags[f].env, argv[++i], 1);
+            matched = 1;
+            break;
+        }
+        if (matched) continue;
+        if (!strcmp(argv[i], "--dump-services")) {
             setenv("RPLAY_DUMP_SERVICES", "1", 1);
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            printf("usage: cdhost [--udid <prefix>] [--hevc-features <string>] [--dump-services]\n"
-                   "\n"
-                   "  --udid            which device to bind; a prefix is enough. Without it the\n"
-                   "                    USB device wins, which is wrong when the phone you want\n"
-                   "                    is the one on wifi.\n"
-                   "  --hevc-features   override the offer's feature-list string. Try\n"
-                   "                    \"FLS;VRA:0;MVRA:0;RVRA1:0;SW:1;\" to ask the encoder not\n"
-                   "                    to adapt resolution -- see doc/RVRA-AND-PORTABILITY.md.\n"
-                   "  --dump-services   print every service RSD advertises, with ports.\n");
+            printf("usage: cdhost [--dump-services]");
+            for (int f = 0; f < N_FLAGS; f++) printf(" [%s <value>]", g_flags[f].flag);
+            printf("\n\n");
+            for (int f = 0; f < N_FLAGS; f++)
+                printf("  %-17s %s\n", g_flags[f].flag, g_flags[f].help);
+            printf("  %-17s %s\n", "--dump-services",
+                   "print every service RSD advertises, with ports.");
             return 0;
         } else {
             fprintf(stderr, "unknown argument: %s (try --help)\n", argv[i]);
@@ -737,10 +770,12 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (getenv("RPLAY_UDID"))
-        printf("binding device matching \"%s\"\n", getenv("RPLAY_UDID"));
-    if (getenv("RPLAY_HEVC_FEATURES"))
-        printf("HEVC features overridden: %s\n", getenv("RPLAY_HEVC_FEATURES"));
+    /* Say what is overridden, every time. A run whose override did not apply looks exactly like a
+     * device ignoring it, and that mistake has already cost one wrong conclusion here. */
+    for (int f = 0; f < N_FLAGS; f++) {
+        const char *v = getenv(g_flags[f].env);
+        if (v && *v) printf("%s = %s\n", g_flags[f].env, v);
+    }
 
     printf("== Layer 0: usbmux ==\n");
     int mux = usbmux_connect();

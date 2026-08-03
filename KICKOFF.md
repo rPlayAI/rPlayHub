@@ -98,7 +98,10 @@ and still serves the same contract, but the app is developed against the C one.
 - **Simulators are listed** but cannot be mirrored -- see below.
 - **RVRA cannot be turned off from the offer.** Tested with a verified offer; the encoder adapts
   regardless. `doc/RVRA-AND-PORTABILITY.md` has the numbers. This is the blocker for decoding the
-  stream anywhere but Apple hardware.
+  stream anywhere but Apple hardware. The remaining lever is bitrate, and **that experiment is
+  built but has not been run**: `sudo ./scripts/rvra-bitrate-all.sh`, phone unlocked on the home
+  screen, five conditions in one pass with a printed table. Read the positive control first — the
+  doc says why that ordering is the whole design.
 - **Rotate turns the VIEW, not the device.** Verified against the full service catalogue: there is
   no orientation, accelerometer or motion service. Nothing advertised can rotate a physical device.
 - Lock / volume / Siri: **refused, not faked.** They need the `mainScreenButtons` HID report format
@@ -126,7 +129,9 @@ xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug
 Clicking a device in the sidebar binds it, as in Device Hub. The daemon serves one device at a
 time -- the tunnel and media session belong to it -- so rebinding **re-executes cdhost**, and the
 app reconnects a few seconds later. `--udid <prefix>` still starts on a chosen device,
-`--dump-services` prints the catalogue, `--help` lists the rest.
+`--dump-services` prints the catalogue, `--rctl` / `--max-bitrate` / `--min-bitrate` vary the rate
+budget for the experiment above, and `--help` lists the rest. Every override is echoed at startup
+and carried across a rebind, so a run cannot silently revert to the default halfway through.
 
 **Flags, not just environment variables: sudo strips the environment.** `RPLAY_UDID=x sudo ./cdhost`
 sets it for sudo, which discards it, and the daemon then binds whatever it would have anyway
@@ -239,6 +244,15 @@ Every one of these presented as "the phone is not sending video" and none of the
    only retry cancellation sat in the USB path, which is off by default.
 6. **Two `connect()` calls could overlap.** Both negotiated a media stream; the device permits one
    per session, so the second killed the first and no packets arrived.
+
+7. **A daemon keeps serving a session after its device has gone.** When the wifi entry drops, the
+   daemon holds the old tunnel: `tunnel_info` still answers with addresses and per-session service
+   ports, `stream_info` still answers, and `list_devices` can even show the device back again — but
+   a TCP connect to the displayservice port on the tunnel address times out, and a viewer on 9877
+   gets a silent nothing. Observed 2026-08-02: the phone left and rejoined wifi while `cdhost` ran,
+   and everything except the video kept looking healthy. There is no liveness check; restarting
+   `cdhost` is the fix. `scripts/rvra-bitrate.py` now preflights exactly this and names it, because
+   it costs 45 seconds and a wrong conclusion otherwise.
 
 The pattern worth keeping: each was found by reading the log for repetition -- "direct stream:
 receiving" 71 times against a packet counter stuck at 35 -- not by reasoning about the protocol.

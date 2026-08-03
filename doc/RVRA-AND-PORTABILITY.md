@@ -115,6 +115,43 @@ Not yet tried: whether adaptation is bitrate-driven instead. The encoder adapted
 1.7 Mbit/s against a negotiated 6 Mbps ceiling, so it is not simply running out of headroom, but
 RCTL's target is a separate lever from the feature list and has not been varied on its own.
 
+**The experiment is built and has not been run** (2026-08-02). One command, with the phone unlocked
+on the home screen:
+
+```sh
+sudo ./scripts/rvra-bitrate-all.sh
+```
+
+It restarts the daemon five times — baseline, `--rctl 0`, `--rctl 800000`, `--rctl 20000000`, and a
+raised `streamConfig` ceiling — driving identical synthetic swipes through the control API each
+time, and prints a table of downshift rate per condition. It did not run here because the iOS 27
+phone dropped off wifi mid-session and restarting `cdhost` needs a password.
+
+Two things about the design are worth keeping even if the result is negative:
+
+- **`--rctl 800000` is a positive control, and it must be read before anything else.** Starving the
+  target should make downshifting *worse*. If it does not, the device is not acting on RCTL at all,
+  and "we asked for more bits and nothing changed" is not evidence that bitrate is irrelevant — it
+  is evidence the knob never reached the encoder. Without that row the whole experiment repeats the
+  `RVRA1:0` mistake in a new variable. `ceiling-high` travels in `streamConfig` rather than RTCP and
+  is the independent second attempt for exactly that case.
+- **The motion is synthetic.** Adaptation is provoked by movement, so a hand swipe that is a little
+  faster on the second run produces more downshifts for reasons unrelated to the variable under
+  test. The runs also include a still phase, because "no downshifts" means nothing without knowing
+  whether the phone was moving at the time.
+
+The measurement reads the per-frame trailer off the daemon's Annex-B broadcast on `:9877` — no
+decoder, no viewer app, since a decoder that keeps up would be a confounder. The parser is the same
+one as `HEVCStream.parseActiveRectTrailer`, and it can be checked against a recorded capture before
+any null result is believed:
+
+```sh
+python3 scripts/rvra-bitrate.py --self-test build/devicehub-recording.h265
+#   604 NALs, 601 carry a trailer, 6 tier changes, {'1184x2576': 572, '1088x1920': 20, '720x1280': 9}
+```
+
+That 601 independently reproduces the 601/601 figure this document already quotes.
+
 **2. Hide frames while below full resolution — now the leading candidate**, since option 1 is
 ruled out. Portable, and the detection already exists — the
 trailer gives the tier per frame, before decode. Hold the last good picture during a downshift and
@@ -133,3 +170,16 @@ was absent from AVConference, which was a false negative that nearly closed off 
 inquiry. The strings live in `__cstring` and need `otool -s __TEXT __cstring` to reach.
 
 A tool reporting no matches is not evidence until it has been shown to report *something*.
+
+The same shape turned up twice more on 2026-08-02, both times in `build/`, which is untracked
+scratch and therefore exactly what someone reaches for by name:
+
+- **`build/apple-notrailer.h265` is byte-identical to `build/devicehub-recording.h265`** — same
+  md5, and all 601 trailers present. A file whose name asserts the thing it does not have.
+- **`build/ref-stripped.h265` is stripped only at full resolution.** The 29 frames coded *below*
+  full tier — 20 at 1088x2576's step down, 9 at 720x1280, the exact frames where adaptation
+  happens — are byte-identical to the original, trailer and all. As a control for "does stripping
+  change the picture" it excludes every frame where the answer could differ.
+
+Neither is referenced by any script or document here, so nothing published rests on them. Delete
+them rather than fixing them; regenerate from a fresh capture if a control is needed.
