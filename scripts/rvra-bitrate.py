@@ -81,8 +81,23 @@ def self_test(paths):
         for w, h in hits:
             hist[f"{w}x{h}"] = hist.get(f"{w}x{h}", 0) + 1
         changes = sum(1 for a, b in zip(hits, hits[1:]) if a != b)
+        # Episodes, not just frames: option 2 in doc/RVRA-AND-PORTABILITY.md holds the last good
+        # picture through a downshift, so what the viewer notices is how often the freeze starts
+        # and how long it lasts, which a percentage on its own does not say.
+        episodes, cur = [], 0
+        for t in hits:
+            if t != FULL:
+                cur += 1
+            elif cur:
+                episodes.append(cur)
+                cur = 0
+        if cur:
+            episodes.append(cur)
+        below = 100.0 * sum(1 for t in hits if t != FULL) / len(hits) if hits else 0.0
         print(f"  {path}: {len(nals)} NALs, {len(hits)} carry a trailer, "
               f"{changes} tier changes, {hist or '{}'}")
+        print(f"      {below:.1f}% below full tier in {len(episodes)} episodes"
+              + (f", longest {max(episodes)} frames" if episodes else ""))
         if not hits:
             ok = False
     print("  parser reports trailers" if ok else "  PARSER FOUND NOTHING -- do not trust a null run")

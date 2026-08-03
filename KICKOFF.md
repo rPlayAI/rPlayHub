@@ -101,7 +101,14 @@ and still serves the same contract, but the app is developed against the C one.
   stream anywhere but Apple hardware. The remaining lever is bitrate, and **that experiment is
   built but has not been run**: `sudo ./scripts/rvra-bitrate-all.sh`, phone unlocked on the home
   screen, five conditions in one pass with a printed table. Read the positive control first — the
-  doc says why that ordering is the whole design.
+  doc says why that ordering is the whole design. **Expect it to fail**: our stream already spends
+  2.3x the bits per frame Apple's does and downshifts twelve times as often, which is not what
+  rate starvation looks like.
+- **Our sessions downshift far more than Device Hub's on the same phone** — 30% and 58% of frames
+  below full tier across two of our captures, against 4.8% for Apple's. That decides whether the
+  fallback plan is viable at all (a freeze half the time is not a product), so it is the more
+  promising thread than the bitrate ceiling. Confounded by motion; the new instrument controls for
+  it. `python3 scripts/rvra-bitrate.py --self-test <capture.h265>` reproduces the table.
 - **Rotate turns the VIEW, not the device.** Verified against the full service catalogue: there is
   no orientation, accelerometer or motion service. Nothing advertised can rotate a physical device.
 - Lock / volume / Siri: **refused, not faked.** They need the `mainScreenButtons` HID report format

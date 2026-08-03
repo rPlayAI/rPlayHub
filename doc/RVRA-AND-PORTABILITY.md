@@ -152,11 +152,41 @@ python3 scripts/rvra-bitrate.py --self-test build/devicehub-recording.h265
 
 That 601 independently reproduces the 601/601 figure this document already quotes.
 
-**2. Hide frames while below full resolution — now the leading candidate**, since option 1 is
-ruled out. Portable, and the detection already exists — the
-trailer gives the tier per frame, before decode. Hold the last good picture during a downshift and
-resume at full size. Evidence it recovers: in a non-RVRA decode, frames go clean again once the
-encoder returns to full tier. Cost is a brief freeze during fast swipes rather than garbage.
+**2. Hide frames while below full resolution — the leading candidate**, since option 1 is ruled
+out. Portable, and the detection already exists — the trailer gives the tier per frame, before
+decode. Hold the last good picture during a downshift and resume at full size. Evidence it
+recovers: in a non-RVRA decode, frames go clean again once the encoder returns to full tier. Cost
+is a freeze during fast swipes rather than garbage.
+
+**Whether that cost is acceptable depends entirely on how often the encoder downshifts, and our
+sessions downshift far more than Apple's.** Measured over three captures with
+`scripts/rvra-bitrate.py --self-test`:
+
+| capture | kB/frame | below full tier | episodes | longest |
+|---|---|---|---|---|
+| Device Hub's own session | 7.0 | **4.8%** | 2 | 16 frames |
+| ours (`screen3.h265`) | 13.8 | **29.6%** | 6 | 25 frames |
+| ours (`ours-ffmpeg.h265`) | 16.2 | **58.3%** | 19 | 40 frames |
+
+At Apple's rate option 2 is a product: two brief holds in twenty seconds. At ours it is a picture
+that is frozen more than half the time, which is not one. So "fall back to option 2" is not the
+safe default it looks like — it is contingent on closing that gap.
+
+**Read carefully, because this is not a controlled comparison.** These are different sessions over
+different content, and motion provokes adaptation, so heavier swiping during our captures would
+raise the bit rate *and* the downshift rate together and explain both columns at once. That
+confounder is exactly why the instrument drives synthetic swipes.
+
+What it does bear on is option 1's replacement hypothesis. **Our stream already spends 2.3× the
+bits per frame that Apple's does and downshifts twelve times as often.** Rate starvation does not
+predict that, which makes the bitrate lever a weaker candidate than it looked — worth running
+because the run is cheap and the answer is architectural, but worth expecting to fail.
+
+The question these numbers raise is the one nobody has asked yet: **why does our session adapt so
+much more than Device Hub's on the same phone?** Whatever the answer, it lives in what we
+negotiate, not in what the decoder does afterwards — and unlike the bitrate ceiling, it is a
+difference already measured rather than a lever guessed at. If our session could be made to behave
+like Apple's, option 2 stops being a compromise.
 
 **3. Implement RVRA reference resampling** in a custom decoder. Correct, and a research project.
 
