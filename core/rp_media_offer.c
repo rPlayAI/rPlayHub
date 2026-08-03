@@ -1,5 +1,6 @@
 #include "rp_media_offer.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
@@ -37,7 +38,13 @@
 static const char *hevc_features(void)
 {
     const char *e = getenv("RPLAY_HEVC_FEATURES");
-    return (e && *e) ? e : HEVC_FEATURES_DEFAULT;
+    const char *use = (e && *e) ? e : HEVC_FEATURES_DEFAULT;
+    /* Print it once. An experiment that changes this string is worthless if there is no evidence
+     * the string reached the offer -- a negative result would then be indistinguishable from the
+     * override silently not applying. */
+    static int said = 0;
+    if (!said) { said = 1; fprintf(stderr, "[offer] HEVC features: %s\n", use); }
+    return use;
 }
 #define AVC_FEATURES            "FLS;VRAE:0;SW:1;"
 #define HEVC_PAYLOAD_TYPE       123

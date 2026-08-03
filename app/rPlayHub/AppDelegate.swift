@@ -762,7 +762,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // screen yet, and the picture visibly vibrates while the encoder flaps between tiers.
         view.displayLayer.onPresentSize = { [weak self] size in
             guard let self else { return }
-            if self.view.activeSize != size { self.view.activeSize = size }
+            if self.view.activeSize != size {
+                // Log every tier change. This is the measurement for whether the encoder can be
+                // told to stop adapting resolution (RVRA1:0) -- with it honoured there should be
+                // no line here but the first, however hard the screen is swiped.
+                AppBuild.log("coded tier: \(Int(size.width))x\(Int(size.height))")
+                self.view.activeSize = size
+            }
         }
         hevc = decoder
 

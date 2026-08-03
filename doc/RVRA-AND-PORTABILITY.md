@@ -87,18 +87,36 @@ Measured, so it is not re-litigated:
 
 ## The portable options
 
-**1. Turn RVRA off at the source.** `RPLAY_HEVC_FEATURES` overrides the offer's feature string:
+**1. Turn RVRA off at the source — TRIED, DOES NOT WORK.**
+
+Tested 2026-08-02 against an iPhone 13 Pro on iOS 27. The app builds the offer (it links
+`rp_media_offer`), so this is set on the app rather than the daemon:
 
 ```sh
-RPLAY_HEVC_FEATURES="FLS;VRA:0;MVRA:0;RVRA1:0;SW:1;" sudo ./host-c/cdhost
+RPLAY_HEVC_FEATURES="FLS;VRA:0;MVRA:0;RVRA1:0;SW:1;" \
+  build/dd/Build/Products/Debug/rPlayHub.app/Contents/MacOS/rPlayHub
 ```
 
-**Untested.** If the device honours it, the stream becomes ordinary HEVC and every platform can
-decode it — this is the outcome worth chasing first, because everything downstream gets simpler.
-If the device rejects the offer or ignores the token, nothing changes and the default stands.
-Verify by watching whether the per-frame trailer ever reports a size below the SPS size.
+The offer was confirmed to carry the string — `rp_media_offer.c` prints `[offer] HEVC features:`
+once at negotiation, precisely so a negative result cannot be confused with the override silently
+not applying. It did apply, and the encoder adapted anyway. Under swipes:
 
-**2. Hide frames while below full resolution.** Portable, and the detection already exists — the
+```
+22:22:21  1088x1920 -> 1184x2576 -> 1088x1920 -> 720x1280 -> 1088x1920 -> 720x1280
+22:22:22  1088x1920 -> 720x1280  -> 1088x1920 -> 1184x2576
+```
+
+Ten changes in two seconds, indistinguishable from the baseline. **The device ignores the token.**
+
+Note also that our default offer, `FLS;SW:1;`, carries no RVRA token at all and behaves the same,
+so "absent" and "explicitly 0" both produce adaptation. Whatever drives it is not this string.
+
+Not yet tried: whether adaptation is bitrate-driven instead. The encoder adapted while sending
+1.7 Mbit/s against a negotiated 6 Mbps ceiling, so it is not simply running out of headroom, but
+RCTL's target is a separate lever from the feature list and has not been varied on its own.
+
+**2. Hide frames while below full resolution — now the leading candidate**, since option 1 is
+ruled out. Portable, and the detection already exists — the
 trailer gives the tier per frame, before decode. Hold the last good picture during a downshift and
 resume at full size. Evidence it recovers: in a non-RVRA decode, frames go clean again once the
 encoder returns to full tier. Cost is a brief freeze during fast swipes rather than garbage.
