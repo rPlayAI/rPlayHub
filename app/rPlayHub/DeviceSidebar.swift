@@ -64,6 +64,8 @@ final class DeviceSidebar: NSView {
     private let sectionLabel = NSTextField(labelWithString: "Available")
     private var allRows: [DeviceRow] = []
     private var rows: [DeviceRow] = []
+    /// True while `update` is repopulating, so restored selections are not read as user clicks.
+    private var reloading = false
 
     /// Called when the selection changes. The engine only serves one device today, so this is
     /// wired up but does not yet switch streams.
@@ -197,6 +199,12 @@ final class DeviceSidebar: NSView {
         let previous = selectedRow()?.udid
         allRows = devices
         rows = devices
+        // Restoring the selection after a reload fires the same delegate a click does, and the
+        // list refreshes on a timer -- so without this the app asked the daemon to rebind every
+        // refresh, on a device nobody chose. Selecting a device restarts the daemon, so that is a
+        // reboot loop, not a wasted call.
+        reloading = true
+        defer { reloading = false }
         table.reloadData()
         // Keep the selection on the same device across refreshes; otherwise select the first.
         if let previous, let i = rows.firstIndex(where: { $0.udid == previous }) {
@@ -298,6 +306,7 @@ extension DeviceSidebar: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !reloading else { return }      // programmatic, not a choice the user made
         if let d = selectedRow() { onSelect?(d) }
     }
 }
