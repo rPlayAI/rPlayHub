@@ -34,6 +34,19 @@ typedef struct {
  * that is where the usbmux client lives; declared here because the API server is what needs it. */
 int usbmux_enumerate(api_device *out, int max);
 
+/* Bind a different device. Does not return on success.
+ *
+ * Implemented by re-executing this daemon with the new udid, rather than by unwinding the session
+ * in place. Startup is a linear sequence -- lockdown, TLS, CoreDeviceProxy, utun, two pump
+ * threads, RSD, media -- with no teardown path, and writing one only to use it here would be a
+ * lot of new code whose failure mode is leaked utun interfaces and threads.
+ *
+ * Re-exec is not a dodge: binding another device needs a fresh tunnel and a fresh media session
+ * anyway, since the device permits one stream per session and will not restart it. The disconnect
+ * is inherent to the operation, not a cost of doing it this way, and the kernel releases every
+ * resource for free. */
+void cdhost_rebind(const char *udid);
+
 /* Everything the server needs to answer questions about the session it belongs to. */
 typedef struct {
     const char *udid;

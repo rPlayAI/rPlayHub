@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var retryTimer: Timer?
     private var statusTimer: Timer?
     private var deviceLabel = "no device"
+    /// Which device the daemon is currently bound to, so re-selecting it is a no-op.
+    private var boundUDID: String?
     private var lastFrameCount = 0
     private var fps = 0
 
@@ -86,6 +88,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar = DeviceSidebar(frame: NSRect(x: 0, y: 0, width: 250, height: rect.height))
         inspector = InspectorPane(frame: NSRect(x: 0, y: 0, width: 260, height: rect.height))
 
+        // Selecting a device mirrors it, as it does in Device Hub. The daemon binds one device
+        // at a time -- the tunnel and the media session belong to it -- so this asks the daemon
+        // to rebind and then reconnects once it is back. Simulators are skipped: they have no
+        // tunnel to rebind, and their rows do other things.
+        sidebar.onSelect = { [weak self] device in
+            guard let self, !device.isSimulator, let control = self.control else { return }
+            guard device.udid != self.boundUDID else { return }
+            AppBuild.log("selecting device \(device.udid)")
+            control.send("select_device", ["udid": device.udid]) { [weak self] result in
+                guard let self else { return }
+                if case .success(let r) = result, (r["rebinding"] as? Bool) == true {
+                    self.boundUDID = device.udid
+                    self.deviceLabel = "switching device…"
+                    self.updateStatus()
+                    // The daemon re-executes, so the socket goes away and comes back. Give it
+                    // time to rebuild the tunnel before reconnecting; too eager and we connect
+                    // to the dying process.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.reconnect() }
+                } else if case .failure(let e) = result {
+                    self.present(title: "Could not switch device", text: "\(e)")
+                }
+            }
+        }
         sidebar.onCommand = { [weak self] command, device in
             self?.perform(command, on: device)
         }
@@ -620,6 +645,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch result {
             case .success(let devices):
                 let rows = devices.map(DeviceRow.init(json:))
+                if let bound = devices.first(where: { ($0["bound"] as? Bool) == true }),
+                   let u = bound["udid"] as? String { self.boundUDID = u }
                 // Simulators share the list, as they do in Device Hub. They come from simctl
                 // rather than the engine -- a simulator never touches CoreDevice -- so the two
                 // sources are merged here rather than pretended to be one upstream.

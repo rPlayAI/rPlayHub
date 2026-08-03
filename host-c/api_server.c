@@ -493,6 +493,38 @@ static void method_ping(int fd, long id)
     send_line(fd, "{\"id\":%ld,\"ok\":true,\"result\":{\"engine\":\"cdhostd\",\"language\":\"c\"}}", id);
 }
 
+/* Bind a different device, so the sidebar selects what is mirrored the way Device Hub does.
+ *
+ * Replies BEFORE rebinding, because cdhost_rebind re-executes and never returns -- a client
+ * waiting on a response would otherwise see the socket close and report an error for something
+ * that worked. */
+static void method_select_device(int fd, long id, const char *line)
+{
+    char udid[128] = {0};
+    if (json_string_field(line, "udid", udid, sizeof udid) != 0 || !udid[0]) {
+        reply_error(fd, id, "bad_request", "udid is required");
+        return;
+    }
+    if (g_session->udid && !strcmp(g_session->udid, udid)) {
+        send_line(fd, "{\"id\":%ld,\"ok\":true,\"result\":{\"rebinding\":false}}", id);
+        return;
+    }
+
+    api_device devs[API_MAX_DEVICES];
+    int n = usbmux_enumerate(devs, API_MAX_DEVICES);
+    int known = 0;
+    for (int i = 0; i < n; i++) if (!strcmp(devs[i].udid, udid)) { known = 1; break; }
+    if (!known) {
+        reply_error(fd, id, "unavailable", "that device is not attached");
+        return;
+    }
+
+    send_line(fd, "{\"id\":%ld,\"ok\":true,\"result\":{\"rebinding\":true}}", id);
+    /* Give the reply a moment to leave before the process is replaced. */
+    usleep(150000);
+    cdhost_rebind(udid);
+}
+
 static void method_list_devices(int fd, long id)
 {
     const api_session *s = g_session;
@@ -753,6 +785,7 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "list_devices"))      { method_list_devices(fd, id); return; }
     if (!strcmp(method, "stream_info"))       { method_stream_info(fd, id); return; }
     if (!strcmp(method, "press_button"))     { method_button(fd, id, line); return; }
+    if (!strcmp(method, "select_device"))    { method_select_device(fd, id, line); return; }
     if (!strcmp(method, "tunnel_info"))       { method_tunnel_info(fd, id); return; }
     if (!strcmp(method, "take_screenshot"))   { method_screenshot(fd, id); return; }
     if (!strcmp(method, "tap"))               { method_touch(fd, id, line, 0); return; }

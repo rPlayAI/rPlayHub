@@ -13,6 +13,7 @@
 #include "tls.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -658,6 +659,35 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
     return count;
 }
 
+/* Absolute path to this binary, captured at startup so a rebind can re-exec it. argv[0] is
+ * relative when run as ./host-c/cdhost, and the working directory is not guaranteed later. */
+static char g_self[PATH_MAX];
+
+void cdhost_rebind(const char *udid)
+{
+    if (!g_self[0] || !udid || !*udid) return;
+
+    const char *features = getenv("RPLAY_HEVC_FEATURES");
+    char *args[8];
+    int n = 0;
+    args[n++] = g_self;
+    args[n++] = (char *)"--udid";
+    args[n++] = (char *)udid;
+    if (features && *features) {
+        args[n++] = (char *)"--hevc-features";
+        args[n++] = (char *)features;
+    }
+    if (getenv("RPLAY_DUMP_SERVICES")) args[n++] = (char *)"--dump-services";
+    args[n] = NULL;
+
+    printf("\nrebinding to %s -- restarting\n", udid);
+    fflush(stdout);
+    execv(g_self, args);
+    /* Only reached if exec failed; the caller has already replied, so say why and carry on
+     * serving the device we still have rather than dying silently. */
+    perror("execv");
+}
+
 int main(int argc, char **argv) {
 
     /* Flags rather than environment only, because sudo strips the environment.
@@ -666,6 +696,8 @@ int main(int argc, char **argv) {
      * daemon binds whatever it would have anyway -- silently, and three runs were lost to that
      * before anyone noticed. `sudo env VAR=... ./cdhost` works, but a flag cannot be got wrong.
      * The environment variables still work for anything already using them. */
+    if (!realpath(argv[0], g_self)) snprintf(g_self, sizeof g_self, "%s", argv[0]);
+
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--udid") && i + 1 < argc) {
             setenv("RPLAY_UDID", argv[++i], 1);
