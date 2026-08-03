@@ -94,6 +94,11 @@ and still serves the same contract, but the app is developed against the C one.
   change), `recordVideo` buffers to disk rather than streaming (a fifo got zero bytes), and
   screenshots come back at ~1.5/s. Live needs Simulator.app's window via ScreenCaptureKit, or the
   private SimulatorKit.
+- **Device selection works from the sidebar.** cdhost needs no udid; select_device rebinds it.
+- **Simulators are listed** but cannot be mirrored -- see below.
+- **RVRA cannot be turned off from the offer.** Tested with a verified offer; the encoder adapts
+  regardless. `doc/RVRA-AND-PORTABILITY.md` has the numbers. This is the blocker for decoding the
+  stream anywhere but Apple hardware.
 - **Rotate turns the VIEW, not the device.** Verified against the full service catalogue: there is
   no orientation, accelerometer or motion service. Nothing advertised can rotate a physical device.
 - Lock / volume / Siri: **refused, not faked.** They need the `mainScreenButtons` HID report format
@@ -113,14 +118,19 @@ and still serves the same contract, but the app is developed against the C one.
 The C engine and the app — this is the product:
 
 ```
-sudo RPLAY_UDID=00008110 ./host-c/cdhost            # engine; RPLAY_UDID picks the device
+sudo ./host-c/cdhost                                # no flags: pick the device in the sidebar
 xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug \
     -derivedDataPath build/dd build && open build/dd/Build/Products/Debug/rPlayHub.app
 ```
 
-`RPLAY_UDID` (a prefix is enough) matters as soon as two phones are attached: cdhost binds ONE
-device at startup and otherwise prefers USB, so the phone you want may be the one it ignores.
-`RPLAY_DUMP_SERVICES=1` prints the service catalogue at startup.
+Clicking a device in the sidebar binds it, as in Device Hub. The daemon serves one device at a
+time -- the tunnel and media session belong to it -- so rebinding **re-executes cdhost**, and the
+app reconnects a few seconds later. `--udid <prefix>` still starts on a chosen device,
+`--dump-services` prints the catalogue, `--help` lists the rest.
+
+**Flags, not just environment variables: sudo strips the environment.** `RPLAY_UDID=x sudo ./cdhost`
+sets it for sudo, which discards it, and the daemon then binds whatever it would have anyway
+without saying so. Three runs were lost to that.
 
 Known-good binaries are kept in `builds/known-good-*/` with a README stating what worked at that
 commit. Compare against those before concluding something regressed.
@@ -208,6 +218,30 @@ services = peer["Services"]                          # 85 of them, name -> {Port
 
 This was blocked on a daemon restart for hours before anyone tried it. **Ports are per-session** and
 a cached one is what made `startmediastream` time out for days — always look up by name.
+
+## Bugs found on 2026-08-02 that will look like device faults if reintroduced
+
+Every one of these presented as "the phone is not sending video" and none of them was.
+
+1. **iOS 26 cannot mirror, and cdhost preferred it.** With an iOS 26 phone on USB and an iOS 27
+   phone on wifi, the USB preference bound the one that can never mirror. It now names every
+   attached device at startup, marks which it bound, and warns when the bound device is below
+   iOS 27.
+2. **File descriptors survive `execv`.** Rebinding by re-exec inherited the listening sockets on
+   9876/9877, so the new image could not bind them. Everything from fd 3 up is closed before the
+   exec now.
+3. **`api_serve`'s return value was dropped**, so a daemon that could not listen ran on pumping
+   packets forever, answering nothing and looking alive in the terminal.
+4. **Restoring a table selection fires the same delegate a click does.** The device list refreshes
+   on a timer, and selecting a device restarts the daemon, so this was a reboot loop.
+5. **`directStream` was never stopped.** The 2-second retry timer built a new receiver on every
+   tick -- 71 in half a minute, all answering the device's Sender Reports, nothing decoding. The
+   only retry cancellation sat in the USB path, which is off by default.
+6. **Two `connect()` calls could overlap.** Both negotiated a media stream; the device permits one
+   per session, so the second killed the first and no packets arrived.
+
+The pattern worth keeping: each was found by reading the log for repetition -- "direct stream:
+receiving" 71 times against a packet counter stuck at 35 -- not by reasoning about the protocol.
 
 ## Key gotchas (already solved — keep them)
 
