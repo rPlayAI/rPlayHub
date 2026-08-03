@@ -442,6 +442,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func reconnect() {
+        directStream?.stop()
+        directStream = nil
         stream?.stop()
         control?.close()
         stream = nil
@@ -524,6 +526,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func connect() {
+        // Tear down the previous receiver before building another.
+        //
+        // directStream was assigned and never stopped -- not here, not in reconnect(). Each retry
+        // therefore left a live receiver behind, holding its socket and answering the device's
+        // Sender Reports on its own. Seventy-one of them accumulated in half a minute of retrying,
+        // all acknowledging the same stream, and nothing decoded.
+        directStream?.stop()
+        directStream = nil
+
         // The picture first, and independently of the engine.
         //
         // USB capture goes straight to the cable and needs nothing from the engine — but it used
@@ -621,6 +632,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // the C side keeps a place to publish from if the extension is ever decoded.
             if direct.start(tunnel) {
                 self.directStream = direct
+                // Video is flowing, so stop retrying. Without this the 2-second retry timer keeps
+                // calling connect() forever, and every call built another receiver.
+                self.retryTimer?.invalidate()
+                self.retryTimer = nil
             } else if route == "direct" {
                 AppBuild.log("video route: direct requested but the stream did not start")
                 // Say so on screen. A black window with the reason only in a log file is what
