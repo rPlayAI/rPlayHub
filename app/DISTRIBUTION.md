@@ -27,7 +27,51 @@ builds the DMG, signs the DMG, submits it, waits, and staples the ticket.
 not a "right-click to open" nag, a refusal. Stapling matters too, so the DMG validates even if the
 user is offline when they first open it.
 
-## Why not the Mac App Store
+## TestFlight plan (2026-08-23)
+
+Decided: **ship through TestFlight**, verified first on the author's MacBook. ~/rplay got
+"rPlay for Mac" (team `NL28FE3UZ7`, bundle `ai.rplay.rplayosx`) approved by Beta App Review on
+public TestFlight with *temporary-exception* entitlements intact (`doc/handoff-app-store.md` and
+`doc/app-store-evaluation.md` there: IOKit user clients and private mach-lookup names all survived
+`exportArchive` with `method: app-store-connect`, and review did not object). That falsifies the
+premise below that "there is no public entitlement that restores" `/var/run/usbmuxd`: it was never
+tested with `com.apple.security.temporary-exception.files.absolute-path.read-write`, and the rplay
+result says exceptions are a review question, not a packaging blocker.
+
+What the sandbox still cannot do is run our root daemon, so a TestFlight build is a different
+*architecture*, not just a different signing recipe. The pieces, in the order to build them:
+
+1. **Userspace TCP/IP over the tunnel, in the app process** (section "1." below). Removes root, the
+   `utun`, the daemon and the localhost split; the C core becomes a library the app links, which
+   is also what the Windows/Linux ports want (no TUN driver there either). lwIP is the obvious
+   vendoring candidate: C, small, portable, and it serves RSD, every service channel and the RTP
+   receive. The existing JSON API survives as an in-process call surface so nothing above it moves.
+2. **usbmuxd access under sandbox** — test the absolute-path exception on `/var/run/usbmuxd` the
+   way rplay tested its exceptions: build, sign for App Store Connect, run, see `CONNECTED` or
+   `EPERM`. If it fails, the fallback is the RemotePairing transport (section "2." below), which
+   needs no usbmuxd at all and which the parity table wants anyway for Pair/Unpair.
+3. **Bundle the DDI and mount it ourselves.** `/Library/Developer/DeveloperDiskImages/iOS_DDI/`
+   (about 31 MB: two `.dmg`, trust caches, `BuildManifest.plist`) goes into the app's resources,
+   and the engine mounts it after a phone reboot: `QueryPersonalizationIdentifiers` + `QueryNonce`
+   over `mobile_image_mounter`, a TSS request to Apple's signing server built from the manifest
+   (`libtatsu` in libimobiledevice and pymobiledevice3's `tss.py` are the cribs), then
+   `ReceiveBytes` + `MountImage`. Without this a TestFlight user would need Xcode or Device Hub
+   after every reboot, which defeats the point. Two caveats to settle before shipping: whether
+   redistributing Apple's DDI inside our bundle is permitted (pymobiledevice3 fetches it at run
+   time from a public mirror rather than bundling; doing the same keeps the app smaller and the
+   licence question smaller), and which iOS versions one DDI covers (the iOS 27 one came with the
+   Xcode 27 beta; a fetched set indexed by iOS version is the general answer).
+4. **Packaging**, following rplay's recipe: `xcodebuild archive` with a bumped
+   `CURRENT_PROJECT_VERSION` in the pbxproj (never on the command line -- that is how rplay's build
+   number drifted), `-exportArchive` with an `ExportOptions.plist` of `method: app-store-connect`,
+   upload with Transporter or `xcrun altool`. Full icon set before the first upload: rplay's build 2
+   was rejected for missing 2x assets. Bundle id `com.rplay.rplayhub` and the App Store Connect
+   record still have to be created.
+
+Until step 1 lands, the Developer ID + notarized DMG below remains the only shippable form, and it
+is the right vehicle for the MacBook verification of everything *except* the sandbox.
+
+## Why not the Mac App Store (as first analysed; superseded by the TestFlight plan above)
 
 The App Store requires the sandbox, and the sandbox cannot do what this tool needs:
 

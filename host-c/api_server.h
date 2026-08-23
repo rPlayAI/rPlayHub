@@ -38,6 +38,11 @@ typedef struct {
  * that is where the usbmux client lives; declared here because the API server is what needs it. */
 int usbmux_enumerate(api_device *out, int max);
 
+/* The Info tab's data for `udid`: lockdown GetValue over a session, rendered as JSON in the shape
+ * host/deviceinfo.py produced ({"default":{..},"com.apple.mobile.battery":{..},...,
+ * "unavailable":{..},"session_error":..}). Returns non-zero with {"error":..} in `json`. */
+int cdhost_device_info(const char *udid, char *json, size_t cap);
+
 /* Bind a different device. Does not return on success.
  *
  * Implemented by re-executing this daemon with the new udid, rather than by unwinding the session
@@ -68,6 +73,8 @@ typedef struct {
     long        app_port;             /* coredevice.appservice: list/launch/terminate apps */
     long        syslog_port;          /* syslog_relay.shim.remote: the console stream */
     long        instproxy_port;       /* installation_proxy.shim.remote: the app list */
+    long        misagent_port;        /* misagent.shim.remote: provisioning profiles */
+    long        mcinstall_port;       /* MCInstall.shim.remote: configuration profiles */
 
     /* Needed to negotiate the media stream: the offer carries our address, and the SSRC in it
      * must be the same value the RTCP session uses. */

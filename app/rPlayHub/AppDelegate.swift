@@ -549,6 +549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stream = nil
         control = nil
         inspector.control = nil
+        DeviceInfo.engine = nil
         hevc = nil
         connect()
     }
@@ -681,6 +682,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control = c
         view.control = c
         inspector.control = c
+        DeviceInfo.engine = c
 
         if usbRunning { connecting = false; return }
 

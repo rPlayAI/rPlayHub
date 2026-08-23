@@ -125,8 +125,17 @@ Device Hub and rPlayHub share the same on-device prerequisites; we have replaced
 4. Xcode is NOT needed at runtime. The source checkout is: the Info tab runs
    `host/deviceinfo.py`, and the simulator section needs `xcrun simctl`.
 
-A DDI mount module (identity + nonce over the mounter, TSS request, upload, mount) is the
-remaining piece that would make rPlayHub self-sufficient after a reboot, on macOS or elsewhere.
+**The mount module exists as a prototype: `host/ddi_mount.py`** (2026-08-23). Proven live on the
+iPhone 12: identity and nonce over the mounter, and a TSS request that Apple's server answered
+with a 3,090-byte `ApImg4Ticket` -- built by our code, no Xcode, no Device Hub. Getting the
+request shape right took diffing against one built by libtatsu (`SepNonce`,
+`PearlCertificationRootPub`, the `@VersionInfo` string, `EPRO`/`ESEC` on rule-less entries). The
+phone also caches the manifest it last accepted, keyed by the current nonce, and
+`QueryPersonalizationManifest` returns it without any network -- the script tries that first.
+`ReceiveBytes` + `MountImage` are sent exactly as ideviceimagemounter's debug log shows, but the
+mount itself has not been exercised: it needs a rebooted phone with nothing mounted (`mount`
+refuses when an image is present). Porting to C is straightforward -- plists and a TLS POST --
+and is what makes a TestFlight user self-sufficient after a reboot (`app/DISTRIBUTION.md`).
 
 ## What parity does NOT require
 

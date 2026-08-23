@@ -2,8 +2,8 @@
 //  InspectorPane.swift
 //  The right-hand pane and its tabs.
 //
-//  Device Hub's inspector has tabs across the top; this is the same idea: Controls, Info, Apps
-//  and Console. It exists so AppDelegate keeps talking to one object: it forwards the control
+//  Device Hub's inspector has Info, Apps and Profiles across the top; this has those three plus
+//  Controls and Console. It exists so AppDelegate keeps talking to one object: it forwards the control
 //  surface it already used, and owns the tab switching itself.
 //
 
@@ -13,6 +13,7 @@ final class InspectorPane: NSView {
     let controls = ControlPanel()
     let diagnostics = DiagnosticsPanel()
     let apps = AppsPanel()
+    let profiles = ProfilesPanel()
     let console = ConsolePanel()
 
     private let tabs = NSSegmentedControl()
@@ -24,10 +25,10 @@ final class InspectorPane: NSView {
 
     /// The engine connection the Apps tab talks through. Console opens its own.
     var control: ControlClient? {
-        didSet { apps.control = control }
+        didSet { apps.control = control; profiles.control = control }
     }
 
-    private var panes: [NSView] { [controls, diagnostics, apps, console] }
+    private var panes: [NSView] { [controls, diagnostics, apps, profiles, console] }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -41,7 +42,8 @@ final class InspectorPane: NSView {
 
     private func build() {
         let icons = [("slider.horizontal.3", "Controls"), ("info.circle", "Info"),
-                     ("square.grid.2x2", "Apps"), ("text.alignleft", "Console")]
+                     ("square.grid.2x2", "Apps"), ("checkmark.seal", "Profiles"),
+                     ("text.alignleft", "Console")]
         tabs.segmentCount = icons.count
         for (i, (symbol, label)) in icons.enumerated() {
             tabs.setImage(NSImage(systemSymbolName: symbol, accessibilityDescription: label),
@@ -83,5 +85,6 @@ final class InspectorPane: NSView {
         // session and takes a moment, and doing it for a tab nobody is looking at is waste.
         if sel == 1 { diagnostics.refresh() }
         if sel == 2 { apps.revealed() }
+        if sel == 3 { profiles.revealed() }
     }
 }

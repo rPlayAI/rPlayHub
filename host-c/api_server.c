@@ -1018,6 +1018,146 @@ static void method_terminate_app(int fd, long id, const char *line)
     app_invoke(fd, id, "com.apple.coredevice.feature.sendsignaltoprocess", input, w.len, "terminate");
 }
 
+/* ------------------------------------------------------------------ profiles (misagent, MCInstall)
+ *
+ * Device Hub's third inspector tab. Provisioning profiles come from misagent as CMS blobs with
+ * the XML plist embedded verbatim, so the plist is cut out between "<?xml" and "</plist>" and
+ * parsed -- what host/deviceinfo-era prototypes did in Python. Configuration profiles come from
+ * MCInstall's GetProfileList as metadata keyed by identifier. Both proven live 2026-08-23.
+ */
+static void sb_cf_str_field(strbuf *b, const char *jkey, CFDictionaryRef d, const char *key, int first)
+{
+    CFStringRef ks = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+    CFTypeRef v = CFDictionaryGetValue(d, ks);
+    CFRelease(ks);
+    sb_puts(b, first ? "" : ",");
+    sb_json_string(b, jkey);
+    sb_puts(b, ":");
+    if (!v) { sb_puts(b, "\"\""); return; }
+    if (CFGetTypeID(v) == CFStringGetTypeID()) { sb_cfstring(b, v); return; }
+    if (CFGetTypeID(v) == CFDateGetTypeID()) {
+        /* ISO-8601 UTC, which the app formats for the locale. */
+        CFAbsoluteTime t = CFDateGetAbsoluteTime(v);
+        time_t unix = (time_t)(t + kCFAbsoluteTimeIntervalSince1970);
+        char tmp[32];
+        strftime(tmp, sizeof tmp, "%Y-%m-%dT%H:%M:%SZ", gmtime(&unix));
+        sb_json_string(b, tmp);
+        return;
+    }
+    if (CFGetTypeID(v) == CFBooleanGetTypeID()) { sb_puts(b, CFBooleanGetValue(v) ? "true" : "false"); return; }
+    if (CFGetTypeID(v) == CFNumberGetTypeID()) {
+        long long n = 0; CFNumberGetValue(v, kCFNumberLongLongType, &n);
+        sb_printf(b, "%lld", n);
+        return;
+    }
+    sb_puts(b, "\"\"");
+}
+
+static void method_list_profiles(int fd, long id)
+{
+    const api_session *sess = g_session;
+    strbuf b = {0};
+    sb_printf(&b, "{\"id\":%ld,\"ok\":true,\"result\":{\"provisioning\":[", id);
+    int first = 1;
+    const char *err = NULL;
+
+    if (sess->misagent_port) {
+        int s = relay_open(sess, sess->misagent_port, 15);
+        if (s < 0 || (err = relay_checkin(s)) != NULL) { if (s >= 0) close(s); if (!err) err = "cannot reach misagent"; }
+        else {
+            static const char req[] =
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n"
+                "\t<key>MessageType</key>\n\t<string>CopyAll</string>\n"
+                "\t<key>ProfileType</key>\n\t<string>Provisioning</string>\n</dict>\n</plist>\n";
+            size_t n = 0;
+            uint8_t *raw = relay_send(s, req, sizeof req - 1) == 0 ? relay_recv_alloc(s, &n) : NULL;
+            close(s);
+            CFDataRef data = raw ? CFDataCreateWithBytesNoCopy(NULL, raw, (CFIndex)n, kCFAllocatorNull) : NULL;
+            CFPropertyListRef pl = data ? CFPropertyListCreateWithData(NULL, data, kCFPropertyListImmutable, NULL, NULL) : NULL;
+            if (data) CFRelease(data);
+            CFArrayRef payload = (pl && CFGetTypeID(pl) == CFDictionaryGetTypeID())
+                               ? CFDictionaryGetValue(pl, CFSTR("Payload")) : NULL;
+            for (CFIndex i = 0; payload && CFGetTypeID(payload) == CFArrayGetTypeID()
+                                && i < CFArrayGetCount(payload); i++) {
+                CFDataRef blob = CFArrayGetValueAtIndex(payload, i);
+                if (CFGetTypeID(blob) != CFDataGetTypeID()) continue;
+                const char *bytes = (const char *)CFDataGetBytePtr(blob);
+                size_t len = (size_t)CFDataGetLength(blob);
+                /* memmem-free scan: the CMS wrapper is binary, the plist inside is text. */
+                const char *start = NULL, *stop = NULL;
+                for (size_t k = 0; k + 8 < len; k++) {
+                    if (!start && !memcmp(bytes + k, "<?xml", 5)) start = bytes + k;
+                    if (start && !memcmp(bytes + k, "</plist>", 8)) { stop = bytes + k + 8; break; }
+                }
+                if (!start || !stop) continue;
+                CFDataRef x = CFDataCreateWithBytesNoCopy(NULL, (const UInt8 *)start, stop - start, kCFAllocatorNull);
+                CFPropertyListRef prof = CFPropertyListCreateWithData(NULL, x, kCFPropertyListImmutable, NULL, NULL);
+                CFRelease(x);
+                if (!prof) continue;
+                if (CFGetTypeID(prof) == CFDictionaryGetTypeID()) {
+                    sb_puts(&b, first ? "{" : ",{");
+                    first = 0;
+                    sb_cf_str_field(&b, "name", prof, "Name", 1);
+                    sb_cf_str_field(&b, "app_id_name", prof, "AppIDName", 0);
+                    sb_cf_str_field(&b, "team", prof, "TeamName", 0);
+                    sb_cf_str_field(&b, "uuid", prof, "UUID", 0);
+                    sb_cf_str_field(&b, "expires", prof, "ExpirationDate", 0);
+                    sb_cf_str_field(&b, "created", prof, "CreationDate", 0);
+                    CFArrayRef devs = CFDictionaryGetValue(prof, CFSTR("ProvisionedDevices"));
+                    sb_printf(&b, ",\"devices\":%ld}", devs && CFGetTypeID(devs) == CFArrayGetTypeID() ? (long)CFArrayGetCount(devs) : 0L);
+                }
+                CFRelease(prof);
+            }
+            if (pl) CFRelease(pl);
+            free(raw);
+        }
+    }
+    sb_puts(&b, "],\"configuration\":[");
+    first = 1;
+    if (sess->mcinstall_port) {
+        int s = relay_open(sess, sess->mcinstall_port, 15);
+        const char *e2 = NULL;
+        if (s < 0 || (e2 = relay_checkin(s)) != NULL) { if (s >= 0) close(s); if (!err) err = e2 ? e2 : "cannot reach MCInstall"; }
+        else {
+            static const char req[] =
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n"
+                "\t<key>RequestType</key>\n\t<string>GetProfileList</string>\n</dict>\n</plist>\n";
+            size_t n = 0;
+            uint8_t *raw = relay_send(s, req, sizeof req - 1) == 0 ? relay_recv_alloc(s, &n) : NULL;
+            close(s);
+            CFDataRef data = raw ? CFDataCreateWithBytesNoCopy(NULL, raw, (CFIndex)n, kCFAllocatorNull) : NULL;
+            CFPropertyListRef pl = data ? CFPropertyListCreateWithData(NULL, data, kCFPropertyListImmutable, NULL, NULL) : NULL;
+            if (data) CFRelease(data);
+            if (pl && CFGetTypeID(pl) == CFDictionaryGetTypeID()) {
+                CFArrayRef ids = CFDictionaryGetValue(pl, CFSTR("OrderedIdentifiers"));
+                CFDictionaryRef meta = CFDictionaryGetValue(pl, CFSTR("ProfileMetadata"));
+                for (CFIndex i = 0; ids && CFGetTypeID(ids) == CFArrayGetTypeID() && i < CFArrayGetCount(ids); i++) {
+                    CFStringRef ident = CFArrayGetValueAtIndex(ids, i);
+                    CFDictionaryRef m = meta && CFGetTypeID(meta) == CFDictionaryGetTypeID() ? CFDictionaryGetValue(meta, ident) : NULL;
+                    sb_puts(&b, first ? "{" : ",{");
+                    first = 0;
+                    sb_puts(&b, "\"identifier\":"); sb_cfstring(&b, ident);
+                    if (m && CFGetTypeID(m) == CFDictionaryGetTypeID()) {
+                        sb_cf_str_field(&b, "name", m, "PayloadDisplayName", 0);
+                        sb_cf_str_field(&b, "organization", m, "PayloadOrganization", 0);
+                        sb_cf_str_field(&b, "description", m, "PayloadDescription", 0);
+                        sb_cf_str_field(&b, "uuid", m, "PayloadUUID", 0);
+                    }
+                    sb_puts(&b, "}");
+                }
+            }
+            if (pl) CFRelease(pl);
+            free(raw);
+        }
+    }
+    sb_puts(&b, "]");
+    if (err) { sb_puts(&b, ",\"error\":"); sb_json_string(&b, err); }
+    sb_puts(&b, "}}\n");
+    if (b.p && !b.oom) send_all(fd, b.p, b.len);
+    else reply_error(fd, id, "internal_error", "out of memory rendering profiles");
+    free(b.p);
+}
+
 /* ------------------------------------------------------------------ console (syslog_relay)
  *
  * After the checkin the relay simply streams the device's syslog as text, one NUL-terminated line
@@ -1084,6 +1224,34 @@ static void method_quit(int fd, long id)
     send_line(fd, "{\"id\":%ld,\"ok\":true,\"result\":{\"quitting\":true}}", id);
     fprintf(stderr, "  quit requested over the API; cdhost exiting\n");
     _exit(0);
+}
+
+/* Device info for the inspector. Any attached device, not only the bound one -- the sidebar lets
+ * you look at a phone before switching to it. Built in a heap buffer: thirty rows of JSON. */
+static void method_device_info(int fd, long id, const char *line)
+{
+    char udid[64] = {0};
+    json_string_field(line, "udid", udid, sizeof udid);
+    if (!udid[0] && g_session->udid) snprintf(udid, sizeof udid, "%s", g_session->udid);
+    if (!udid[0]) { reply_error(fd, id, "bad_request", "udid is required"); return; }
+    size_t cap = 64 * 1024;
+    char *json = malloc(cap);
+    if (!json) { reply_error(fd, id, "internal_error", "out of memory"); return; }
+    if (cdhost_device_info(udid, json, cap) != 0) {
+        /* json holds {"error": "..."}; lift the message out. */
+        char msg[256] = "device info failed";
+        json_string_field(json, "error", msg, sizeof msg);
+        free(json);
+        reply_error(fd, id, "device_error", msg);
+        return;
+    }
+    strbuf b = {0};
+    sb_printf(&b, "{\"id\":%ld,\"ok\":true,\"result\":", id);
+    sb_puts(&b, json);
+    sb_puts(&b, "}\n");
+    if (b.p && !b.oom) send_all(fd, b.p, b.len);
+    free(b.p);
+    free(json);
 }
 
 static void method_ping(int fd, long id)
@@ -1343,12 +1511,14 @@ static void method_tunnel_info(int fd, long id)
               "{\"id\":%ld,\"ok\":true,\"result\":{"
               "\"device_addr\":\"%s\",\"our_addr\":\"%s\",\"rsd_port\":%ld,"
               "\"services\":{\"displayservice\":%ld,\"hid\":%ld,\"screenshot\":%ld,"
-              "\"diagnostics_relay\":%ld,\"appservice\":%ld,\"syslog_relay\":%ld,\"installation_proxy\":%ld},"
+              "\"diagnostics_relay\":%ld,\"appservice\":%ld,\"syslog_relay\":%ld,\"installation_proxy\":%ld,"
+              "\"misagent\":%ld,\"mcinstall\":%ld},"
               "\"udid\":\"%s\",\"screen_width\":%d,\"screen_height\":%d}}",
               id, s->tunnel_addr ? s->tunnel_addr : "",
               s->our_addr ? s->our_addr : "", s->rsd_port,
               s->display_port, s->hid_port, s->screenshot_port,
               s->diag_port, s->app_port, s->syslog_port, s->instproxy_port,
+              s->misagent_port, s->mcinstall_port,
               s->udid, s->screen_w, s->screen_h);
 }
 
@@ -1383,6 +1553,7 @@ static void dispatch(int fd, const char *line)
 
     if (!strcmp(method, "ping"))              { method_ping(fd, id); return; }
     if (!strcmp(method, "quit"))              { method_quit(fd, id); return; }
+    if (!strcmp(method, "device_info"))       { method_device_info(fd, id, line); return; }
     if (!strcmp(method, "list_devices"))      { method_list_devices(fd, id); return; }
     if (!strcmp(method, "stream_info"))       { method_stream_info(fd, id); return; }
     if (!strcmp(method, "press_button"))     { method_button(fd, id, line); return; }
@@ -1392,6 +1563,7 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "launch_app"))       { method_launch_app(fd, id, line); return; }
     if (!strcmp(method, "terminate_app"))    { method_terminate_app(fd, id, line); return; }
     if (!strcmp(method, "syslog"))           { method_syslog(fd, id); return; }
+    if (!strcmp(method, "list_profiles"))    { method_list_profiles(fd, id); return; }
     if (!strcmp(method, "select_device"))    { method_select_device(fd, id, line); return; }
     if (!strcmp(method, "tunnel_info"))       { method_tunnel_info(fd, id); return; }
     if (!strcmp(method, "take_screenshot"))   { method_screenshot(fd, id); return; }

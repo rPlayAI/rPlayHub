@@ -84,8 +84,35 @@ struct DeviceInfo {
         return String(describing: value)
     }
 
+    /// The engine connection, set by AppDelegate. The engine's `device_info` is the normal path
+    /// now; the Python script is only the fallback for an older engine that lacks the method,
+    /// which keeps an installed copy (no checkout, no python) working.
+    static var engine: ControlClient?
+
     /// Run the query off the main thread and deliver the result on it.
     static func fetch(udid: String?, completion: @escaping (Result<DeviceInfo, Error>) -> Void) {
+        if let engine {
+            var params: [String: Any] = [:]
+            if let udid, !udid.isEmpty { params["udid"] = udid }
+            engine.send("device_info", params) { result in
+                switch result {
+                case .success(let json):
+                    completion(Result { try parse(json) })
+                case .failure(let e):
+                    if let ce = e as? ControlError, ce.code == "not_implemented" {
+                        fetchViaScript(udid: udid, completion: completion)
+                    } else {
+                        completion(.failure(Failure.deviceError("\(e)")))
+                    }
+                }
+            }
+            return
+        }
+        fetchViaScript(udid: udid, completion: completion)
+    }
+
+    private static func fetchViaScript(udid: String?,
+                                       completion: @escaping (Result<DeviceInfo, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result { try fetchSync(udid: udid) }
             DispatchQueue.main.async { completion(result) }
@@ -115,6 +142,11 @@ struct DeviceInfo {
             let tail = stderrText.split(separator: "\n").suffix(3).joined(separator: " ")
             throw Failure.launchFailed(tail.isEmpty ? "no output from deviceinfo.py" : tail)
         }
+        return try parse(json)
+    }
+
+    /// The JSON shape is shared by the engine's `device_info` and the Python script.
+    private static func parse(_ json: [String: Any]) throws -> DeviceInfo {
         if let e = json["error"] as? String { throw Failure.deviceError(e) }
 
         var sections: [(String, [(String, String)])] = []
