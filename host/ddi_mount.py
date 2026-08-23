@@ -52,8 +52,23 @@ def cmd(s, **req):
 
 
 def status(s):
-    r = cmd(s, Command="LookupImage", ImageType="Personalized")
-    return bool(r.get("ImageSignature"))
+    """True when a Personalized developer image is mounted. LookupImage is unreliable here -- it
+    answers an empty ImageSignature for an image we mounted ourselves -- so ask CopyDevices, which
+    lists what is actually mounted (a Personalized DiskImage at /System/Developer). Verified
+    2026-08-23 against a phone that was mirroring, which LookupImage wrongly reported as unmounted."""
+    r = cmd(s, Command="CopyDevices")
+    for e in r.get("EntryList", []):
+        if e.get("DiskImageType") == "Personalized":
+            return True
+    return False
+
+
+def mount_path(s):
+    r = cmd(s, Command="CopyDevices")
+    for e in r.get("EntryList", []):
+        if e.get("DiskImageType") == "Personalized":
+            return e.get("MountPath")
+    return None
 
 
 def identity(s):
