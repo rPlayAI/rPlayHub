@@ -85,6 +85,9 @@ final class DeviceSidebar: NSView {
         case pin
         case copyUDID
         case reconnect
+        case restart
+        case shutdown
+        case sleep
     }
 
     override init(frame frameRect: NSRect) {
@@ -161,6 +164,10 @@ final class DeviceSidebar: NSView {
         add("Press Home", .home)
         menu.addItem(.separator())
         add("Pin Window on Top", .pin)
+        menu.addItem(.separator())
+        add("Sleep (Lock)…", .sleep)
+        add("Restart…", .restart)
+        add("Shut Down…", .shutdown)
         menu.addItem(.separator())
         add("Copy UDID", .copyUDID)
         add("Reconnect", .reconnect)

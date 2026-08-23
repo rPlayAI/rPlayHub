@@ -28,7 +28,10 @@ final class ControlClient {
         try socket.connect(timeout: 30)      // a screenshot can take a moment
     }
 
+    private var closedByUs = false
+
     func close() {
+        closedByUs = true
         socket.shutdownAndClose()
     }
 
@@ -52,6 +55,10 @@ final class ControlClient {
     }
 
     private func callSync(_ method: String, _ params: [String: Any]) throws -> [String: Any] {
+        return try callSync(method, params, rawResult: false) as? [String: Any] ?? [:]
+    }
+
+    private func callSync(_ method: String, _ params: [String: Any], rawResult: Bool) throws -> Any {
         nextID += 1
         var req: [String: Any] = ["id": nextID, "method": method]
         if !params.isEmpty { req["params"] = params }
@@ -67,6 +74,7 @@ final class ControlClient {
                     throw ControlError(code: "bad_response", message: "not a JSON object")
                 }
                 if obj["ok"] as? Bool == true {
+                    if rawResult { return obj["result"] as Any? ?? [String: Any]() }
                     return obj["result"] as? [String: Any] ?? [:]
                 }
                 let err = obj["error"] as? [String: Any] ?? [:]
@@ -113,5 +121,84 @@ final class ControlClient {
 
     func streamInfo(completion: @escaping (Result<[String: Any], Error>) -> Void) {
         send("stream_info", completion: completion)
+    }
+
+    /// Restart / shutdown / sleep via diagnostics_relay over the tunnel. The engine answers
+    /// with the device's own Status; restart drops the tunnel and the app reconnects after.
+    func deviceAction(_ action: String,
+                      completion: ((Result<[String: Any], Error>) -> Void)? = nil) {
+        send("device_action", ["action": action], completion: completion)
+    }
+
+    // MARK: - apps (coredevice.appservice)
+
+    func listApps(completion: @escaping (Result<[[String: Any]], Error>) -> Void) {
+        sendRaw("list_apps") { result in
+            completion(result.map { ($0 as? [[String: Any]]) ?? [] })
+        }
+    }
+
+    func listProcesses(completion: @escaping (Result<[[String: Any]], Error>) -> Void) {
+        send("list_processes") { result in
+            completion(result.map { ($0["processTokens"] as? [[String: Any]]) ?? [] })
+        }
+    }
+
+    func launchApp(_ bundleID: String,
+                   completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send("launch_app", ["bundle_id": bundleID], completion: completion)
+    }
+
+    func terminateApp(pid: Int, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send("terminate_app", ["pid": pid], completion: completion)
+    }
+
+    // MARK: - raw results and streams
+
+    /// Like `send`, but hands back whatever `result` is -- the app list is a JSON array, which
+    /// the dictionary-typed path would silently turn into `[:]`.
+    private func sendRaw(_ method: String, _ params: [String: Any] = [:],
+                         completion: @escaping (Result<Any, Error>) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let result: Result<Any, Error>
+            do {
+                result = .success(try self.callSync(method, params, rawResult: true))
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// A streaming method: one request, then `{"event": ...}` objects until the connection ends.
+    /// Owns this client's queue for the life of the stream, so use a dedicated ControlClient.
+    /// Callbacks are delivered on the main thread; `onEnd` gets nil when the stream closed
+    /// because we did.
+    func stream(_ method: String, _ params: [String: Any] = [:],
+                onEvent: @escaping ([String: Any]) -> Void,
+                onEnd: @escaping (Error?) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try self.callSync(method, params)
+                while true {
+                    if let nl = self.buffer.firstIndex(of: 0x0A) {
+                        let raw = self.buffer.subdata(in: self.buffer.startIndex..<nl)
+                        self.buffer.removeSubrange(self.buffer.startIndex...nl)
+                        if let obj = try JSONSerialization.jsonObject(with: raw) as? [String: Any] {
+                            DispatchQueue.main.async { onEvent(obj) }
+                        }
+                        continue
+                    }
+                    guard let chunk = try self.socket.read() else { continue }
+                    self.buffer.append(chunk)
+                }
+            } catch {
+                var quiet = false
+                if case .closed? = error as? SocketError, self.closedByUs { quiet = true }
+                DispatchQueue.main.async { onEnd(quiet ? nil : error) }
+            }
+        }
     }
 }

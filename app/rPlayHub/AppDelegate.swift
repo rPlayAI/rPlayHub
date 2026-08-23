@@ -61,6 +61,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         connect()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.updateStatus()
+            self?.refreshStillIfIdle()
+        }
+    }
+
+    // MARK: - still picture while no video flows
+
+    private var stillInFlight = false
+    private var lastStillAt: TimeInterval = 0
+    private var framesAtLastTick = 0
+    private var quietTicks = 0
+
+    /// Device Hub's device pane shows the phone's current screen as a still picture before View
+    /// Screen, and that is all it can show for a device that cannot mirror. Do the same: while
+    /// no frames are arriving, take a screenshot every few seconds and put it where the video
+    /// would be. The first frame of real video hides it.
+    private func refreshStillIfIdle() {
+        let frames = hevc?.framesEnqueued ?? 0
+        if frames != framesAtLastTick {
+            framesAtLastTick = frames
+            quietTicks = 0
+            view.hideStill()
+            return
+        }
+        quietTicks += 1
+        // Two quiet seconds before the first still, so a stream that is merely starting up does
+        // not flash a screenshot; then one every four seconds -- a full-screen PNG is a
+        // multi-megabyte round trip over the tunnel and the phone renders it on demand.
+        guard quietTicks >= 2, let control, !stillInFlight,
+              Date().timeIntervalSinceReferenceDate - lastStillAt >= 4 else { return }
+        stillInFlight = true
+        control.send("take_screenshot") { [weak self] result in
+            guard let self else { return }
+            self.stillInFlight = false
+            self.lastStillAt = Date().timeIntervalSinceReferenceDate
+            guard case .success(let info) = result,
+                  let b64 = info["image_b64"] as? String,
+                  let data = Data(base64Encoded: b64),
+                  let image = NSImage(data: data)?.cgImage(forProposedRect: nil, context: nil,
+                                                           hints: nil),
+                  // Video may have started while the screenshot was in flight.
+                  (self.hevc?.framesEnqueued ?? 0) == self.framesAtLastTick else { return }
+            let hadSize = self.view.presentedSize.width > 0
+            self.view.showStill(image)
+            if !hadSize { self.applySizing() }
         }
     }
 
@@ -124,6 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .rotate:     self?.perform(.rotate, on: nil)
             case .screenshot: self?.perform(.screenshot, on: nil)
             case .record:     self?.perform(.record, on: nil)
+            case .restart:    self?.powerAction("restart")
+            case .shutdown:   self?.powerAction("shutdown")
+            case .sleep:      self?.powerAction("sleep")
             }
         }
 
@@ -142,6 +189,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .rotate:     self?.perform(.rotate, on: nil)
             case .screenshot: self?.perform(.screenshot, on: nil)
             case .record:     self?.perform(.record, on: nil)
+            case .restart:    self?.powerAction("restart")
+            case .shutdown:   self?.powerAction("shutdown")
+            case .sleep:      self?.powerAction("sleep")
             }
         }
         stage = NSView()
@@ -347,6 +397,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(device.udid, forType: .string)
 
+        case .shutdown:
+            if let err = Simulator.shutdown(device.udid) { present(title: "Could not shut down", text: err) }
+            if let control { refreshDevices(control) }
+
         default:
             // Mirroring a simulator needs a frame source we do not have: it is not a display on
             // this Mac (checked -- booting one adds no screen), simctl's recordVideo buffers to
@@ -422,6 +476,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .reconnect:
             reconnect()
+
+        case .restart:  powerAction("restart")
+        case .shutdown: powerAction("shutdown")
+        case .sleep:    powerAction("sleep")
+        }
+    }
+
+    /// Restart / Shutdown / Sleep through diagnostics_relay. Each confirms first: the buttons are
+    /// icon-only, a restart drops the tunnel for a minute, and a shutdown leaves the phone off
+    /// until someone presses its side button.
+    private func powerAction(_ action: String) {
+        guard let control else {
+            present(title: "Not connected", text: "The engine is not reachable yet.")
+            return
+        }
+        let (verb, note): (String, String) = {
+            switch action {
+            case "restart":  return ("Restart", "The device reboots and the mirror reconnects "
+                                     + "when it is back; expect about a minute without a picture.")
+            case "shutdown": return ("Shut Down", "The device powers off. It must be turned back "
+                                     + "on by hand before anything here works again.")
+            default:         return ("Sleep", "Locks the screen. The mirror keeps running and "
+                                     + "shows the lock screen.")
+            }
+        }()
+        let alert = NSAlert()
+        alert.messageText = "\(verb) \(deviceLabel == "no device" ? "the device" : deviceLabel)?"
+        alert.informativeText = note
+        alert.alertStyle = action == "sleep" ? .informational : .warning
+        alert.addButton(withTitle: verb)
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        control.deviceAction(action) { [weak self] result in
+            switch result {
+            case .success:
+                if action == "restart" {
+                    // The tunnel dies with the device; reconnect once it has had time to boot.
+                    self?.deviceLabel = "restarting…"
+                    self?.updateStatus()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 45) { self?.reconnect() }
+                }
+            case .failure(let e):
+                self?.present(title: "\(verb) failed", text: "\(e)")
+            }
         }
     }
 
@@ -450,6 +548,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control?.close()
         stream = nil
         control = nil
+        inspector.control = nil
         hevc = nil
         connect()
     }
@@ -581,6 +680,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         control = c
         view.control = c
+        inspector.control = c
 
         if usbRunning { connecting = false; return }
 

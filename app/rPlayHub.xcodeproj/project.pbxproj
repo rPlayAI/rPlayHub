@@ -25,6 +25,8 @@
 		1A0000000000000000000033 /* AppBuild.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000032 /* AppBuild.swift */; };
 		1A0000000000000000000053 /* DeviceInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000052 /* DeviceInfo.swift */; };
 		1A0000000000000000000055 /* DiagnosticsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000054 /* DiagnosticsPanel.swift */; };
+		1A00000000000000000000A3 /* ConsolePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000000000000000000A2 /* ConsolePanel.swift */; };
+		1A00000000000000000000A1 /* AppsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000000000000000000A0 /* AppsPanel.swift */; };
 		1A0000000000000000000057 /* InspectorPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000056 /* InspectorPane.swift */; };
 		1A0000000000000000000059 /* ScreenWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000058 /* ScreenWindow.swift */; };
 		1A000000000000000000005B /* ControlStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000000000000000000005A /* ControlStrip.swift */; };
@@ -58,6 +60,8 @@
 		1A0000000000000000000032 /* AppBuild.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBuild.swift; sourceTree = "<group>"; };
 		1A0000000000000000000052 /* DeviceInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceInfo.swift; sourceTree = "<group>"; };
 		1A0000000000000000000054 /* DiagnosticsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsPanel.swift; sourceTree = "<group>"; };
+		1A00000000000000000000A2 /* ConsolePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsolePanel.swift; sourceTree = "<group>"; };
+		1A00000000000000000000A0 /* AppsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppsPanel.swift; sourceTree = "<group>"; };
 		1A0000000000000000000056 /* InspectorPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorPane.swift; sourceTree = "<group>"; };
 		1A0000000000000000000058 /* ScreenWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenWindow.swift; sourceTree = "<group>"; };
 		1A000000000000000000005A /* ControlStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlStrip.swift; sourceTree = "<group>"; };
@@ -121,6 +125,8 @@
 				1A0000000000000000000032 /* AppBuild.swift */,
 				1A0000000000000000000052 /* DeviceInfo.swift */,
 				1A0000000000000000000054 /* DiagnosticsPanel.swift */,
+				1A00000000000000000000A2 /* ConsolePanel.swift */,
+				1A00000000000000000000A0 /* AppsPanel.swift */,
 				1A0000000000000000000056 /* InspectorPane.swift */,
 				1A0000000000000000000058 /* ScreenWindow.swift */,
 				1A000000000000000000005A /* ControlStrip.swift */,
@@ -224,6 +230,8 @@
 				1A0000000000000000000033 /* AppBuild.swift in Sources */,
 				1A0000000000000000000053 /* DeviceInfo.swift in Sources */,
 				1A0000000000000000000055 /* DiagnosticsPanel.swift in Sources */,
+				1A00000000000000000000A3 /* ConsolePanel.swift in Sources */,
+				1A00000000000000000000A1 /* AppsPanel.swift in Sources */,
 				1A0000000000000000000057 /* InspectorPane.swift in Sources */,
 				1A0000000000000000000059 /* ScreenWindow.swift in Sources */,
 				1A000000000000000000005B /* ControlStrip.swift in Sources */,

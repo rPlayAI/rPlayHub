@@ -2,9 +2,9 @@
 //  InspectorPane.swift
 //  The right-hand pane and its tabs.
 //
-//  Device Hub's inspector has three tabs across the top; this is the same idea with the two we
-//  have content for. It exists so AppDelegate keeps talking to one object: it forwards the
-//  control surface it already used, and owns the tab switching itself.
+//  Device Hub's inspector has tabs across the top; this is the same idea: Controls, Info, Apps
+//  and Console. It exists so AppDelegate keeps talking to one object: it forwards the control
+//  surface it already used, and owns the tab switching itself.
 //
 
 import AppKit
@@ -12,6 +12,8 @@ import AppKit
 final class InspectorPane: NSView {
     let controls = ControlPanel()
     let diagnostics = DiagnosticsPanel()
+    let apps = AppsPanel()
+    let console = ConsolePanel()
 
     private let tabs = NSSegmentedControl()
 
@@ -19,6 +21,13 @@ final class InspectorPane: NSView {
     var udid: String? {
         didSet { diagnostics.udid = udid }
     }
+
+    /// The engine connection the Apps tab talks through. Console opens its own.
+    var control: ControlClient? {
+        didSet { apps.control = control }
+    }
+
+    private var panes: [NSView] { [controls, diagnostics, apps, console] }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -31,19 +40,22 @@ final class InspectorPane: NSView {
     }
 
     private func build() {
-        tabs.segmentCount = 2
-        tabs.setImage(NSImage(systemSymbolName: "slider.horizontal.3",
-                              accessibilityDescription: "Controls"), forSegment: 0)
-        tabs.setImage(NSImage(systemSymbolName: "info.circle",
-                              accessibilityDescription: "Info"), forSegment: 1)
-        tabs.setWidth(0, forSegment: 0)     // 0 = size to fit
+        let icons = [("slider.horizontal.3", "Controls"), ("info.circle", "Info"),
+                     ("square.grid.2x2", "Apps"), ("text.alignleft", "Console")]
+        tabs.segmentCount = icons.count
+        for (i, (symbol, label)) in icons.enumerated() {
+            tabs.setImage(NSImage(systemSymbolName: symbol, accessibilityDescription: label),
+                          forSegment: i)
+            tabs.setToolTip(label, forSegment: i)
+            tabs.setWidth(0, forSegment: i)     // 0 = size to fit
+        }
         tabs.segmentStyle = .texturedRounded
         tabs.selectedSegment = 0
         tabs.target = self
         tabs.action = #selector(tabChanged)
         tabs.translatesAutoresizingMaskIntoConstraints = false
 
-        for v in [controls as NSView, diagnostics as NSView] {
+        for v in panes {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -53,7 +65,7 @@ final class InspectorPane: NSView {
             tabs.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             tabs.centerXAnchor.constraint(equalTo: centerXAnchor),
         ])
-        for v in [controls as NSView, diagnostics as NSView] {
+        for v in panes {
             NSLayoutConstraint.activate([
                 v.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 4),
                 v.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -65,11 +77,11 @@ final class InspectorPane: NSView {
     }
 
     @objc private func tabChanged() {
-        let showInfo = tabs.selectedSegment == 1
-        controls.isHidden = showInfo
-        diagnostics.isHidden = !showInfo
+        let sel = tabs.selectedSegment
+        for (i, v) in panes.enumerated() { v.isHidden = i != sel }
         // Fetch on first reveal rather than on every device change: the query opens a lockdown
         // session and takes a moment, and doing it for a tab nobody is looking at is waste.
-        if showInfo { diagnostics.refresh() }
+        if sel == 1 { diagnostics.refresh() }
+        if sel == 2 { apps.revealed() }
     }
 }

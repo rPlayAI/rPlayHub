@@ -26,6 +26,10 @@
 typedef struct {
     char udid[64];
     char connection[16];          /* "USB" or "Network", as usbmuxd spells it */
+    int  device_id;               /* usbmuxd's handle, for connecting to the device's lockdown */
+    char name[128];               /* DeviceName, ProductVersion, ProductType from lockdown; */
+    char version[32];             /* empty when the device did not answer (not paired, asleep) */
+    char product_type[32];
 } api_device;
 
 #define API_MAX_DEVICES 16
@@ -60,6 +64,10 @@ typedef struct {
     long        screenshot_port;
     long        display_port;
     long        hid_port;
+    long        diag_port;            /* diagnostics_relay.shim.remote: restart/shutdown/sleep */
+    long        app_port;             /* coredevice.appservice: list/launch/terminate apps */
+    long        syslog_port;          /* syslog_relay.shim.remote: the console stream */
+    long        instproxy_port;       /* installation_proxy.shim.remote: the app list */
 
     /* Needed to negotiate the media stream: the offer carries our address, and the SSRC in it
      * must be the same value the RTCP session uses. */

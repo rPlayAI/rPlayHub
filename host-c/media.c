@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/select.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <fcntl.h>
@@ -583,7 +584,23 @@ static int connect_service(media_session *m, const char *addr, long port)
     setsockopt(m->svc, SOL_SOCKET, SO_NOSIGPIPE, &(int){ 1 }, sizeof(int));
 #endif
 
-    if (connect(m->svc, (struct sockaddr *)&sa, sizeof sa) != 0) return -1;
+    /* Connect with a deadline. The app runs this on its main thread, and a stale tunnel address
+     * (daemon restarted between tunnel_info and here) otherwise leaves it in SYN_SENT for the
+     * kernel's ~75 s -- a frozen GUI that looks like a hang in whatever was clicked last. */
+    int flags = fcntl(m->svc, F_GETFL, 0);
+    fcntl(m->svc, F_SETFL, flags | O_NONBLOCK);
+    if (connect(m->svc, (struct sockaddr *)&sa, sizeof sa) != 0) {
+        if (errno != EINPROGRESS) return -1;
+        fd_set wr;
+        FD_ZERO(&wr);
+        FD_SET(m->svc, &wr);
+        struct timeval ctv = { .tv_sec = 5, .tv_usec = 0 };
+        if (select(m->svc + 1, NULL, &wr, NULL, &ctv) <= 0) return -1;
+        int err = 0;
+        socklen_t elen = sizeof err;
+        if (getsockopt(m->svc, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) return -1;
+    }
+    fcntl(m->svc, F_SETFL, flags);
 
     static long (*rd)(void *, void *, size_t);
     static long (*wr)(void *, const void *, size_t);

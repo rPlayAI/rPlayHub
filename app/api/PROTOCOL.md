@@ -95,6 +95,31 @@ is the concrete reason to build it, beyond cleaner video.
 Not in rplay's surface; added because "is video actually flowing" is the first question when a live
 view looks wrong.
 
+### `quit` → `{"quitting": true}`
+Stops the daemon (it `_exit`s right after replying). Exists so a stuck-looking daemon can be
+ended without a signal or sudo: `printf '{"id":1,"method":"quit"}\n' | nc 127.0.0.1 9876`.
+
+### `device_action` → `{"action", "status": "Success"}`
+Params `{"action": "restart" | "shutdown" | "sleep"}`. Speaks `diagnostics_relay.shim.remote`
+(classic plist framing plus the RSDCheckin preamble). `restart` drops the tunnel; the app
+reconnects about 45 s later. `shutdown` leaves the phone off until its side button is pressed.
+
+### `list_apps` → `[{"bundleIdentifier", "name", "version", "isFirstParty"}, ...]`
+A JSON **array**, from `installation_proxy`'s Browse (appservice's `listapps` validates and then
+never answers on iOS 26.5). `isFirstParty` is `ApplicationType != User`.
+
+### `list_processes` → `{"processTokens": [{"processIdentifier", "executableURL": {"relative"}}]}`
+### `launch_app` → `{"processToken": {"processIdentifier", "executableURL", ...}}`
+Params `{"bundle_id"}`. Brings the app to the foreground, terminating a running instance first.
+### `terminate_app` → `{}`
+Params `{"pid", "signal": 9}`. Find the pid with `list_processes`.
+
+### `syslog` → `{"streaming": true}`, then events
+The one streaming method. After the reply the same connection carries
+`{"event": "syslog", "line": "..."}` objects, one per log line, until the client closes its side
+(or sends any byte). Open a dedicated connection for it; nothing else can be called on that
+socket while it streams.
+
 ## The video stream
 
 Raw Annex-B HEVC (`00 00 00 01` start codes), no container, no timestamps. Decode it with

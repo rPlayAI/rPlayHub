@@ -319,6 +319,44 @@ int rp_xpc_dict_next(const rp_xpc_obj *dict, size_t *cursor,
     return -1;
 }
 
+int rp_xpc_array_count(const rp_xpc_obj *arr)
+{
+    if (!arr || !arr->data || arr->size < 12) return -1;
+    if (r32(arr->data) != RP_XPC_ARRAY) return -1;
+    return (int)r32(arr->data + 8);
+}
+
+int rp_xpc_array_next(const rp_xpc_obj *arr, size_t *cursor, rp_xpc_obj *value)
+{
+    if (!arr || !arr->data || !cursor || arr->size < 12) return -1;
+    if (r32(arr->data) != RP_XPC_ARRAY) return -1;
+    uint32_t count = r32(arr->data + 8);
+    size_t want = *cursor;
+    if (want >= count) return -1;
+
+    /* Same re-walk-from-the-start shape as rp_xpc_dict_next, for the same reasons. */
+    const uint8_t *p = arr->data + 12;
+    const uint8_t *end = arr->data + arr->size;
+    for (uint32_t i = 0; i < count && p < end; i++) {
+        size_t vsize = obj_size(p, (size_t)(end - p));
+        if (!vsize) return -1;
+        if (i == want) {
+            if (value) { value->data = p; value->size = vsize; }
+            *cursor = want + 1;
+            return 0;
+        }
+        p += vsize;
+    }
+    return -1;
+}
+
+int rp_xpc_get_bool(const rp_xpc_obj *obj, bool *out)
+{
+    if (!obj || obj->size < 8 || r32(obj->data) != RP_XPC_BOOL) return -1;
+    if (out) *out = obj->data[4] != 0;
+    return 0;
+}
+
 int rp_xpc_get_uint64(const rp_xpc_obj *obj, uint64_t *out)
 {
     if (!obj || obj->size < 12) return -1;

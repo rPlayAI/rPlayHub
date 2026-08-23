@@ -46,6 +46,32 @@ final class MirrorView: NSView {
     /// status bar sits in a black band that reads as a video artifact rather than as a phone.
     private let cutoutLayer = CAShapeLayer()
 
+    /// A screenshot shown in place of video while none is flowing -- what Device Hub's device
+    /// pane shows before View Screen, and all it can show for a device that cannot mirror
+    /// (iOS < 27). Sits above the video layer and is hidden the moment a frame arrives.
+    private let stillLayer = CALayer()
+
+    /// Show `image` where the video would be. Sets the device size from the pixel size when
+    /// nothing else has, so the pane takes the phone's shape instead of a 0x0 guess.
+    func showStill(_ image: CGImage) {
+        if deviceSize == .zero {
+            deviceSize = CGSize(width: image.width, height: image.height)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        stillLayer.contents = image
+        stillLayer.isHidden = false
+        CATransaction.commit()
+    }
+
+    func hideStill() {
+        guard !stillLayer.isHidden else { return }
+        stillLayer.isHidden = true
+        stillLayer.contents = nil
+    }
+
+    var isShowingStill: Bool { !stillLayer.isHidden }
+
     /// Quarter-turns applied to the picture, 0-3, clockwise.
     ///
     /// The device is not rotated by this -- iOS orientation follows the phone's own sensors and
@@ -107,6 +133,10 @@ final class MirrorView: NSView {
         menu.addItem(.separator())
         add("Pin Window on Top", .pin)
         menu.addItem(.separator())
+        add("Sleep (Lock)…", .sleep)
+        add("Restart…", .restart)
+        add("Shut Down…", .shutdown)
+        menu.addItem(.separator())
         add("Reconnect", .reconnect)
         self.menu = menu
     }
@@ -151,6 +181,9 @@ final class MirrorView: NSView {
         // No timebase and no scheduling. The layer simply shows the newest decoded picture; the
         // decoder, not the layer, decides what gets decoded, and it decodes everything.
         clipLayer.addSublayer(displayLayer)
+        stillLayer.contentsGravity = .resize       // the screenshot IS the screen, edge to edge
+        stillLayer.isHidden = true
+        clipLayer.addSublayer(stillLayer)
         clipLayer.addSublayer(cutoutLayer)
         layer?.addSublayer(clipLayer)
     }
@@ -208,6 +241,7 @@ final class MirrorView: NSView {
         super.layout()
         let screen = screenRect()
         clipLayer.frame = screen
+        stillLayer.frame = clipLayer.bounds
         // Turn the clip, not the display layer: the crop maths below is expressed in the
         // device's own frame, and rotating underneath it would mean redoing all of it per angle.
         clipLayer.transform = CATransform3DMakeRotation(CGFloat(rotation) * .pi / 2, 0, 0, 1)

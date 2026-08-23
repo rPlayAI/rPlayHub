@@ -20,6 +20,9 @@ final class ControlStrip: NSView {
     private let rotateButton = NSButton()
     private let shotButton = NSButton()
     private let recordButton = NSButton()
+    private let restartButton = NSButton()
+    private let shutdownButton = NSButton()
+    private let sleepButton = NSButton()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -47,11 +50,18 @@ final class ControlStrip: NSView {
         make(rotateButton, "rotate.right", "Rotate", 2)
         make(shotButton, "camera", "Take Screenshot", 3)
         make(recordButton, "record.circle", "Record", 4)
+        // Power actions confirm before they fire -- an icon-only button is easy to hit by
+        // accident and a shutdown needs the phone powered on by hand afterwards.
+        make(restartButton, "restart", "Restart Device…", 5)
+        make(shutdownButton, "power", "Shut Down Device…", 6)
+        make(sleepButton, "moon.zzz", "Sleep (Lock) Device…", 7)
 
         let stack = NSStackView(views: [pinButton, homeButton, rotateButton,
-                                        shotButton, recordButton])
+                                        shotButton, recordButton,
+                                        restartButton, shutdownButton, sleepButton])
         stack.orientation = .horizontal
         stack.spacing = 6
+        stack.setCustomSpacing(16, after: recordButton)   /* power group reads as its own */
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -67,6 +77,9 @@ final class ControlStrip: NSView {
         case 1: onAction?(.home)
         case 2: onAction?(.rotate)
         case 3: onAction?(.screenshot)
+        case 5: onAction?(.restart)
+        case 6: onAction?(.shutdown)
+        case 7: onAction?(.sleep)
         default: onAction?(.record)
         }
     }

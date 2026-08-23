@@ -25,6 +25,7 @@
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <pthread.h>
+#include <signal.h>
 
 #include "../core/rp_remotexpc.h"
 #include "api_server.h"
@@ -199,6 +200,9 @@ static int usbmux_list_devices(int fd, char *udid_out, size_t udid_len) {
  * chooses ONE device to bind the session to; this one reports them all and judges none. A phone
  * appearing twice (USB and Network) is collapsed to a single entry preferring USB, because it is
  * one phone and showing it twice would be a bug rather than a feature. */
+static int usbmux_connect_port(int fd, int device_id, int port);
+static int lockdown_get_value(conn_t *c, const char *key, char *out, size_t outlen);
+
 int usbmux_enumerate(api_device *out, int max)
 {
     int fd = usbmux_connect();
@@ -226,12 +230,37 @@ int usbmux_enumerate(api_device *out, int max)
                                                sizeof out[existing].connection, "%s", conn);
             continue;
         }
+        memset(&out[n], 0, sizeof out[n]);
         snprintf(out[n].udid, sizeof out[n].udid, "%s", ser);
         snprintf(out[n].connection, sizeof out[n].connection, "%s", conn[0] ? conn : "USB");
+        long long did = 0;
+        CFNumberRef idn = dict_get(dev, "DeviceID");
+        if (idn) CFNumberGetValue(idn, kCFNumberLongLongType, &did);
+        out[n].device_id = (int)did;
         n++;
     }
     CFRelease(reply);
     close(fd);
+
+    /* Name every device, not just the bound one. DeviceName, ProductVersion and ProductType are
+     * readable from lockdown before any session (Layer 1 reads them the same way), so each costs
+     * one usbmux connection and three round trips. A device that does not answer -- unpaired,
+     * or a wifi phone that has gone to sleep -- is listed by udid as before. Device Hub shows
+     * names for all of them, and a row reading "DEVICE-UDID-REDACTED" was mistaken for a
+     * missing device on the first side-by-side comparison (2026-08-23). */
+    for (int i = 0; i < n; i++) {
+        int lfd = usbmux_connect();
+        if (lfd < 0) continue;
+        struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
+        setsockopt(lfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        if (usbmux_connect_port(lfd, out[i].device_id, LOCKDOWN_PORT) == 0) {
+            conn_t lk = { lfd, NULL };
+            lockdown_get_value(&lk, "DeviceName", out[i].name, sizeof out[i].name);
+            lockdown_get_value(&lk, "ProductVersion", out[i].version, sizeof out[i].version);
+            lockdown_get_value(&lk, "ProductType", out[i].product_type, sizeof out[i].product_type);
+        }
+        close(lfd);
+    }
     return n;
 }
 
@@ -628,11 +657,17 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
         }
     }
 
-    /* The three the mirroring product actually depends on. */
+    /* The three the mirroring product actually depends on, plus the Device Hub parity set:
+     * diagnostics_relay (restart/shutdown/sleep) and syslog_relay are classic lockdown-style
+     * services, appservice is CoreDevice like the first three. */
     static const char *want[] = {
         "com.apple.coredevice.screencaptureservice",
         "com.apple.coredevice.displayservice",
         "com.apple.coredevice.hid.universalhidservice",
+        "com.apple.mobile.diagnostics_relay.shim.remote",
+        "com.apple.coredevice.appservice",
+        "com.apple.syslog_relay.shim.remote",
+        "com.apple.mobile.installation_proxy.shim.remote",
     };
     for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
         rp_xpc_obj svc, portv;
@@ -648,7 +683,11 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
             if (out) {
                 if (i == 0) out->screenshot_port = resolved;
                 else if (i == 1) out->display_port = resolved;
-                else out->hid_port = resolved;
+                else if (i == 2) out->hid_port = resolved;
+                else if (i == 3) out->diag_port = resolved;
+                else if (i == 4) out->app_port = resolved;
+                else if (i == 5) out->syslog_port = resolved;
+                else out->instproxy_port = resolved;
             }
         } else {
             printf("    %-46s MISSING\n", want[i]);
@@ -730,7 +769,33 @@ void cdhost_rebind(const char *udid)
     perror("execv");
 }
 
+/* Ctrl-C must end the daemon, every time.
+ *
+ * Default dispositions would do that, except that this process re-executes itself to switch
+ * devices (cdhost_rebind) and an exec inherits both the signal mask and any SIG_IGN from the
+ * image before it -- and once, a rebound daemon sat through Ctrl-C and a root `kill -INT`
+ * (2026-08-23). Rather than argue about which ancestor ignored what, start from a known state:
+ * unblock everything and own the terminating signals. The handler does not unwind: the kernel
+ * releases the utun, the sockets and the threads on _exit, and there is nothing else to keep. */
+static void on_terminate(int sig)
+{
+    static const char msg[] = "\n  signal received; cdhost exiting\n";
+    write(2, msg, sizeof msg - 1);
+    _exit(128 + sig);
+}
+
+static void own_signals(void)
+{
+    sigset_t none;
+    sigemptyset(&none);
+    pthread_sigmask(SIG_SETMASK, &none, NULL);
+    signal(SIGINT, on_terminate);
+    signal(SIGTERM, on_terminate);
+    signal(SIGHUP, on_terminate);
+}
+
 int main(int argc, char **argv) {
+    own_signals();
 
     /* Flags rather than environment only, because sudo strips the environment.
      *

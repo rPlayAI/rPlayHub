@@ -102,6 +102,18 @@ they differ, see seam 3.
 Our send path is `universalhidservice`, not rplay's iAP HID, so the reports differ even though the
 coordinates do not.
 
+### 5. Developer Disk Image mount — portable, not yet ours
+
+iOS 17+ mounts a *personalized* DDI per boot before the developer services answer (see
+`doc/DEVICEHUB-PARITY.md`, "What a user must do"). On a Mac, Xcode or Device Hub does it. Off a
+Mac nobody will, so the port needs a mount module: read the phone's identity and nonce over
+`mobile_image_mounter.shim.remote` (classic plist relay, already spoken from C), build the TSS
+request from the image's `BuildManifest.plist`, POST it to Apple's signing server, then
+`ReceiveBytes` + `MountImage` with the returned manifest. pymobiledevice3 has all of it working
+from Linux and Windows and is the crib. The base image files are Apple's and fetchable; nothing
+in the flow is macOS-specific. Developer Mode and the trust pairing remain the user's job on
+every platform.
+
 ## Ordering
 
 1. macOS View Screen, against the Python engine — proves the whole loop.

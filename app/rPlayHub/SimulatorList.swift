@@ -41,15 +41,22 @@ struct Simulator {
                 guard d["isAvailable"] as? Bool == true,
                       let udid = d["udid"] as? String,
                       let name = d["name"] as? String else { continue }
+                let booted = (d["state"] as? String) == "Booted"
+                // Device Hub lists simulators that have been used, not every one Xcode could
+                // create: on a Mac with 37 available it showed 9, and those 9 were exactly the
+                // ones whose data directory had been populated by a boot (2026-08-23, compared
+                // side by side). A never-booted simulator has a 55-file skeleton with no
+                // `Containers`; a booted one has thousands of files under it. Same filter here,
+                // and anything running is shown whatever its history.
+                if !booted, let dataPath = d["dataPath"] as? String,
+                   !FileManager.default.fileExists(atPath: dataPath + "/Containers") { continue }
                 out.append(Simulator(udid: udid, name: name, runtime: version,
-                                     isBooted: (d["state"] as? String) == "Booted",
-                                     isAvailable: true))
+                                     isBooted: booted, isAvailable: true))
             }
         }
-        // Booted first, then iPhones before iPads, then newest runtime, then name. Thirty-seven
-        // rows sorted purely alphabetically buries every iPhone under the iPads, which is the
-        // opposite of what anyone is looking for. Device Hub shows a shorter list than this and
-        // it is not clear what it filters on -- ordering is the part that is clearly ours to fix.
+        // Booted first, then iPhones before iPads, then newest runtime, then name. Rows sorted
+        // purely alphabetically bury every iPhone under the iPads, which is the opposite of
+        // what anyone is looking for.
         func rank(_ s: Simulator) -> Int { s.name.contains("iPad") ? 1 : 0 }
         return out.sorted { a, b in
             if a.isBooted != b.isBooted { return a.isBooted }

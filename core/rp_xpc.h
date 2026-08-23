@@ -137,8 +137,17 @@ int rp_xpc_dict_next(const rp_xpc_obj *dict, size_t *cursor,
 /* Number of entries in a dictionary, or -1 if it is not one. */
 int rp_xpc_dict_count(const rp_xpc_obj *dict);
 
+/* Walk an array's elements in wire order, same cursor convention as rp_xpc_dict_next. Arrays
+ * first mattered for coredevice.appservice, whose listapps/listprocesses answers are arrays of
+ * dictionaries. */
+int rp_xpc_array_next(const rp_xpc_obj *arr, size_t *cursor, rp_xpc_obj *value);
+
+/* Number of elements in an array, or -1 if it is not one. */
+int rp_xpc_array_count(const rp_xpc_obj *arr);
+
 rp_xpc_type rp_xpc_obj_type(const rp_xpc_obj *obj);
 int rp_xpc_get_uint64(const rp_xpc_obj *obj, uint64_t *out);
+int rp_xpc_get_bool(const rp_xpc_obj *obj, bool *out);
 int rp_xpc_get_string(const rp_xpc_obj *obj, const char **out);  /* NUL-terminated in place */
 int rp_xpc_get_data(const rp_xpc_obj *obj, const uint8_t **out, size_t *n);
 

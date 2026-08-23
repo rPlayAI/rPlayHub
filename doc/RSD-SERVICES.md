@@ -40,7 +40,7 @@ implement — the wire formats are already known.
 | Service | Purpose | Status |
 |---|---|---|
 | `com.apple.coredevice.deviceinfo` | Device properties over CoreDevice, rather than lockdown. Would let the Diagnostics tab drop its Python subprocess. | **next** |
-| `com.apple.mobile.diagnostics_relay.shim.remote` | **Restart, Shutdown, Sleep**, plus IORegistry queries. The smallest path to two named features. | **next** |
+| `com.apple.mobile.diagnostics_relay.shim.remote` | **Restart, Shutdown, Sleep**, plus IORegistry queries. | **used** (`device_action`) |
 | `com.apple.coredevice.diagnosticsservice` | CoreDevice-era diagnostics. Overlaps the relay above; which one Device Hub uses is not established. | unverified |
 | `com.apple.coredevice.devicecontrol` | Device control surface. Not probed. | unverified |
 | `com.apple.coredevice.configuration` | Device configuration. Not probed. | unverified |
@@ -56,8 +56,8 @@ implement — the wire formats are already known.
 
 | Service | Purpose | Status |
 |---|---|---|
-| `com.apple.mobile.installation_proxy.shim.remote` | Install, uninstall and enumerate apps. | **next** |
-| `com.apple.coredevice.appservice` | CoreDevice app control: launch, terminate, list. | **next** |
+| `com.apple.mobile.installation_proxy.shim.remote` | Install, uninstall and enumerate apps. | **used** (`list_apps`, via Browse) |
+| `com.apple.coredevice.appservice` | CoreDevice app control: launch, terminate, processes. Its `listapps` stalls on iOS 26.5. | **used** (`launch_app`, `terminate_app`, `list_processes`) |
 | `com.apple.coredevice.iconservice` | App icons, for a list that shows them. | known |
 | `com.apple.mobile.house_arrest.shim.remote` | Access an app's Documents container. | known |
 | `com.apple.streaming_zip_conduit.shim.remote` | Streams an app bundle in during install. | known |
@@ -83,7 +83,7 @@ implement — the wire formats are already known.
 
 | Service | Purpose | Status |
 |---|---|---|
-| `com.apple.syslog_relay.shim.remote` | Live syslog. The Console panel. | **next** |
+| `com.apple.syslog_relay.shim.remote` | Live syslog. The Console panel. | **used** (`syslog`) |
 | `com.apple.os_trace_relay.shim.remote` | Structured `os_log` stream — what Console.app actually shows. | **next** |
 | `com.apple.crashreportcopymobile.shim.remote` | Copies crash reports off the device. Device Hub's Crashes panel. | **next** |
 | `com.apple.crashreportmover.shim.remote` | Moves crash reports into place before copying. | known |
@@ -162,11 +162,11 @@ it was verified. Nothing advertised can rotate a physical device;
 
 | Feature | Service | Blocker |
 |---|---|---|
-| Restart / Shutdown | `mobile.diagnostics_relay` | none — classic protocol, well documented |
+| Restart / Shutdown | `mobile.diagnostics_relay` | built |
 | Pair / Unpair | `dt.remotepairingdeviced.lockdown` + `lockdown.remote.untrusted` | the RemotePairing handshake is designed but not built (`doc/REMOTEPAIRING-PROTOCOL.md`) |
 | Clipboard | `coredevice.pasteboardservice` | message format not decoded |
-| Console | `syslog_relay` / `os_trace_relay` | none for syslog; `os_trace` needs its binary format |
+| Console | `syslog_relay` / `os_trace_relay` | syslog built; `os_trace` needs its binary format |
 | Crash reports | `crashreportcopymobile` | needs `afc`-style transfer |
-| App list | `installation_proxy` or `coredevice.appservice` | none — classic protocol |
-| Process list | `instruments.dtservicehub` | DTX message format |
+| App list | `coredevice.appservice` | built, with launch/terminate |
+| Process list | `coredevice.appservice` (`listprocesses`) | built |
 | Keyboard input | `hid.universalhidservice` (surface 512) | report format for the keyboard surface |

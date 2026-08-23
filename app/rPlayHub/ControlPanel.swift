@@ -19,6 +19,9 @@ final class ControlPanel: NSView {
         case rotate
         case screenshot
         case record
+        case restart
+        case shutdown
+        case sleep
     }
 
     var onAction: ((Action) -> Void)?
@@ -60,6 +63,9 @@ final class ControlPanel: NSView {
             case .rotate: return 2
             case .screenshot: return 3
             case .record: return 4
+            case .restart: return 5
+            case .shutdown: return 6
+            case .sleep: return 7
             }
         }()
         target.action = #selector(buttonHit(_:))
@@ -115,6 +121,9 @@ final class ControlPanel: NSView {
         case 1: onAction?(.home)
         case 2: onAction?(.rotate)
         case 3: onAction?(.screenshot)
+        case 5: onAction?(.restart)
+        case 6: onAction?(.shutdown)
+        case 7: onAction?(.sleep)
         default: onAction?(.record)
         }
     }
