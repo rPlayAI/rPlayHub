@@ -50,17 +50,47 @@ What the sandbox still cannot do is run our root daemon, so a TestFlight build i
    way rplay tested its exceptions: build, sign for App Store Connect, run, see `CONNECTED` or
    `EPERM`. If it fails, the fallback is the RemotePairing transport (section "2." below), which
    needs no usbmuxd at all and which the parity table wants anyway for Pair/Unpair.
-3. **Bundle the DDI and mount it ourselves.** `/Library/Developer/DeveloperDiskImages/iOS_DDI/`
-   (about 31 MB: two `.dmg`, trust caches, `BuildManifest.plist`) goes into the app's resources,
-   and the engine mounts it after a phone reboot: `QueryPersonalizationIdentifiers` + `QueryNonce`
-   over `mobile_image_mounter`, a TSS request to Apple's signing server built from the manifest
-   (`libtatsu` in libimobiledevice and pymobiledevice3's `tss.py` are the cribs), then
-   `ReceiveBytes` + `MountImage`. Without this a TestFlight user would need Xcode or Device Hub
-   after every reboot, which defeats the point. Two caveats to settle before shipping: whether
-   redistributing Apple's DDI inside our bundle is permitted (pymobiledevice3 fetches it at run
-   time from a public mirror rather than bundling; doing the same keeps the app smaller and the
-   licence question smaller), and which iOS versions one DDI covers (the iOS 27 one came with the
-   Xcode 27 beta; a fetched set indexed by iOS version is the general answer).
+3. **Bundle the DDI and mount it ourselves.** PROVEN end to end on 2026-08-23: a rebooted iPhone 13
+   with nothing mounted was activated by `host/ddi_mount.py` (wrapped as
+   `scripts/activate-after-reboot.sh`) with no Xcode and no Device Hub. Port that flow to the C
+   engine and it ships.
+
+   **What the DDI is and why it is per boot.** The developer disk image is Apple's bundle of
+   on-device developer daemons; the CoreDevice services rPlayHub lives on (`displayservice`,
+   `screencaptureservice`, `universalhidservice`, `appservice`, ...) run out of it, *on the phone*.
+   iOS 17+ discards the mount on **every reboot** and will not answer those services until one is
+   mounted again. Nothing is ever mounted on the Mac: the Mac holds the source files, the phone
+   holds the mount (at `/System/Developer`). So this is not a one-time install — it is a step that
+   runs after each boot, which is why `activate-after-reboot.sh` has a `--watch` mode.
+
+   **The per-boot mount flow** (each step verified on the wire):
+   1. `QueryPersonalizationIdentifiers` + `QueryNonce` over `mobile_image_mounter.shim.remote` —
+      the phone's chip/board/ECID and a **nonce it regenerates every boot**. The nonce is what
+      makes a ticket un-replayable, so a fresh mount is required each boot, not just once.
+   2. A **TSS request to Apple's `gs.apple.com`**, built from the DDI's `BuildManifest.plist` entry
+      matching the phone plus those identifiers, answered with an `ApImg4Ticket` bound to this
+      device and this boot. `libtatsu` (libimobiledevice) and pymobiledevice3's `tss.py` are the
+      cribs; getting the request shape right needed `SepNonce`, `PearlCertificationRootPub`, the
+      `@VersionInfo` string, and `EPRO`/`ESEC` on rule-less manifest entries.
+   3. `ReceiveBytes` — stream the ~15 MB `.dmg` into `/private/var/mobile/Media/PublicStaging/` on
+      the phone. **Refused on a locked phone** (the device closes the connection with no reply,
+      exactly as Apple's `ideviceimagemounter` reports "Device is locked, can't mount"); unlock
+      first.
+   4. `MountImage` with the ticket and the trust cache — the phone verifies and mounts at
+      `/System/Developer`.
+
+   Requires an internet connection only for step 2, only for the few seconds of mounting; mirroring
+   itself never touches Apple's servers or the Mac's DDI files. Mount state is read with
+   `CopyDevices` (a `Personalized` entry), NOT `LookupImage` (which returns an empty signature for
+   an image we mounted ourselves).
+
+   **Ship-time caveats.** The source files (`/Library/Developer/DeveloperDiskImages/iOS_DDI/`,
+   about 31 MB: two `.dmg`, trust caches, `BuildManifest.plist`) either travel in the app's
+   resources or are fetched at run time. Two questions to settle: whether redistributing Apple's
+   DDI inside our bundle is permitted (pymobiledevice3 fetches it from a public mirror instead,
+   which keeps the app smaller and the licence question smaller), and that **one DDI is
+   per-iOS-major** — the iOS 27 image came with the Xcode 27 beta, so a colleague on a rebooted
+   iOS 27 device needs that image; a fetched set indexed by iOS version is the general answer.
 4. **Packaging**, following rplay's recipe: `xcodebuild archive` with a bumped
    `CURRENT_PROJECT_VERSION` in the pbxproj (never on the command line -- that is how rplay's build
    number drifted), `-exportArchive` with an `ExportOptions.plist` of `method: app-store-connect`,
