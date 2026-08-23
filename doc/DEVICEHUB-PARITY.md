@@ -86,9 +86,22 @@ Ordered by gap closed per unit work:
 2. ~~App list~~ — built (via `coredevice.appservice`, which also gives launch/terminate; icons
    would need `coredevice.iconservice`).
 3. ~~Syslog console~~ — built for syslog proper.
-4. **Crash reports** — small step past syslog once afc-style transfer exists (which file browsing also needs: two features, one substrate).
-5. **Keyboard input** — needs one decoded HID report format (surface 512); unlocks typing in the View Screen.
-6. **Pair / Unpair** — biggest single lift; blocked on building the RemotePairing handshake that `doc/REMOTEPAIRING-PROTOCOL.md` already specifies down to wire messages. Note this handshake is ALSO the prerequisite for remote-device support (`doc/REMOTE-SUPPORT.md`) — doing it serves both goals.
+4. ~~Crash reports~~ / ~~file browsing~~ — built on one AFC client (Files tab; Export All).
+5. ~~Profiles~~ — built (misagent + MCInstall; the third Device Hub inspector tab).
+6. ~~Device info in C~~ — built; the last Python left the runtime path.
+7. ~~DDI activation without Device Hub~~ — built and proven live (`scripts/activate-after-reboot.sh`).
+8. **Keyboard input** and **lock/volume/Siri buttons** — both blocked on ONE capture of Device Hub
+   typing (`host/decode_hid_capture.py` is ready; see "Keyboard: what is known"). An afternoon each
+   once the report bytes are in hand.
+9. **Pair / Unpair** — biggest single lift; blocked on building the RemotePairing handshake that
+   `doc/REMOTEPAIRING-PROTOCOL.md` already specifies down to wire messages. This handshake is ALSO
+   the prerequisite for remote-device support (`doc/REMOTE-SUPPORT.md`) and for the sandboxed
+   TestFlight build (`app/DISTRIBUTION.md`) — doing it serves three goals.
+
+**State as of 2026-08-23:** every parity feature that has no research blocker is built and, where a
+phone was available, verified live. What remains needs either a capture (keyboard/buttons) or the
+RemotePairing build (pair/unpair) — plus the low-value long tail (clipboard, backup, activation
+state) and the structural items below (multi-device, bug #7).
 
 ## Keyboard: what is known (2026-08-23)
 
