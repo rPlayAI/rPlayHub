@@ -18,10 +18,16 @@ cd "$(dirname "$0")/.."
 api() { printf '{"id":1,"method":"%s"}\n' "$1" | nc -w 3 127.0.0.1 9876 2>/dev/null; }
 
 wait_for_tunnel() {
-  for _ in $(seq 1 60); do
-    if api tunnel_info | grep -q '"device_addr"'; then return 0; fi
+  for i in $(seq 1 60); do
+    if api tunnel_info | grep -q '"device_addr"'; then
+      [ "$i" -gt 1 ] && echo ""
+      return 0
+    fi
+    [ "$i" -eq 1 ] && printf '%s  waiting for the daemon on :9876 (start it with: sudo ./host-c/cdhost)' "$(date '+%H:%M:%S')"
+    printf '.'
     sleep 2
   done
+  echo ""
   echo "no live tunnel after 120s -- is 'sudo ./host-c/cdhost' running?" >&2
   return 1
 }
