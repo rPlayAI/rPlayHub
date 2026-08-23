@@ -1168,7 +1168,7 @@ static void method_list_profiles(int fd, long id)
  */
 #define AFC_OP_STATUS        0x01
 #define AFC_OP_READ_DIR      0x03
-#define AFC_OP_DATA          0x08
+#define AFC_OP_DATA          0x02
 #define AFC_OP_GET_FILE_INFO 0x0A
 #define AFC_OP_FILE_OPEN     0x0D
 #define AFC_OP_FILE_OPEN_RES 0x0E

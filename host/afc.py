@@ -27,7 +27,7 @@ CRASH_COPY = "com.apple.crashreportcopymobile.shim.remote"
 CRASH_MOVER = "com.apple.crashreportmover.shim.remote"
 
 MAGIC = b"CFA6LPAA"
-OP_STATUS, OP_DATA, OP_READ_DIR, OP_GET_FILE_INFO = 0x01, 0x08, 0x03, 0x0A
+OP_STATUS, OP_DATA, OP_READ_DIR, OP_GET_FILE_INFO = 0x01, 0x02, 0x03, 0x0A
 OP_FILE_OPEN, OP_FILE_OPEN_RESULT, OP_FILE_READ, OP_FILE_CLOSE = 0x0D, 0x0E, 0x0F, 0x14
 MODE_RDONLY = 1
 

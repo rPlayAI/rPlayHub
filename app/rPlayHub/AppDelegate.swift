@@ -77,7 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// no frames are arriving, take a screenshot every few seconds and put it where the video
     /// would be. The first frame of real video hides it.
     private func refreshStillIfIdle() {
-        let frames = hevc?.framesEnqueued ?? 0
+        // Every video path -- the engine proxy AND the direct RTP stream -- ends at
+        // displayLayer.present, so its counter is the one signal that means "a picture arrived".
+        // hevc.framesEnqueued only moves on the proxy path, so watching it painted a screenshot
+        // over live direct-stream video and left clicks landing on a frozen still.
+        let frames = view.displayLayer.framesPresented
         if frames != framesAtLastTick {
             framesAtLastTick = frames
             quietTicks = 0
@@ -101,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   let image = NSImage(data: data)?.cgImage(forProposedRect: nil, context: nil,
                                                            hints: nil),
                   // Video may have started while the screenshot was in flight.
-                  (self.hevc?.framesEnqueued ?? 0) == self.framesAtLastTick else { return }
+                  self.view.displayLayer.framesPresented == self.framesAtLastTick else { return }
             let hadSize = self.view.presentedSize.width > 0
             self.view.showStill(image)
             if !hadSize { self.applySizing() }
