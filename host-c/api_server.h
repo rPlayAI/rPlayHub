@@ -75,6 +75,9 @@ typedef struct {
     long        instproxy_port;       /* installation_proxy.shim.remote: the app list */
     long        misagent_port;        /* misagent.shim.remote: provisioning profiles */
     long        mcinstall_port;       /* MCInstall.shim.remote: configuration profiles */
+    long        afc_port;             /* afc.shim.remote: the Media partition */
+    long        crashcopy_port;       /* crashreportcopymobile.shim.remote: AFC over crash reports */
+    long        crashmover_port;      /* crashreportmover.shim.remote: poke before listing */
 
     /* Needed to negotiate the media stream: the offer carries our address, and the SSRC in it
      * must be the same value the RTCP session uses. */

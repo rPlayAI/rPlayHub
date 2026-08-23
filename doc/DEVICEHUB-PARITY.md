@@ -41,7 +41,7 @@ run), so the engine's `stream_info` counters read zero while mirroring works. An
 |---|---|---|---|---|
 | Device list, search, bind | confirmed | ✅ | usbmuxd list + lockdown names for every device + select_device | none (unbound devices were UDID-titled until 2026-08-23) |
 | Simulators: used ones only | **confirmed** (screenshot) | ✅ 2026-08-23 | simctl + `data/Containers` present | none |
-| Inspector tabs Info / Apps / Profiles | **confirmed** (screenshot) | Info ✅ · Apps ✅ · Profiles ❌ (+ we add Controls, Console) | `misagent` / `MCInstall` for profiles | classic protocols; unstarted |
+| Inspector tabs Info / Apps / Profiles | **confirmed** (screenshot) | all three ✅ (+ we add Controls, Files, Console) | `misagent` / `MCInstall` for profiles | none (Profiles built 2026-08-23) |
 | Right-click menu items | inferred | ours has 11 items incl. power group | — | not yet compared item by item |
 | Live screen view | confirmed (capture) | ✅ | displayservice | none |
 | Click/drag → tap/swipe | inferred | ✅ | universalhidservice 257 | none |
@@ -52,12 +52,12 @@ run), so the engine's `stream_info` counters read zero while mirroring works. An
 | Restart / Shutdown / Sleep | inferred | ✅ built 2026-08-23 (wire proven from Python; GUI buttons not yet fired) | `diagnostics_relay.shim.remote` | none |
 | App list (launch/terminate) | inferred | ✅ verified live 2026-08-23 | list: `installation_proxy` Browse; launch/terminate: `coredevice.appservice` | none |
 | Console / live log panel | inferred | ✅ verified live 2026-08-23 | `syslog_relay.shim.remote` | `os_trace_relay` (structured) still needs its binary format |
-| Crash reports panel | **confirmed** (`doc/RSD-SERVICES.md`) | ❌ | `crashreportcopymobile.shim.remote` | needs afc-style transfer |
+| Crash reports panel | **confirmed** (`doc/RSD-SERVICES.md`) | ✅ 2026-08-23 (Files tab → Crash Reports, Export All) | `crashreportmover` + AFC over `crashreportcopymobile` | none |
 | Clipboard sync | inferred | ❌ | `coredevice.pasteboardservice` | message format not decoded |
 | Physical keyboard input | inferred | ❌ | HID surface 512 | report format not decoded |
 | Lock / volume / Siri buttons | inferred | ❌ | HID surface 1026 (`mainScreenButtons`) | report format not decoded |
 | Pair / Unpair / trust prompt | inferred | ❌ | `dt.remotepairingdeviced.lockdown` + `lockdown.remote.untrusted` | RemotePairing handshake designed but not built (`doc/REMOTEPAIRING-PROTOCOL.md`) |
-| File browsing (Media partition) | inferred | ❌ | `afc.shim.remote` / `fileservice.*` | classic protocol; unstarted |
+| File browsing (Media partition) | inferred | ✅ 2026-08-23 (Files tab; list + pull, no write yet) | `afc.shim.remote` | none |
 | Backup / restore | inferred | ❌ | `mobilebackup2.shim.remote` | classic protocol; large surface |
 | Software update / activation state | inferred | ❌ | `mobileactivationd.shim.remote` | unverified |
 | Rotate physical device | n/a | n/a | — | **impossible**: no orientation/motion service exists (verified against all 85 services) |

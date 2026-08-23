@@ -14,6 +14,7 @@ final class InspectorPane: NSView {
     let diagnostics = DiagnosticsPanel()
     let apps = AppsPanel()
     let profiles = ProfilesPanel()
+    let files = FilesPanel()
     let console = ConsolePanel()
 
     private let tabs = NSSegmentedControl()
@@ -25,10 +26,10 @@ final class InspectorPane: NSView {
 
     /// The engine connection the Apps tab talks through. Console opens its own.
     var control: ControlClient? {
-        didSet { apps.control = control; profiles.control = control }
+        didSet { apps.control = control; profiles.control = control; files.control = control }
     }
 
-    private var panes: [NSView] { [controls, diagnostics, apps, profiles, console] }
+    private var panes: [NSView] { [controls, diagnostics, apps, profiles, files, console] }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -43,7 +44,7 @@ final class InspectorPane: NSView {
     private func build() {
         let icons = [("slider.horizontal.3", "Controls"), ("info.circle", "Info"),
                      ("square.grid.2x2", "Apps"), ("checkmark.seal", "Profiles"),
-                     ("text.alignleft", "Console")]
+                     ("folder", "Files"), ("text.alignleft", "Console")]
         tabs.segmentCount = icons.count
         for (i, (symbol, label)) in icons.enumerated() {
             tabs.setImage(NSImage(systemSymbolName: symbol, accessibilityDescription: label),
@@ -86,5 +87,6 @@ final class InspectorPane: NSView {
         if sel == 1 { diagnostics.refresh() }
         if sel == 2 { apps.revealed() }
         if sel == 3 { profiles.revealed() }
+        if sel == 4 { files.revealed() }
     }
 }

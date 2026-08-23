@@ -114,6 +114,22 @@ Params `{"bundle_id"}`. Brings the app to the foreground, terminating a running 
 ### `terminate_app` → `{}`
 Params `{"pid", "signal": 9}`. Find the pid with `list_processes`.
 
+### `list_profiles` → `{"provisioning": [...], "configuration": [...]}`
+Provisioning profiles from `misagent` (`name`, `app_id_name`, `team`, `uuid`, `expires`, `devices`),
+configuration profiles from `MCInstall` (`identifier`, `name`, `organization`).
+
+### `device_info` → `{"default": {...}, "com.apple.mobile.battery": {...}, "com.apple.disk_usage": {...}, "unavailable": {...}}`
+Optional `{"udid"}` (any attached device; default the bound one). Lockdown GetValue over a
+session, the Info tab's data, in the shape `host/deviceinfo.py` used to produce.
+
+### `list_dir` → `{"path", "entries": [{"name", "size", "mtime", "is_dir"}]}`
+Params `{"service": "media" | "crash", "path"}`. AFC over the Media partition or the crash-report
+directory (the mover is poked first so fresh reports appear).
+### `read_file` → `{"size", "data_b64"}`
+Same params; whole file, capped at 64 MB.
+### `export_crashes` → `{"copied", "failed", "dir"}`
+Params `{"dir"}`: copies every `.ips`/`.crash`/`.panic` into that local directory.
+
 ### `syslog` → `{"streaming": true}`, then events
 The one streaming method. After the reply the same connection carries
 `{"event": "syslog", "line": "..."}` objects, one per log line, until the client closes its side

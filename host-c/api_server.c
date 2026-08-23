@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -1158,6 +1159,277 @@ static void method_list_profiles(int fd, long id)
     free(b.p);
 }
 
+/* ------------------------------------------------------------------ files (AFC)
+ *
+ * Apple File Conduit, spoken by afc.shim.remote (the Media partition) and by
+ * crashreportcopymobile.shim.remote (rooted at the crash-report directory). Binary packets after
+ * the RSDCheckin: "CFA6LPAA", entire_len, this_len, packet_num, operation (all u64 LE), payload.
+ * Proven by host/afc.py on both services (2026-08-23); reference libimobiledevice afc.c.
+ */
+#define AFC_OP_STATUS        0x01
+#define AFC_OP_READ_DIR      0x03
+#define AFC_OP_DATA          0x08
+#define AFC_OP_GET_FILE_INFO 0x0A
+#define AFC_OP_FILE_OPEN     0x0D
+#define AFC_OP_FILE_OPEN_RES 0x0E
+#define AFC_OP_FILE_READ     0x0F
+#define AFC_OP_FILE_CLOSE    0x14
+
+typedef struct { int fd; uint64_t seq; } afc_conn;
+
+static void put_u64le(uint8_t *p, uint64_t v) { for (int i = 0; i < 8; i++) p[i] = (uint8_t)(v >> (8 * i)); }
+static uint64_t get_u64le(const uint8_t *p) { uint64_t v = 0; for (int i = 7; i >= 0; i--) v = (v << 8) | p[i]; return v; }
+
+static int afc_open(afc_conn *c, const api_session *sess, long port, const char **err)
+{
+    c->seq = 0;
+    c->fd = relay_open(sess, port, 30);
+    if (c->fd < 0) { *err = "cannot reach the AFC service through the tunnel"; return -1; }
+    const char *e = relay_checkin(c->fd);
+    if (e) { close(c->fd); c->fd = -1; *err = e; return -1; }
+    return 0;
+}
+
+static int afc_send(afc_conn *c, uint64_t op, const uint8_t *payload, size_t n)
+{
+    uint8_t hdr[40];
+    memcpy(hdr, "CFA6LPAA", 8);
+    put_u64le(hdr + 8, 40 + n);
+    put_u64le(hdr + 16, 40 + n);
+    put_u64le(hdr + 24, c->seq++);
+    put_u64le(hdr + 32, op);
+    if (send(c->fd, hdr, 40, 0) != 40) return -1;
+    if (n && send(c->fd, payload, n, 0) != (ssize_t)n) return -1;
+    return 0;
+}
+
+/* Receive one packet; *body is malloc'd (may be NULL when empty). Returns the op, or -1. On a
+ * STATUS packet the AFC error code is returned through *status (0 = success). */
+static long afc_recv(afc_conn *c, uint8_t **body, size_t *n, uint64_t *status)
+{
+    uint8_t hdr[40];
+    if (recvn(c->fd, hdr, 40) != 0 || memcmp(hdr, "CFA6LPAA", 8) != 0) return -1;
+    uint64_t entire = get_u64le(hdr + 8), op = get_u64le(hdr + 32);
+    if (entire < 40 || entire - 40 > (64u << 20)) return -1;
+    *n = (size_t)(entire - 40);
+    *body = *n ? malloc(*n) : NULL;
+    if (*n && (!*body || recvn(c->fd, *body, *n) != 0)) { free(*body); *body = NULL; return -1; }
+    *status = 0;
+    if (op == AFC_OP_STATUS && *n >= 8) *status = get_u64le(*body);
+    return (long)op;
+}
+
+/* NUL-separated strings in `body` -> JSON; `pairs` renders key/value alternation as an object. */
+static int afc_readdir(afc_conn *c, const char *path, strbuf *b, int with_stat);
+
+static int afc_stat(afc_conn *c, const char *path, long long *size, long long *mtime_ns, char *kind, size_t kind_cap)
+{
+    size_t plen = strlen(path) + 1;
+    if (afc_send(c, AFC_OP_GET_FILE_INFO, (const uint8_t *)path, plen) != 0) return -1;
+    uint8_t *body = NULL; size_t n = 0; uint64_t st = 0;
+    long op = afc_recv(c, &body, &n, &st);
+    if (op != AFC_OP_DATA) { free(body); return -1; }
+    *size = 0; *mtime_ns = 0; kind[0] = 0;
+    size_t i = 0;
+    while (i < n) {
+        const char *k = (const char *)body + i; size_t kl = strnlen(k, n - i); i += kl + 1;
+        if (i >= n) break;
+        const char *v = (const char *)body + i; size_t vl = strnlen(v, n - i); i += vl + 1;
+        if (!strcmp(k, "st_size")) *size = atoll(v);
+        else if (!strcmp(k, "st_mtime")) *mtime_ns = atoll(v);
+        else if (!strcmp(k, "st_ifmt")) snprintf(kind, kind_cap, "%s", v);
+    }
+    free(body);
+    return 0;
+}
+
+static int afc_readdir(afc_conn *c, const char *path, strbuf *b, int with_stat)
+{
+    size_t plen = strlen(path) + 1;
+    if (afc_send(c, AFC_OP_READ_DIR, (const uint8_t *)path, plen) != 0) return -1;
+    uint8_t *body = NULL; size_t n = 0; uint64_t st = 0;
+    long op = afc_recv(c, &body, &n, &st);
+    if (op != AFC_OP_DATA) { free(body); return st ? (int)st : -1; }
+    sb_puts(b, "[");
+    int first = 1;
+    size_t i = 0;
+    while (i < n) {
+        const char *name = (const char *)body + i; size_t nl = strnlen(name, n - i); i += nl + 1;
+        if (!nl || !strcmp(name, ".") || !strcmp(name, "..")) continue;
+        sb_puts(b, first ? "{" : ",{");
+        first = 0;
+        sb_puts(b, "\"name\":"); sb_json_string(b, name);
+        if (with_stat) {
+            char full[1024];
+            snprintf(full, sizeof full, "%s%s%s", path, path[strlen(path) - 1] == '/' ? "" : "/", name);
+            long long size = 0, mtime = 0; char kind[32] = "";
+            if (afc_stat(c, full, &size, &mtime, kind, sizeof kind) == 0)
+                sb_printf(b, ",\"size\":%lld,\"mtime\":%lld,\"is_dir\":%s", size, mtime / 1000000000LL,
+                          !strcmp(kind, "S_IFDIR") ? "true" : "false");
+        }
+        sb_puts(b, "}");
+    }
+    sb_puts(b, "]");
+    free(body);
+    return 0;
+}
+
+/* Read a whole file into a malloc'd buffer. Capped at 64 MB: this serves crash reports and the
+ * occasional media file, not a backup. */
+static uint8_t *afc_read_file(afc_conn *c, const char *path, size_t *out_n)
+{
+    long long size = 0, mtime = 0; char kind[32];
+    if (afc_stat(c, path, &size, &mtime, kind, sizeof kind) != 0 || size < 0 || size > (64 << 20)) return NULL;
+    size_t plen = strlen(path) + 1;
+    uint8_t *req = malloc(8 + plen);
+    put_u64le(req, 1);                         /* AFC_FOPEN_RDONLY */
+    memcpy(req + 8, path, plen);
+    int rc = afc_send(c, AFC_OP_FILE_OPEN, req, 8 + plen);
+    free(req);
+    if (rc != 0) return NULL;
+    uint8_t *body = NULL; size_t n = 0; uint64_t st = 0;
+    if (afc_recv(c, &body, &n, &st) != AFC_OP_FILE_OPEN_RES || n < 8) { free(body); return NULL; }
+    uint64_t handle = get_u64le(body);
+    free(body);
+
+    uint8_t *out = malloc((size_t)size + 1);
+    size_t got = 0;
+    int ok = out != NULL;
+    while (ok && got < (size_t)size) {
+        uint8_t rr[16];
+        put_u64le(rr, handle);
+        put_u64le(rr + 8, (uint64_t)((size_t)size - got < (1u << 20) ? (size_t)size - got : (1u << 20)));
+        if (afc_send(c, AFC_OP_FILE_READ, rr, 16) != 0) { ok = 0; break; }
+        long op = afc_recv(c, &body, &n, &st);
+        if (op != AFC_OP_DATA || !n) { free(body); break; }
+        memcpy(out + got, body, n);
+        got += n;
+        free(body);
+    }
+    uint8_t cl[8];
+    put_u64le(cl, handle);
+    if (afc_send(c, AFC_OP_FILE_CLOSE, cl, 8) == 0) { afc_recv(c, &body, &n, &st); free(body); }
+    if (!ok) { free(out); return NULL; }
+    *out_n = got;
+    return out;
+}
+
+static long afc_port_for(const char *service, const api_session *sess)
+{
+    if (!strcmp(service, "crash")) return sess->crashcopy_port;
+    return sess->afc_port;
+}
+
+/* Fresh reports sit elsewhere until crashreportmover moves them; connecting to it does the move
+ * and it answers "ping". Cheap, so done before every listing. */
+static void crash_mover_poke(const api_session *sess)
+{
+    if (!sess->crashmover_port) return;
+    int s = relay_open(sess, sess->crashmover_port, 15);
+    if (s < 0) return;
+    if (relay_checkin(s) == NULL) { char ping[4]; recvn(s, (uint8_t *)ping, 4); }
+    close(s);
+}
+
+static void method_list_dir(int fd, long id, const char *line)
+{
+    const api_session *sess = g_session;
+    char service[16] = "media", path[1024] = "/";
+    json_string_field(line, "service", service, sizeof service);
+    json_string_field(line, "path", path, sizeof path);
+    if (!path[0]) snprintf(path, sizeof path, "/");
+    long port = afc_port_for(service, sess);
+    if (!port) { reply_error(fd, id, "unavailable", "the device did not offer that AFC service"); return; }
+    if (!strcmp(service, "crash")) crash_mover_poke(sess);
+    afc_conn c; const char *err;
+    if (afc_open(&c, sess, port, &err) != 0) { reply_error(fd, id, "unavailable", err); return; }
+    strbuf b = {0};
+    sb_printf(&b, "{\"id\":%ld,\"ok\":true,\"result\":{\"path\":", id);
+    sb_json_string(&b, path);
+    sb_puts(&b, ",\"entries\":");
+    int rc = afc_readdir(&c, path, &b, 1);
+    close(c.fd);
+    if (rc != 0) {
+        free(b.p);
+        char msg[96];
+        snprintf(msg, sizeof msg, rc > 0 ? "AFC error %d (8 = no such path)" : "AFC read failed", rc);
+        reply_error(fd, id, "device_error", msg);
+        return;
+    }
+    sb_puts(&b, "}}\n");
+    if (b.p && !b.oom) send_all(fd, b.p, b.len);
+    free(b.p);
+}
+
+static void method_read_file(int fd, long id, const char *line)
+{
+    const api_session *sess = g_session;
+    char service[16] = "media", path[1024] = "";
+    json_string_field(line, "service", service, sizeof service);
+    json_string_field(line, "path", path, sizeof path);
+    if (!path[0]) { reply_error(fd, id, "bad_request", "path is required"); return; }
+    long port = afc_port_for(service, sess);
+    if (!port) { reply_error(fd, id, "unavailable", "the device did not offer that AFC service"); return; }
+    afc_conn c; const char *err;
+    if (afc_open(&c, sess, port, &err) != 0) { reply_error(fd, id, "unavailable", err); return; }
+    size_t n = 0;
+    uint8_t *data = afc_read_file(&c, path, &n);
+    close(c.fd);
+    if (!data) { reply_error(fd, id, "device_error", "could not read the file (missing, a directory, or over 64 MB)"); return; }
+    size_t b64cap = ((n + 2) / 3) * 4 + 1;
+    char *b64 = malloc(b64cap);
+    size_t bn = b64 ? b64_encode(data, n, b64, b64cap) : 0;
+    free(data);
+    if (!bn && n) { free(b64); reply_error(fd, id, "internal_error", "could not encode the file"); return; }
+    char head[1200];
+    int hn = snprintf(head, sizeof head, "{\"id\":%ld,\"ok\":true,\"result\":{\"size\":%zu,\"data_b64\":\"", id, n);
+    send_all(fd, head, (size_t)hn);
+    if (bn) send_all(fd, b64, bn);
+    send_all(fd, "\"}}\n", 4);
+    free(b64);
+}
+
+/* Copy every crash report into a local directory; the user-facing action. */
+static void method_export_crashes(int fd, long id, const char *line)
+{
+    const api_session *sess = g_session;
+    char dir[1024] = "";
+    json_string_field(line, "dir", dir, sizeof dir);
+    if (!dir[0]) { reply_error(fd, id, "bad_request", "dir is required"); return; }
+    if (!sess->crashcopy_port) { reply_error(fd, id, "unavailable", "the device did not offer crashreportcopymobile"); return; }
+    crash_mover_poke(sess);
+    afc_conn c; const char *err;
+    if (afc_open(&c, sess, sess->crashcopy_port, &err) != 0) { reply_error(fd, id, "unavailable", err); return; }
+    strbuf names = {0};
+    if (afc_readdir(&c, "/", &names, 0) != 0 || !names.p) { close(c.fd); free(names.p); reply_error(fd, id, "device_error", "could not list crash reports"); return; }
+    mkdir(dir, 0755);
+    int copied = 0, failed = 0;
+    /* names.p is [{"name":"..."},...]; walk it with the tiny JSON helper. */
+    const char *p = names.p;
+    while ((p = strstr(p, "\"name\":\"")) != NULL) {
+        p += 8;
+        const char *q = strchr(p, '"');
+        if (!q) break;
+        char name[512];
+        size_t nl = (size_t)(q - p) < sizeof name - 1 ? (size_t)(q - p) : sizeof name - 1;
+        memcpy(name, p, nl); name[nl] = 0;
+        p = q + 1;
+        if (!strstr(name, ".ips") && !strstr(name, ".crash") && !strstr(name, ".panic")) continue;
+        char rpath[600], lpath[1600];
+        snprintf(rpath, sizeof rpath, "/%s", name);
+        snprintf(lpath, sizeof lpath, "%s/%s", dir, name);
+        size_t n = 0;
+        uint8_t *data = afc_read_file(&c, rpath, &n);
+        if (!data) { failed++; continue; }
+        FILE *f = fopen(lpath, "wb");
+        if (f) { fwrite(data, 1, n, f); fclose(f); copied++; } else failed++;
+        free(data);
+    }
+    close(c.fd);
+    free(names.p);
+    send_line(fd, "{\"id\":%ld,\"ok\":true,\"result\":{\"copied\":%d,\"failed\":%d,\"dir\":\"%s\"}}", id, copied, failed, dir);
+}
+
 /* ------------------------------------------------------------------ console (syslog_relay)
  *
  * After the checkin the relay simply streams the device's syslog as text, one NUL-terminated line
@@ -1512,13 +1784,13 @@ static void method_tunnel_info(int fd, long id)
               "\"device_addr\":\"%s\",\"our_addr\":\"%s\",\"rsd_port\":%ld,"
               "\"services\":{\"displayservice\":%ld,\"hid\":%ld,\"screenshot\":%ld,"
               "\"diagnostics_relay\":%ld,\"appservice\":%ld,\"syslog_relay\":%ld,\"installation_proxy\":%ld,"
-              "\"misagent\":%ld,\"mcinstall\":%ld},"
+              "\"misagent\":%ld,\"mcinstall\":%ld,\"afc\":%ld,\"crash_copy\":%ld},"
               "\"udid\":\"%s\",\"screen_width\":%d,\"screen_height\":%d}}",
               id, s->tunnel_addr ? s->tunnel_addr : "",
               s->our_addr ? s->our_addr : "", s->rsd_port,
               s->display_port, s->hid_port, s->screenshot_port,
               s->diag_port, s->app_port, s->syslog_port, s->instproxy_port,
-              s->misagent_port, s->mcinstall_port,
+              s->misagent_port, s->mcinstall_port, s->afc_port, s->crashcopy_port,
               s->udid, s->screen_w, s->screen_h);
 }
 
@@ -1564,6 +1836,9 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "terminate_app"))    { method_terminate_app(fd, id, line); return; }
     if (!strcmp(method, "syslog"))           { method_syslog(fd, id); return; }
     if (!strcmp(method, "list_profiles"))    { method_list_profiles(fd, id); return; }
+    if (!strcmp(method, "list_dir"))         { method_list_dir(fd, id, line); return; }
+    if (!strcmp(method, "read_file"))        { method_read_file(fd, id, line); return; }
+    if (!strcmp(method, "export_crashes"))   { method_export_crashes(fd, id, line); return; }
     if (!strcmp(method, "select_device"))    { method_select_device(fd, id, line); return; }
     if (!strcmp(method, "tunnel_info"))       { method_tunnel_info(fd, id); return; }
     if (!strcmp(method, "take_screenshot"))   { method_screenshot(fd, id); return; }

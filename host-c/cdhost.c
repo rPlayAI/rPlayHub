@@ -670,6 +670,9 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
         "com.apple.mobile.installation_proxy.shim.remote",
         "com.apple.misagent.shim.remote",
         "com.apple.mobile.MCInstall.shim.remote",
+        "com.apple.afc.shim.remote",
+        "com.apple.crashreportcopymobile.shim.remote",
+        "com.apple.crashreportmover.shim.remote",
     };
     for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
         rp_xpc_obj svc, portv;
@@ -691,7 +694,10 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
                 else if (i == 5) out->syslog_port = resolved;
                 else if (i == 6) out->instproxy_port = resolved;
                 else if (i == 7) out->misagent_port = resolved;
-                else out->mcinstall_port = resolved;
+                else if (i == 8) out->mcinstall_port = resolved;
+                else if (i == 9) out->afc_port = resolved;
+                else if (i == 10) out->crashcopy_port = resolved;
+                else out->crashmover_port = resolved;
             }
         } else {
             printf("    %-46s MISSING\n", want[i]);

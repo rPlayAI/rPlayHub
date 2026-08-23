@@ -62,22 +62,22 @@ implement — the wire formats are already known.
 | `com.apple.mobile.house_arrest.shim.remote` | Access an app's Documents container. | known |
 | `com.apple.streaming_zip_conduit.shim.remote` | Streams an app bundle in during install. | known |
 | `com.apple.remote.installcoordination_proxy` | Coordinates installs. | unverified |
-| `com.apple.misagent.shim.remote` | Provisioning profiles. | known |
-| `com.apple.mobile.MCInstall.shim.remote` | Configuration profiles (MDM-style). | known |
+| `com.apple.misagent.shim.remote` | Provisioning profiles. | **used** (`list_profiles`) |
+| `com.apple.mobile.MCInstall.shim.remote` | Configuration profiles (MDM-style). | **used** (`list_profiles`) |
 | `com.apple.backgroundassets.lockdownservice.shim.remote` | Background asset downloads. | unverified |
 
 ## Files and backup
 
 | Service | Purpose | Status |
 |---|---|---|
-| `com.apple.afc.shim.remote` | Apple File Conduit — the media partition (`/var/mobile/Media`). | known |
+| `com.apple.afc.shim.remote` | Apple File Conduit — the media partition (`/var/mobile/Media`). | **used** (`list_dir`, `read_file`) |
 | `com.apple.coredevice.fileservice.control` | CoreDevice file transfer, control channel. | **next** |
 | `com.apple.coredevice.fileservice.data` | The matching data channel. | **next** |
 | `com.apple.mobilebackup2.shim.remote` | Full device backup and restore. | known |
 | `com.apple.mobilesync.shim.remote` | Contacts, calendars and the rest. | known |
 | `com.apple.mobile.file_relay.shim.remote` | Legacy bulk file extraction. | known |
 | `com.apple.mobile.storage_mounter_proxy.bridge` | Mounts storage. | unverified |
-| `com.apple.mobile.mobile_image_mounter.shim.remote` | Mounts the Developer Disk Image. Required before most developer services will answer. | known |
+| `com.apple.mobile.mobile_image_mounter.shim.remote` | Mounts the Developer Disk Image. Required before most developer services will answer. | **prototyped** (`host/ddi_mount.py`, Apple-signed ticket obtained) |
 
 ## Logs, crashes and diagnostics
 
@@ -85,8 +85,8 @@ implement — the wire formats are already known.
 |---|---|---|
 | `com.apple.syslog_relay.shim.remote` | Live syslog. The Console panel. | **used** (`syslog`) |
 | `com.apple.os_trace_relay.shim.remote` | Structured `os_log` stream — what Console.app actually shows. | **next** |
-| `com.apple.crashreportcopymobile.shim.remote` | Copies crash reports off the device. Device Hub's Crashes panel. | **next** |
-| `com.apple.crashreportmover.shim.remote` | Moves crash reports into place before copying. | known |
+| `com.apple.crashreportcopymobile.shim.remote` | Copies crash reports off the device. Device Hub's Crashes panel. | **used** (`export_crashes`) |
+| `com.apple.crashreportmover.shim.remote` | Moves crash reports into place before copying. | **used** |
 | `com.apple.osanalytics.logTransfer` | Analytics log transfer. | unverified |
 | `com.apple.sysdiagnose.remote` | Triggers and collects a sysdiagnose. | known |
 | `com.apple.sysdiagnose.remote.trusted` | Same, on a trusted connection. | known |
@@ -166,7 +166,7 @@ it was verified. Nothing advertised can rotate a physical device;
 | Pair / Unpair | `dt.remotepairingdeviced.lockdown` + `lockdown.remote.untrusted` | the RemotePairing handshake is designed but not built (`doc/REMOTEPAIRING-PROTOCOL.md`) |
 | Clipboard | `coredevice.pasteboardservice` | message format not decoded |
 | Console | `syslog_relay` / `os_trace_relay` | syslog built; `os_trace` needs its binary format |
-| Crash reports | `crashreportcopymobile` | needs `afc`-style transfer |
+| Crash reports | `crashreportcopymobile` | built |
 | App list | `coredevice.appservice` | built, with launch/terminate |
 | Process list | `coredevice.appservice` (`listprocesses`) | built |
 | Keyboard input | `hid.universalhidservice` (surface 512) | report format for the keyboard surface |
