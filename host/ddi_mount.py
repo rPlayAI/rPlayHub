@@ -196,7 +196,13 @@ def mount(s):
         dmg = f.read()
     with open(tc_path, "rb") as f:
         trust_cache = f.read()
-    r = cmd(s, Command="ReceiveBytes", ImageType="Personalized", ImageSize=len(dmg), ImageSignature=ticket)
+    # A locked phone refuses the mount by closing this connection with no reply
+    # ("Device is locked, can't mount" -- confirmed against ideviceimagemounter). Turn the raw
+    # ConnectionError into the actionable message.
+    try:
+        r = cmd(s, Command="ReceiveBytes", ImageType="Personalized", ImageSize=len(dmg), ImageSignature=ticket)
+    except ConnectionError:
+        sys.exit("mount refused -- unlock the device (enter its passcode) and try again")
     if r.get("Status") != "ReceiveBytesAck":
         raise RuntimeError(f"ReceiveBytes: {r}")
     s.sendall(dmg)

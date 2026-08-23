@@ -77,7 +77,7 @@ implement — the wire formats are already known.
 | `com.apple.mobilesync.shim.remote` | Contacts, calendars and the rest. | known |
 | `com.apple.mobile.file_relay.shim.remote` | Legacy bulk file extraction. | known |
 | `com.apple.mobile.storage_mounter_proxy.bridge` | Mounts storage. | unverified |
-| `com.apple.mobile.mobile_image_mounter.shim.remote` | Mounts the Developer Disk Image. Required before most developer services will answer. | **prototyped** (`host/ddi_mount.py`, Apple-signed ticket obtained) |
+| `com.apple.mobile.mobile_image_mounter.shim.remote` | Mounts the Developer Disk Image. Required before most developer services will answer. | **used** (`host/ddi_mount.py` mounts end to end, no Xcode) |
 
 ## Logs, crashes and diagnostics
 

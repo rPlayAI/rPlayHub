@@ -153,12 +153,13 @@ request shape right took diffing against one built by libtatsu (`SepNonce`,
 `PearlCertificationRootPub`, the `@VersionInfo` string, `EPRO`/`ESEC` on rule-less entries). The
 phone also caches the manifest it last accepted, keyed by the current nonce, and
 `QueryPersonalizationManifest` returns it without any network -- the script tries that first.
-`ReceiveBytes` + `MountImage` are sent exactly as ideviceimagemounter's debug log shows, but the
-mount itself has not been exercised: it needs a rebooted phone with nothing mounted (`mount`
-refuses when an image is present). **`scripts/activate-after-reboot.sh`** wraps it for daily use:
-it waits for the daemon's tunnel, mounts only when nothing is mounted, and `--watch` re-mounts
-after every reboot -- the replacement for launching Device Hub. First real run should be right
-after a reboot, with the daemon up and no Apple tool having touched the phone. Porting to C is straightforward -- plists and a TLS POST --
+**The full mount was exercised end to end on 2026-08-23**: iPhone 13 rebooted (DDI gone), daemon up,
+`scripts/activate-after-reboot.sh` requested a ticket from Apple and mounted the DDI with no Xcode
+and no Device Hub -- rPlayHub is self-sufficient for activation. The one catch, learned here: the
+mount is refused on a *locked* phone (the device closes the ReceiveBytes connection with no reply;
+Apple's own `ideviceimagemounter` fails identically with "Device is locked, can't mount"). Unlock
+first. `activate-after-reboot.sh` waits for the daemon's tunnel, mounts only when nothing is
+mounted, and `--watch` re-mounts after every reboot -- the standing replacement for Device Hub. Porting to C is straightforward -- plists and a TLS POST --
 and is what makes a TestFlight user self-sufficient after a reboot (`app/DISTRIBUTION.md`).
 
 ## What parity does NOT require
