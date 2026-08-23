@@ -13,9 +13,10 @@ set -e
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUT="devicehub-$STAMP.pcap"
 
-# find the CoreDevice tunnel utun: ULA fd.. address and/or MTU 16000
-IF=""
-for i in $(ifconfig -l | tr ' ' '\n' | grep '^utun'); do
+# find the CoreDevice tunnel utun: ULA fd.. address and/or MTU 16000. Pass one explicitly when
+# more than one tunnel is up (our own cdhost makes one too): capture-devicehub.sh utun9
+IF="${1:-}"
+[ -n "$IF" ] || for i in $(ifconfig -l | tr ' ' '\n' | grep '^utun'); do
   if ifconfig "$i" 2>/dev/null | grep -q "inet6 fd"; then IF="$i"; break; fi
   if ifconfig "$i" 2>/dev/null | grep -q "mtu 16000"; then IF="$i"; break; fi
 done

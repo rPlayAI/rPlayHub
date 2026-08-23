@@ -54,8 +54,8 @@ run), so the engine's `stream_info` counters read zero while mirroring works. An
 | Console / live log panel | inferred | ✅ verified live 2026-08-23 | `syslog_relay.shim.remote` | `os_trace_relay` (structured) still needs its binary format |
 | Crash reports panel | **confirmed** (`doc/RSD-SERVICES.md`) | ✅ 2026-08-23 (Files tab → Crash Reports, Export All) | `crashreportmover` + AFC over `crashreportcopymobile` | none |
 | Clipboard sync | inferred | ❌ | `coredevice.pasteboardservice` | message format not decoded |
-| Physical keyboard input | inferred | ❌ | HID surface 512 | report format not decoded |
-| Lock / volume / Siri buttons | inferred | ❌ | HID surface 1026 (`mainScreenButtons`) | report format not decoded |
+| Physical keyboard input | inferred | ❌ | HID surface 512 (`mainKeyboard`) | needs one capture of Device Hub typing -- see "Keyboard: what is known" |
+| Lock / volume / Siri buttons | inferred | ❌ | HID surface 1026 (`mainScreenButtons`) | same capture as the keyboard row |
 | Pair / Unpair / trust prompt | inferred | ❌ | `dt.remotepairingdeviced.lockdown` + `lockdown.remote.untrusted` | RemotePairing handshake designed but not built (`doc/REMOTEPAIRING-PROTOCOL.md`) |
 | File browsing (Media partition) | inferred | ✅ 2026-08-23 (Files tab; list + pull, no write yet) | `afc.shim.remote` | none |
 | Backup / restore | inferred | ❌ | `mobilebackup2.shim.remote` | classic protocol; large surface |
@@ -89,6 +89,27 @@ Ordered by gap closed per unit work:
 4. **Crash reports** — small step past syslog once afc-style transfer exists (which file browsing also needs: two features, one substrate).
 5. **Keyboard input** — needs one decoded HID report format (surface 512); unlocks typing in the View Screen.
 6. **Pair / Unpair** — biggest single lift; blocked on building the RemotePairing handshake that `doc/REMOTEPAIRING-PROTOCOL.md` already specifies down to wire messages. Note this handshake is ALSO the prerequisite for remote-device support (`doc/REMOTE-SUPPORT.md`) — doing it serves both goals.
+
+## Keyboard: what is known (2026-08-23)
+
+Surface 512 is not a USB keyboard. `dtuhidd` on the phone decodes every report by its first byte as
+an Apple "gesture" report ID -- the touchscreen's is 9 (58 bytes, which we already send and which
+Apple's own capture confirms byte for byte) -- and it says so in syslog, which makes the phone an
+oracle: `No gesture for report ID n` for unknown IDs, `Failed to decode report for gesture` for
+known IDs given the wrong shape, silence for a clean decode. Probing 1-24 with 16 zero bytes:
+IDs **2, 3, 4, 7, 14, 15, 16, 17** decode; **1, 5, 9, 11, 12, 13, 18, 19** are known but want
+another length; the rest are unknown. Boot-keyboard layouts (with and without a report-ID byte)
+and each accepted ID filled with keycode 0x04 typed nothing into a focused Safari address bar.
+Apple's existing capture (`reference/captures/devicehub-iphone13-ios27.pcap`) holds no keyboard
+traffic, only touchscreen (257/0x09) and 152 reports on surface 1281 (ID 0x13, 19 bytes -- the
+pointer/gesture surface, also not decoded yet).
+
+**The five-minute experiment that finishes this:** with Device Hub connected to the iPhone 13 (not
+yet viewing), `sh host/capture-devicehub.sh <Device Hub's utun>` (cdhost has its own utun, so name
+the interface), then View Screen, click a text field, type `abc`, press a volume button, and stop.
+`python3 host/decode_hid_capture.py devicehub-*.pcap --surface 512` prints every keyboard report;
+`--surface 1026` the button ones. With those bytes in hand, `type_text` and the lock/volume buttons
+are each an afternoon on the existing HID path.
 
 ## Structural gaps (not single features)
 
