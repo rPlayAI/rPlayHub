@@ -207,7 +207,9 @@ def mount(s):
     # the staging file the upload landed in.
     r = cmd(s, Command="MountImage", ImagePath="/private/var/mobile/Media/PublicStaging/staging.dimage",
             ImageSignature=ticket, ImageType="Personalized", ImageTrustCache=trust_cache)
-    print("MountImage:", r)
+    if r.get("Status") != "Complete":
+        raise RuntimeError(f"MountImage did not complete: {r}")
+    print("MountImage: Complete")
 
 
 def main():
