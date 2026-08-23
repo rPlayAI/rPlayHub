@@ -22,6 +22,7 @@
 #include "../core/rp_coredevice.h"
 #include "media.h"
 #include "../core/rp_xpc.h"
+#include "ddi.h"
 
 /* Big enough for the largest reply we ask for, which is a full-screen PNG.
  *
@@ -1526,6 +1527,21 @@ static void method_device_info(int fd, long id, const char *line)
     free(json);
 }
 
+/* Mount the developer disk image now (the app's manual trigger, e.g. after a reboot the daemon
+ * did not see). Same flow the daemon runs on startup. */
+static void method_activate(int fd, long id)
+{
+    const api_session *s = g_session;
+    if (!s->mounter_port) { reply_error(fd, id, "unavailable", "the device did not offer mobile_image_mounter"); return; }
+    int rc = cdhost_ddi_activate(s->tunnel_addr, s->mounter_port, s->ddi_dir);
+    if (rc == RP_DDI_OK || rc == RP_DDI_ALREADY)
+        send_line(fd, "{\"id\":%ld,\"ok\":true,\"result\":{\"mounted\":true,\"already\":%s}}", id, rc == RP_DDI_ALREADY ? "true" : "false");
+    else if (rc == RP_DDI_LOCKED)  reply_error(fd, id, "locked", "unlock the device and try again");
+    else if (rc == RP_DDI_NO_DDI)  reply_error(fd, id, "no_ddi", "the DDI files are not available on this host");
+    else if (rc == RP_DDI_TSS_FAILED) reply_error(fd, id, "tss_failed", "Apple's signing server refused or was unreachable");
+    else reply_error(fd, id, "internal_error", "could not mount the developer disk image");
+}
+
 static void method_ping(int fd, long id)
 {
     send_line(fd, "{\"id\":%ld,\"ok\":true,\"result\":{\"engine\":\"cdhostd\",\"language\":\"c\"}}", id);
@@ -1825,6 +1841,7 @@ static void dispatch(int fd, const char *line)
 
     if (!strcmp(method, "ping"))              { method_ping(fd, id); return; }
     if (!strcmp(method, "quit"))              { method_quit(fd, id); return; }
+    if (!strcmp(method, "activate"))          { method_activate(fd, id); return; }
     if (!strcmp(method, "device_info"))       { method_device_info(fd, id, line); return; }
     if (!strcmp(method, "list_devices"))      { method_list_devices(fd, id); return; }
     if (!strcmp(method, "stream_info"))       { method_stream_info(fd, id); return; }

@@ -28,9 +28,11 @@ Open rPlayHub, pick the phone in the sidebar. The engine is already running in t
 
 ## After the iPhone reboots (iOS 17+)
 
-iOS discards the developer disk image on every reboot; without it the screen/control services go
-quiet. If you have Xcode or Apple's Device Hub, connect the phone with either once to remount it.
-(Self-contained remount from within rPlayHub is on the roadmap — see app/DISTRIBUTION.md.)
+Nothing to do. iOS discards the developer disk image on every reboot, and the engine remounts it
+itself when it connects — no Xcode, no Device Hub. It needs an internet connection (it asks Apple's
+signing server for a per-boot ticket) and the **phone unlocked** for the few seconds of mounting.
+If the screen is black right after a reboot, unlock the phone and reopen rPlayHub, or use the app's
+Engine menu to trigger it.
 
 ## If the screen stays black
 

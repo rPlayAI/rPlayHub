@@ -34,6 +34,17 @@ cp "$ROOT/host-c/cdhost" "$APP/Contents/MacOS/cdhost"
 mkdir -p "$APP/Contents/Library/LaunchDaemons"
 cp "$ROOT/app/rPlayHub/daemon/com.rplay.rplayhub.engine.plist" "$APP/Contents/Library/LaunchDaemons/"
 
+say "    bundling the iOS DDI so the engine can self-activate after a reboot (no Xcode needed)"
+DDI_SRC="${RPLAY_DDI:-/Library/Developer/DeveloperDiskImages/iOS_DDI}"
+if [ -f "$DDI_SRC/Restore/BuildManifest.plist" ]; then
+    mkdir -p "$APP/Contents/Resources/iOS_DDI"
+    cp -R "$DDI_SRC/Restore" "$APP/Contents/Resources/iOS_DDI/"
+    # The daemon plist tells cdhost where to find it, since it runs from Contents/MacOS.
+    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:RPLAY_DDI string Contents/Resources/iOS_DDI"         "$APP/Contents/Library/LaunchDaemons/com.rplay.rplayhub.engine.plist" 2>/dev/null || true
+else
+    echo "    (no DDI at $DDI_SRC -- skipping; the colleague will need Xcode/Device Hub after a reboot)"
+fi
+
 say "3/6  bundling OpenSSL dylibs beside cdhost, rewriting load paths"
 for lib in $(otool -L "$APP/Contents/MacOS/cdhost" | awk '/opt\/homebrew.*(ssl|crypto)/{print $1}'); do
     base="$(basename "$lib")"

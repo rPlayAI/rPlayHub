@@ -16,6 +16,7 @@
 #include <limits.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -30,6 +31,7 @@
 #include "../core/rp_remotexpc.h"
 #include "api_server.h"
 #include "../core/rp_xpc.h"
+#include "ddi.h"
 
 #define USBMUXD_SOCKET "/var/run/usbmuxd"
 #define LOCKDOWN_PORT 62078
@@ -673,6 +675,7 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
         "com.apple.afc.shim.remote",
         "com.apple.crashreportcopymobile.shim.remote",
         "com.apple.crashreportmover.shim.remote",
+        "com.apple.mobile.mobile_image_mounter.shim.remote",
     };
     for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
         rp_xpc_obj svc, portv;
@@ -697,7 +700,8 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
                 else if (i == 8) out->mcinstall_port = resolved;
                 else if (i == 9) out->afc_port = resolved;
                 else if (i == 10) out->crashcopy_port = resolved;
-                else out->crashmover_port = resolved;
+                else if (i == 11) out->crashmover_port = resolved;
+                else out->mounter_port = resolved;
             }
         } else {
             printf("    %-46s MISSING\n", want[i]);
@@ -1133,6 +1137,33 @@ int main(int argc, char **argv) {
     }
     if (rsd_enumerate(addr, rsd, &session) < 0)
         fprintf(stderr, "  service discovery failed\n");
+
+    /* Self-activation: iOS 17+ discards the developer disk image on every reboot, and without it
+     * the screen/control services stay silent. Mount it ourselves rather than requiring Xcode or
+     * Device Hub -- the whole point of shipping this daemon (host/ddi_mount.py proved the flow,
+     * ddi.c is the C port). Only when the phone is new enough to need it and does not already have
+     * one; a locked phone is reported, not retried, since the mount needs it unlocked. */
+    /* Where a shipped DDI would be: Contents/Resources/iOS_DDI, two dirs up from the executable
+     * (Contents/MacOS/cdhost). NULL when that folder is absent (dev builds), which makes ddi.c
+     * fall back to the system Xcode location. */
+    static char bundle_ddi[1400];
+    { char exe[1200]; snprintf(exe, sizeof exe, "%s", g_self);
+      char *macos = strrchr(exe, '/'); if (macos) *macos = 0;      /* .../Contents/MacOS */
+      char *contents = strrchr(exe, '/'); if (contents) *contents = 0;  /* .../Contents */
+      snprintf(bundle_ddi, sizeof bundle_ddi, "%s/Resources/iOS_DDI", exe);
+      struct stat st; char probe[1500];
+      snprintf(probe, sizeof probe, "%s/Restore/BuildManifest.plist", bundle_ddi);
+      session.ddi_dir = (stat(probe, &st) == 0) ? bundle_ddi : NULL; }
+
+    if (session.mounter_port && prodver[0] && atoi(prodver) >= 17) {
+        printf("\n== Layer 3c: developer disk image ==\n");
+        int drc = cdhost_ddi_activate(addr, session.mounter_port, session.ddi_dir);
+        if (drc == RP_DDI_ALREADY)      printf("  already mounted\n");
+        else if (drc == RP_DDI_OK)      printf("  mounted (no Xcode/Device Hub needed)\n");
+        else if (drc == RP_DDI_LOCKED)  printf("  the device is locked -- unlock it, then reconnect\n");
+        else if (drc == RP_DDI_NO_DDI)  printf("  DDI files not bundled; mount via Xcode/Device Hub, or set RPLAY_DDI\n");
+        else                            printf("  could not mount the DDI (rc=%d); mirroring may not work\n", drc);
+    }
 
     printf("\n== Layer 4: daemon ==\n");
     /* Same ports and same JSON contract as the Python engine, so the existing app connects to

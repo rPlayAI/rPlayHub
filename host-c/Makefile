@@ -56,9 +56,9 @@ CFLAGS   += -I$(CORE_DIR)
 
 all: cdhost
 
-cdhost: cdhost.c api_server.c media.c $(CORE_SRC) $(TLS_SRC)
+cdhost: cdhost.c api_server.c media.c ddi.c $(CORE_SRC) $(TLS_SRC)
 	@echo "  TLS backend: $(TLS)"
-	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c $(CORE_SRC) $(TLS_SRC) $(LDFLAGS) -lz
+	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c ddi.c $(CORE_SRC) $(TLS_SRC) $(LDFLAGS) -lz
 
 clean:
 	rm -f cdhost

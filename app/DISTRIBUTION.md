@@ -50,10 +50,14 @@ What the sandbox still cannot do is run our root daemon, so a TestFlight build i
    way rplay tested its exceptions: build, sign for App Store Connect, run, see `CONNECTED` or
    `EPERM`. If it fails, the fallback is the RemotePairing transport (section "2." below), which
    needs no usbmuxd at all and which the parity table wants anyway for Pair/Unpair.
-3. **Bundle the DDI and mount it ourselves.** PROVEN end to end on 2026-08-23: a rebooted iPhone 13
-   with nothing mounted was activated by `host/ddi_mount.py` (wrapped as
-   `scripts/activate-after-reboot.sh`) with no Xcode and no Device Hub. Port that flow to the C
-   engine and it ships.
+3. **Bundle the DDI and mount it ourselves.** DONE 2026-08-23. Proven end to end via
+   `host/ddi_mount.py`, then ported to C as `host-c/ddi.c` and wired into the engine: cdhost mounts
+   the DDI automatically on connect (a "Layer 3c" step) for any iOS 17+ device that lacks one, and
+   exposes an `activate` API method for the app to trigger manually. `scripts/package-test-dmg.sh`
+   copies the iOS DDI into `Contents/Resources/iOS_DDI`, which cdhost finds by its own path. The C
+   TSS request was validated byte-identical to the Python one; the mount itself is proven from
+   Python and shares the wire. Remaining ship-time question is unchanged: whether to bundle Apple's
+   DDI or fetch it, and covering multiple iOS majors.
 
    **What the DDI is and why it is per boot.** The developer disk image is Apple's bundle of
    on-device developer daemons; the CoreDevice services rPlayHub lives on (`displayservice`,

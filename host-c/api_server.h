@@ -78,6 +78,8 @@ typedef struct {
     long        afc_port;             /* afc.shim.remote: the Media partition */
     long        crashcopy_port;       /* crashreportcopymobile.shim.remote: AFC over crash reports */
     long        crashmover_port;      /* crashreportmover.shim.remote: poke before listing */
+    long        mounter_port;         /* mobile_image_mounter.shim.remote: DDI self-activation */
+    const char *ddi_dir;             /* where the bundled DDI lives, or NULL to search defaults */
 
     /* Needed to negotiate the media stream: the offer carries our address, and the SSRC in it
      * must be the same value the RTCP session uses. */
