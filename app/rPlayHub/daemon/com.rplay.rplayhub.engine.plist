@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The engine, run as root by launchd so it can create the tunnel utun. Registered by the
+	     app via SMAppService and approved once by the user in System Settings > Login Items.
+	     BundleProgram is relative to the app bundle root. See app/DISTRIBUTION.md. -->
+	<key>Label</key>
+	<string>com.rplay.rplayhub.engine</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/cdhost</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<!-- Restart if it crashes, but not if it exits cleanly (a clean exit is 'quit'). The
+		     re-exec that switches device is an execv, not an exit, so launchd does not see it. -->
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/tmp/rplayhub-engine.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/rplayhub-engine.log</string>
+</dict>
+</plist>

@@ -1,45 +1,40 @@
 # rPlayHub — testing on another Mac
 
-This DMG carries both halves of rPlayHub: **rPlayHub.app** (the window you click) and
-**engine/cdhost** (the privileged engine it talks to). They talk over localhost, exactly as on the
-build machine.
+This DMG is a single app. The engine that reaches the device runs as a background system service
+embedded in the app; you approve it once and never run any command by hand.
 
-TestFlight is not an option yet — the engine must run as root to create the tunnel interface, and
-the App Store sandbox forbids that. This is the Developer ID build; it runs on any Mac once
-notarized.
+TestFlight is not an option yet — the engine needs system privileges to create the tunnel
+interface, which the App Store sandbox forbids. This is the Developer ID build; it runs on any Mac
+once notarized.
+
+## Install
+
+1. Drag **rPlayHub.app** to /Applications and open it.
+2. On first launch it asks to enable its background engine. Click **Open Login Items** and turn on
+   **rPlayHub**. (macOS runs the engine with system privileges after this one-time approval — the
+   same way Apple's own tools run their device daemon.) That is the only setup step on the Mac.
 
 ## One-time setup on the iPhone
 
-1. **Pair and trust** the phone with this Mac: connect by USB once, unlock, tap **Trust**.
-   (Finder, Xcode, or Apple's Device Hub all create the pairing record rPlayHub needs.)
+1. **Pair and trust**: connect by USB once, unlock, tap **Trust**. (Finder, Xcode, or Apple's
+   Device Hub all create the pairing record.)
 2. **Developer Mode on**: Settings → Privacy & Security → Developer Mode → on, then reboot.
 3. iOS **27 or later** to mirror the screen. iOS 26 and earlier connect and report info but cannot
    mirror — the same limit Apple's Device Hub has.
 
-## Each session
+## Use it
 
-1. Drag **rPlayHub.app** to /Applications (or run it in place).
-2. In Terminal, start the engine as root:
-
-       sudo /Volumes/rPlayHub*/engine/cdhost        # or wherever you copied the engine folder
-
-   Keep this Terminal open — it holds the tunnel. Ctrl-C stops it.
-3. Launch **rPlayHub**, pick the phone in the sidebar.
+Open rPlayHub, pick the phone in the sidebar. The engine is already running in the background.
 
 ## After the iPhone reboots (iOS 17+)
 
-iOS discards the developer disk image on every reboot, and without it the screen/control services
-go quiet. Two ways to restore it:
-
-- **If you have Xcode or Apple's Device Hub**, connect the phone with either once; it remounts the
-  image. Then use rPlayHub.
-- **Self-contained** (no Xcode): from a checkout of the rPlayHub source, with the engine running,
-  `./scripts/activate-after-reboot.sh` mounts it for you (needs Python 3 and the iOS DDI files).
-  Bundling that into the app is on the roadmap (see app/DISTRIBUTION.md).
+iOS discards the developer disk image on every reboot; without it the screen/control services go
+quiet. If you have Xcode or Apple's Device Hub, connect the phone with either once to remount it.
+(Self-contained remount from within rPlayHub is on the roadmap — see app/DISTRIBUTION.md.)
 
 ## If the screen stays black
 
 - The phone must be **unlocked** for the developer image to mount.
-- If the phone left wifi mid-session, the engine can keep a dead session — restart `cdhost`.
-- Check the Terminal running `cdhost`: it prints each layer as it connects and says plainly when a
-  device is too old to mirror.
+- The engine logs to /tmp/rplayhub-engine.log — it prints each connection layer and says plainly
+  when a device is too old to mirror or when a session has gone stale (leave/rejoin wifi).
+- To turn the engine off, toggle rPlayHub off under System Settings > General > Login Items.

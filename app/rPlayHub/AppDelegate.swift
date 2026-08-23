@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Load the capture plug-in now: it takes about a second to expose devices.
         USBMirror.prime()
+        enableEngineIfEmbedded()
         buildMenu()
         buildWindow()
         connect()
@@ -258,6 +259,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar.isHidden.toggle()
     }
 
+    /// Bring the embedded root engine up via SMAppService on launch. No-op in dev builds, which
+    /// carry no daemon and expect a manually-run cdhost.
+    private func enableEngineIfEmbedded() {
+        guard EngineService.isEmbedded else { return }
+        switch EngineService.enable() {
+        case .requiresApproval:
+            // First run: guide the user to approve it, once.
+            let alert = NSAlert()
+            alert.messageText = "Approve the rPlayHub engine"
+            alert.informativeText = "rPlayHub needs its background engine, which runs with system "
+                + "privileges to reach the device. Turn on \u{201C}rPlayHub\u{201D} under Login "
+                + "Items, then it starts automatically from now on."
+            alert.addButton(withTitle: "Open Login Items")
+            alert.addButton(withTitle: "Later")
+            if alert.runModal() == .alertFirstButtonReturn { EngineService.openApprovalSettings() }
+        case .failed(let why):
+            AppBuild.log("engine register failed: \(why)")
+        default:
+            break
+        }
+    }
+
+    @objc private func manageEngine() {
+        switch EngineService.state {
+        case .notEmbedded:
+            present(title: "No embedded engine",
+                    text: "This build has no bundled engine. Run the engine yourself with "
+                        + "\u{2018}sudo ./host-c/cdhost\u{2019}, which is how development builds work.")
+        case .enabled:
+            present(title: "Engine is running",
+                    text: "The rPlayHub engine is enabled and runs at startup with system "
+                        + "privileges. Manage it under System Settings > General > Login Items.")
+        case .requiresApproval, .notRegistered:
+            _ = EngineService.enable()
+            EngineService.openApprovalSettings()
+        case .failed(let why):
+            present(title: "Engine problem", text: why)
+        }
+    }
+
     private func buildMenu() {
         let mainMenu = NSMenu()
 
@@ -268,6 +309,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
         recordItem = appMenu.addItem(withTitle: "Start Recording",
                                      action: #selector(toggleRecording), keyEquivalent: "r")
+        appMenu.addItem(withTitle: "Engine (Background Service)…",
+                        action: #selector(manageEngine), keyEquivalent: "").target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Reveal Last Recording",
                         action: #selector(revealRecording), keyEquivalent: "R")
         appMenu.addItem(.separator())

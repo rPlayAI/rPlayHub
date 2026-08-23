@@ -198,7 +198,19 @@ XPC codec, RSD enumeration, the media-stream offer, and HID. Until that serves t
 ports, registering a privileged helper would only get the user a System Settings prompt and still no
 video — which is why the packaging step comes second, not first.
 
-Today the engine is `host/mirror.py` started by `./scripts/live.sh`, which is the honest interim.
+**Built 2026-08-23:** the daemon is embedded and auto-starts as root. `app/rPlayHub/EngineService.swift`
+registers `Contents/Library/LaunchDaemons/com.rplay.rplayhub.engine.plist` via
+`SMAppService.daemon`; the user approves it once under System Settings > Login Items and macOS runs
+`Contents/MacOS/cdhost` as root at every login -- no `sudo` by hand. `scripts/package-test-dmg.sh`
+embeds `cdhost` and its OpenSSL dylibs (`@loader_path`, so no Homebrew on the target) into the
+signed app bundle. It is additive: a Debug build carries no daemon, so `EngineService` reports
+`.notEmbedded` and the app talks to a manually-run `cdhost`, keeping the dev workflow unchanged.
+Verified: deep-strict signature over the bundle-with-engine, and the embedded cdhost runs
+self-contained. Untested until a real approval: the SMAppService register + approve round trip on a
+clean Mac. Note this is the Developer-ID path only -- SMAppService daemons are still disallowed for
+the App Store, so TestFlight continues to need the no-root rework above.
+
+The older interim (`host/mirror.py` via `./scripts/live.sh`) remains for Python-side work.
 
 ## Version bumping
 
