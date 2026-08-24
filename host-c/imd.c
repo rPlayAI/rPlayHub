@@ -194,3 +194,113 @@ int usbmux_enumerate(api_device *out, int max)
     }
     return n;
 }
+
+/* ------------------------------------------------------------------ tunnel bringup (Stage 3)
+ *
+ * Layers 0-2 via libimobiledevice, replacing the hand-rolled usbmux + lockdown + our-TLS path
+ * (the piece that does not port: /var/run/usbmuxd is a macOS unix socket, and lockdown's TLS is
+ * ours). idevice_new + lockdownd_client_new_with_handshake do usbmux discovery, the pair-record
+ * TLS session, and device queries; lockdownd_start_service + idevice_connect (+ enable_ssl) hand
+ * back a connected, TLS'd CoreDeviceProxy channel. cdhost.c wraps that idevice_connection_t in a
+ * conn_t and runs the existing CoreDeviceProxy handshake + packet pump over it -- unchanged.
+ *
+ * The idevice_t is deliberately kept alive for the daemon's lifetime (the connection rides on it),
+ * and the daemon runs until killed, so it is not freed.
+ */
+#include <libimobiledevice/lockdown.h>
+
+int imd_bringup(void **out_conn, char *udid_out, size_t udidlen,
+                char *devname, size_t dnlen, char *prodver, size_t pvlen)
+{
+    printf("== Layer 0: usbmux (libusbmuxd) ==\n");
+    api_device devs[API_MAX_DEVICES];
+    int n = usbmux_enumerate(devs, API_MAX_DEVICES);
+    if (n <= 0) { fprintf(stderr, "no devices\n"); return -1; }
+    const char *want = getenv("RPLAY_UDID");
+    int chosen = -1;
+    for (int i = 0; i < n; i++) {
+        printf("  udid=%s conn=%s\n", devs[i].udid, devs[i].connection);
+        if (want && *want) { if (!strncmp(devs[i].udid, want, strlen(want)) && chosen < 0) chosen = i; }
+        else if (chosen < 0 || (!strcmp(devs[i].connection, "USB") && strcmp(devs[chosen].connection, "USB")))
+            chosen = i;   /* prefer USB when a phone is on both transports (wifi displayservice is flakier) */
+    }
+    if (chosen < 0) { fprintf(stderr, "no matching device\n"); return -1; }
+    snprintf(udid_out, udidlen, "%s", devs[chosen].udid);
+    printf("  -> using the %s entry (%s)\n", devs[chosen].connection, udid_out);
+
+    idevice_t dev = NULL;
+    if (idevice_new_with_options(&dev, udid_out, IDEVICE_LOOKUP_USBMUX | IDEVICE_LOOKUP_NETWORK) != IDEVICE_E_SUCCESS) {
+        fprintf(stderr, "idevice_new failed\n"); return -1;
+    }
+
+    printf("\n== Layer 1-1.5: lockdown + TLS session (libimobiledevice) ==\n");
+    lockdownd_client_t lk = NULL;
+    if (lockdownd_client_new_with_handshake(dev, &lk, "rplay-hub") != LOCKDOWN_E_SUCCESS || !lk) {
+        fprintf(stderr, "lockdown handshake failed (device paired & trusted?)\n");
+        idevice_free(dev); return -1;
+    }
+    const char *keys[] = { "DeviceName", "ProductType", "ProductVersion", "BuildVersion", "UniqueChipID" };
+    snprintf(devname, dnlen, "?"); snprintf(prodver, pvlen, "?");
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        plist_t v = NULL;
+        char out[128] = "?";
+        if (lockdownd_get_value(lk, NULL, keys[i], &v) == LOCKDOWN_E_SUCCESS && v) {
+            if (plist_get_node_type(v) == PLIST_STRING) { char *s = NULL; plist_get_string_val(v, &s); if (s) { snprintf(out, sizeof out, "%s", s); free(s); } }
+            else if (plist_get_node_type(v) == PLIST_UINT) { uint64_t u = 0; plist_get_uint_val(v, &u); snprintf(out, sizeof out, "%llu", (unsigned long long)u); }
+            plist_free(v);
+        }
+        printf("  %-15s = %s\n", keys[i], out);
+        if (!strcmp(keys[i], "DeviceName")) snprintf(devname, dnlen, "%s", out);
+        if (!strcmp(keys[i], "ProductVersion")) snprintf(prodver, pvlen, "%s", out);
+    }
+    if (atoi(prodver) > 0 && atoi(prodver) < 27)
+        printf("\n  ⚠️  iOS %s cannot mirror (screen viewing needs iOS 27). Everything else works.\n", prodver);
+
+    printf("\n== Layer 2: CoreDevice tunnel (CoreDeviceProxy) ==\n");
+    lockdownd_service_descriptor_t svc = NULL;
+    if (lockdownd_start_service(lk, "com.apple.internal.devicecompute.CoreDeviceProxy", &svc) != LOCKDOWN_E_SUCCESS || !svc) {
+        fprintf(stderr, "CoreDeviceProxy StartService failed\n");
+        lockdownd_client_free(lk); idevice_free(dev); return -1;
+    }
+    printf("  CoreDeviceProxy port=%d ssl=%d\n", svc->port, svc->ssl_enabled);
+    idevice_connection_t conn = NULL;
+    if (idevice_connect(dev, svc->port, &conn) != IDEVICE_E_SUCCESS || !conn) {
+        fprintf(stderr, "CoreDeviceProxy connect failed\n");
+        lockdownd_service_descriptor_free(svc); lockdownd_client_free(lk); idevice_free(dev); return -1;
+    }
+    if (svc->ssl_enabled && idevice_connection_enable_ssl(conn) != IDEVICE_E_SUCCESS) {
+        fprintf(stderr, "CoreDeviceProxy TLS failed\n");
+        idevice_disconnect(conn); lockdownd_service_descriptor_free(svc); lockdownd_client_free(lk); idevice_free(dev); return -1;
+    }
+    lockdownd_service_descriptor_free(svc);
+    lockdownd_client_free(lk);          /* the service is started; the client is no longer needed */
+    /* dev is intentionally NOT freed: the connection rides on it for the daemon's life. */
+    *out_conn = conn;
+    return 0;
+}
+
+/* Blocking send/recv over the idevice connection, for conn_t in cdhost.c (which cannot include
+ * libimobiledevice.h without pulling plist into everything). Loop to exact byte counts. */
+int imd_conn_send(void *conn, const void *buf, size_t n)
+{
+    size_t off = 0;
+    while (off < n) {
+        uint32_t sent = 0;
+        if (idevice_connection_send((idevice_connection_t)conn, (const char *)buf + off, (uint32_t)(n - off), &sent) != IDEVICE_E_SUCCESS || sent == 0)
+            return -1;
+        off += sent;
+    }
+    return 0;
+}
+
+int imd_conn_recv(void *conn, void *buf, size_t n)
+{
+    size_t off = 0;
+    while (off < n) {
+        uint32_t got = 0;
+        idevice_error_t e = idevice_connection_receive((idevice_connection_t)conn, (char *)buf + off, (uint32_t)(n - off), &got);
+        if (e != IDEVICE_E_SUCCESS || got == 0) return -1;
+        off += got;
+    }
+    return 0;
+}

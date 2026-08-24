@@ -43,6 +43,15 @@ int usbmux_enumerate(api_device *out, int max);
  * "unavailable":{..},"session_error":..}). Returns non-zero with {"error":..} in `json`. */
 int cdhost_device_info(const char *udid, char *json, size_t cap);
 
+/* Stage-3 tunnel bringup via libimobiledevice (host-c/imd.c). Does Layers 0-2 and returns a
+ * connected, TLS'd CoreDeviceProxy channel as an opaque idevice_connection_t in *out_conn; the
+ * caller wraps it in a conn_t and runs the CoreDeviceProxy handshake + pump over it. Fills the
+ * chosen udid, device name and iOS version. Returns 0 on success. */
+int imd_bringup(void **out_conn, char *udid_out, size_t udidlen,
+                char *devname, size_t dnlen, char *prodver, size_t pvlen);
+int imd_conn_send(void *conn, const void *buf, size_t n);
+int imd_conn_recv(void *conn, void *buf, size_t n);
+
 /* Bind a different device. Does not return on success.
  *
  * Implemented by re-executing this daemon with the new udid, rather than by unwinding the session

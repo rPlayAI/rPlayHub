@@ -26,7 +26,15 @@ does the CoreDeviceProxy handshake over it.
    name/version/type, in `host-c/imd.c`; -60 lines from cdhost.c. Returns exactly what usbmuxd
    reports (verified equal to `idevice_id -l`); network devices appear when their wifi connection
    is live, same as before. `device_id` dropped (the library keys on udid).
-3. **Tunnel bringup (Layers 0-2)** in `cdhost.c` `main`. Replace `usbmux_connect_port(LOCKDOWN)` +
+3. **DONE (bringup) — Tunnel bringup (Layers 0-2)** in `cdhost.c` `main`, via `imd_bringup` in
+   `host-c/imd.c`: `idevice_new_with_options` + `lockdownd_client_new_with_handshake` +
+   `lockdownd_get_value` + `lockdownd_start_service("...CoreDeviceProxy")` + `idevice_connect` +
+   `idevice_connection_enable_ssl`. `conn_t` gained a `void *idev` field; `cwrite`/`cread_n` route
+   through `imd_conn_send`/`imd_conn_recv` (blocking, exact-count). The CoreDeviceProxy handshake
+   and the utun packet pump are UNCHANGED -- they run over conn_t. **Verified live non-root**: the
+   whole bringup through the tunnel handshake works against the phone (us/device/RSD/mtu all come
+   back). Only the utun (Layer 3a) needs sudo, and it uses the same conn_t path. This replaced the
+   original design: Replace `usbmux_connect_port(LOCKDOWN)` +
    `lockdown_*` + `tls.h` + `usbmux_read_pair_record` with `idevice_new_with_options` +
    `lockdownd_client_new_with_handshake` + `lockdownd_start_service("...CoreDeviceProxy")` +
    `idevice_connect` (+ `idevice_connection_enable_ssl`). Feed the `idevice_connection_t` to the

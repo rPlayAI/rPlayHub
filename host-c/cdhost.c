@@ -42,9 +42,13 @@
 #define CDTUNNEL_MAGIC "CDTunnel"
 
 // ============================ connection (raw fd or TLS) ============================
-typedef struct { int fd; rp_tls_conn *tls; } conn_t;
+/* `idev` is set for the CoreDevice tunnel connection, which now rides on libimobiledevice
+ * (Stage 3); `fd`/`tls` are the old hand-rolled path, still used by the usbmux/lockdown code that
+ * has not been migrated. Exactly one of {idev} or {fd,tls} is active per conn_t. */
+typedef struct { int fd; rp_tls_conn *tls; void *idev; } conn_t;
 
 static int cwrite(conn_t *c, const void *buf, size_t n) {
+    if (c->idev) return imd_conn_send(c->idev, buf, n);
     size_t off = 0;
     while (off < n) {
         ssize_t r = c->tls ? rp_tls_write(c->tls, (const char *)buf + off, n - off)
@@ -55,6 +59,7 @@ static int cwrite(conn_t *c, const void *buf, size_t n) {
     return 0;
 }
 static int cread_n(conn_t *c, void *buf, size_t n) {
+    if (c->idev) return imd_conn_recv(c->idev, buf, n);
     size_t off = 0;
     while (off < n) {
         ssize_t r = c->tls ? rp_tls_read(c->tls, (char *)buf + off, n - off)
@@ -131,7 +136,7 @@ static CFPropertyListRef usbmux_request(int fd, CFDictionaryRef payload, uint32_
     CFDataRef body = plist_to_xml(payload);
     uint32_t blen = (uint32_t)CFDataGetLength(body);
     uint32_t hdr[4] = {blen + 16, 1, USBMUX_TYPE_PLIST, tag};
-    conn_t c = {fd, NULL};
+    conn_t c = {fd, NULL, NULL};
     if (cwrite(&c, hdr, sizeof hdr) < 0 || cwrite(&c, CFDataGetBytePtr(body), blen) < 0) {
         CFRelease(body); return NULL;
     }
@@ -811,71 +816,18 @@ int main(int argc, char **argv) {
         if (v && *v) printf("%s = %s\n", g_flags[f].env, v);
     }
 
-    printf("== Layer 0: usbmux ==\n");
-    int mux = usbmux_connect();
-    if (mux < 0) { fprintf(stderr, "cannot reach usbmuxd\n"); return 1; }
-    char udid[128] = {0};
-    int dev = usbmux_list_devices(mux, udid, sizeof udid);
-    if (dev < 0) { fprintf(stderr, "no devices\n"); return 1; }
-    printf("  -> using DeviceID=%d udid=%s\n", dev, udid);
+    /* Layers 0-2 now run on libimobiledevice (host-c/imd.c): usbmux discovery, the pair-record
+     * TLS session, device queries and StartService(CoreDeviceProxy), returning a connected TLS'd
+     * channel. This is the piece that did not port -- the usbmux unix socket and lockdown's TLS
+     * are macOS-specific; libusbmuxd/libimobiledevice speak the same protocols on Linux/Windows.
+     * The CoreDeviceProxy handshake and the packet pump below are unchanged: they run over conn_t,
+     * which now wraps the idevice connection. */
+    static char udid[128] = {0}, devname[256] = "?", prodver[64] = "?";
+    void *idev_conn = NULL;
+    if (imd_bringup(&idev_conn, udid, sizeof udid, devname, sizeof devname, prodver, sizeof prodver) != 0)
+        return 1;
 
-    /* Warn when the chosen device cannot mirror, and name the alternatives.
-     *
-     * iOS 26 does not support screen viewing -- Apple's own Device Hub says so, and the device
-     * simply answers startmediastream with nothing. Preferring USB then picks an iOS 26 phone
-     * over an iOS 27 one attached at the same time, fails, and says only "media stream failed to
-     * start", which reads as a bug in this daemon rather than a device limitation. Several
-     * sessions were lost to exactly that. */
-    {
-        api_device all[API_MAX_DEVICES];
-        int n = usbmux_enumerate(all, API_MAX_DEVICES);
-        if (n > 1) {
-            printf("  %d devices attached:\n", n);
-            for (int i = 0; i < n; i++)
-                printf("      %s  %-8s%s\n", all[i].udid, all[i].connection,
-                       strcmp(all[i].udid, udid) ? "" : "   <- bound");
-            printf("  pass --udid <prefix> to bind a different one\n");
-        }
-    }
-
-    printf("\n== Layer 1: lockdown ==\n");
-    conn_t lk = {mux, NULL};
-    if (usbmux_connect_port(mux, dev, LOCKDOWN_PORT) < 0) { fprintf(stderr, "lockdown connect failed\n"); return 1; }
-    char type[128];
-    lockdown_simple(&lk, "QueryType", NULL, NULL, "Type", type, sizeof type);
-    printf("  QueryType: %s\n", type);
-    static char devname[256] = "?", prodver[64] = "?";
-    const char *keys[] = {"DeviceName", "ProductType", "ProductVersion", "BuildVersion", "UniqueChipID"};
-    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
-        char val[256] = "?"; lockdown_get_value(&lk, keys[i], val, sizeof val);
-        printf("  %-15s = %s\n", keys[i], val);
-        if (!strcmp(keys[i], "DeviceName")) snprintf(devname, sizeof devname, "%s", val);
-        if (!strcmp(keys[i], "ProductVersion")) snprintf(prodver, sizeof prodver, "%s", val);
-    }
-    if (atoi(prodver) > 0 && atoi(prodver) < 27) {
-        printf("\n  ⚠️  iOS %s cannot mirror. Screen viewing is unsupported before iOS 27 --\n"
-               "      Apple's Device Hub reports the same, and the device answers\n"
-               "      startmediastream with nothing. Everything else here still works;\n"
-               "      the screen will stay black. Use --udid to bind an iOS 27 device.\n",
-               prodver);
-    }
-
-    printf("\n== Layer 1.5: TLS session ==\n");
-    CFDictionaryRef pr = usbmux_read_pair_record(udid);
-    if (!pr) { fprintf(stderr, "no pair record\n"); return 1; }
-    rp_tls_ctx *ctx = ctx_from_pairrecord(pr);
-    if (!ctx || lockdown_start_session(&lk, pr, ctx) < 0) { fprintf(stderr, "session failed\n"); return 1; }
-    printf("  session up, TLS=%s via %s\n", lk.tls ? "yes" : "no", rp_tls_backend());
-
-    printf("\n== Layer 2: CoreDevice tunnel ==\n");
-    int port = 0, ssl = 0;
-    if (lockdown_start_service(&lk, COREDEVICE_PROXY, &port, &ssl) < 0) return 1;
-    printf("  CoreDeviceProxy port=%d ssl=%d\n", port, ssl);
-
-    int sfd = usbmux_connect();
-    if (usbmux_connect_port(sfd, dev, port) < 0) { fprintf(stderr, "service connect failed\n"); return 1; }
-    conn_t tun = {sfd, NULL};
-    if (ssl && tls_upgrade(&tun, ctx) < 0) return 1;
+    conn_t tun = { -1, NULL, idev_conn };
     char addr[128] = "?", ours[128] = "?"; long rsd = -1, mtu = 0;
     if (tunnel_handshake_full(&tun, addr, sizeof addr, ours, sizeof ours, &rsd, &mtu) != 0) {
         fprintf(stderr, "  tunnel handshake failed\n");
@@ -887,7 +839,6 @@ int main(int argc, char **argv) {
     if (geteuid() != 0) {
         printf("  not root — cannot create a utun. Re-run with sudo to bring the tunnel up:\n");
         printf("      sudo %s\n", "./cdhost");
-        close(sfd); close(mux);
         printf("\nLayers 0-2 verified in C against the device.\n");
         return 0;
     }
@@ -983,6 +934,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "  tunnel died: %s\n", pump.reason ? pump.reason : "unknown");
 
     run_cmd("ifconfig %s destroy >/dev/null 2>&1", ifname);
-    close(utun); close(sfd); close(mux);
+    close(utun);
     return 1;
 }
