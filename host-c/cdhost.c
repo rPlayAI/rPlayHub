@@ -35,10 +35,7 @@
 #include "../core/rp_xpc.h"
 #include "ddi.h"
 
-#define USBMUXD_SOCKET "/var/run/usbmuxd"
-#define LOCKDOWN_PORT 62078
 #define USBMUX_TYPE_PLIST 8
-#define COREDEVICE_PROXY "com.apple.internal.devicecompute.CoreDeviceProxy"
 #define CDTUNNEL_MAGIC "CDTunnel"
 
 // ============================ connection (raw fd or TLS) ============================
