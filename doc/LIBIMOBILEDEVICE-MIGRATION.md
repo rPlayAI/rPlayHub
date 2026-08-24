@@ -21,9 +21,11 @@ does the CoreDeviceProxy handshake over it.
    usbmux+lockdown+CoreFoundation onto `idevice`/`lockdownd` + libplist. Same JSON shape; verified
    live (all domains, including the session-only battery/disk). Makefile links
    `-limobiledevice-1.0 -lplist-2.0`.
-2. **`usbmux_enumerate`** (device list + per-device names, used by `list_devices`). Replace with
-   `idevice_get_device_list_extended` + a short `lockdownd_get_value` per device for the name. Drops
-   more CoreFoundation and the hand-rolled usbmux enumerate.
+2. **DONE — `usbmux_enumerate`** (device list + per-device names, used by `list_devices`). Now
+   `idevice_get_device_list_extended` + a session-less `lockdownd_get_value` per device for the
+   name/version/type, in `host-c/imd.c`; -60 lines from cdhost.c. Returns exactly what usbmuxd
+   reports (verified equal to `idevice_id -l`); network devices appear when their wifi connection
+   is live, same as before. `device_id` dropped (the library keys on udid).
 3. **Tunnel bringup (Layers 0-2)** in `cdhost.c` `main`. Replace `usbmux_connect_port(LOCKDOWN)` +
    `lockdown_*` + `tls.h` + `usbmux_read_pair_record` with `idevice_new_with_options` +
    `lockdownd_client_new_with_handshake` + `lockdownd_start_service("...CoreDeviceProxy")` +

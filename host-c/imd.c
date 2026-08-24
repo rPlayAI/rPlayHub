@@ -135,3 +135,62 @@ int cdhost_device_info(const char *udid, char *json, size_t cap)
     idevice_free(dev);
     return 0;
 }
+
+/* ------------------------------------------------------------------ device list + names (Stage 2)
+ *
+ * Replaces the hand-rolled usbmux ListDevices + per-device lockdown naming. `idevice_get_device_
+ * list_extended` gives udid + transport; DeviceName/ProductVersion/ProductType read from the
+ * default lockdown domain without a session, so every device is named -- paired or not -- as
+ * Device Hub shows them. USB and Network entries for one phone collapse to a single row (USB
+ * preferred). device_id is no longer needed (the library keys on udid). */
+int usbmux_enumerate(api_device *out, int max)
+{
+    idevice_info_t *list = NULL;
+    int count = 0;
+    if (idevice_get_device_list_extended(&list, &count) != IDEVICE_E_SUCCESS) return 0;
+
+    int n = 0;
+    for (int i = 0; i < count && n < max; i++) {
+        const char *udid = list[i]->udid;
+        const char *conn = list[i]->conn_type == CONNECTION_USBMUXD ? "USB" : "Network";
+        int existing = -1;
+        for (int k = 0; k < n; k++) if (!strcmp(out[k].udid, udid)) { existing = k; break; }
+        if (existing >= 0) {
+            if (!strcmp(conn, "USB")) snprintf(out[existing].connection, sizeof out[existing].connection, "USB");
+            continue;
+        }
+        memset(&out[n], 0, sizeof out[n]);
+        snprintf(out[n].udid, sizeof out[n].udid, "%s", udid);
+        snprintf(out[n].connection, sizeof out[n].connection, "%s", conn);
+        n++;
+    }
+    idevice_device_list_extended_free(list);
+
+    for (int i = 0; i < n; i++) {
+        idevice_t dev = NULL;
+        if (idevice_new_with_options(&dev, out[i].udid, IDEVICE_LOOKUP_USBMUX | IDEVICE_LOOKUP_NETWORK) != IDEVICE_E_SUCCESS)
+            continue;
+        lockdownd_client_t lk = NULL;
+        if (lockdownd_client_new(dev, &lk, "rplay-hub") == LOCKDOWN_E_SUCCESS && lk) {
+            plist_t v = NULL;
+            if (lockdownd_get_value(lk, NULL, "DeviceName", &v) == LOCKDOWN_E_SUCCESS && v) {
+                char *s = NULL; plist_get_string_val(v, &s);
+                if (s) { snprintf(out[i].name, sizeof out[i].name, "%s", s); free(s); }
+                plist_free(v); v = NULL;
+            }
+            if (lockdownd_get_value(lk, NULL, "ProductVersion", &v) == LOCKDOWN_E_SUCCESS && v) {
+                char *s = NULL; plist_get_string_val(v, &s);
+                if (s) { snprintf(out[i].version, sizeof out[i].version, "%s", s); free(s); }
+                plist_free(v); v = NULL;
+            }
+            if (lockdownd_get_value(lk, NULL, "ProductType", &v) == LOCKDOWN_E_SUCCESS && v) {
+                char *s = NULL; plist_get_string_val(v, &s);
+                if (s) { snprintf(out[i].product_type, sizeof out[i].product_type, "%s", s); free(s); }
+                plist_free(v); v = NULL;
+            }
+            lockdownd_client_free(lk);
+        }
+        idevice_free(dev);
+    }
+    return n;
+}

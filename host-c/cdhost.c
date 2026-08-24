@@ -207,66 +207,6 @@ static int usbmux_list_devices(int fd, char *udid_out, size_t udid_len) {
 static int usbmux_connect_port(int fd, int device_id, int port);
 static int lockdown_get_value(conn_t *c, const char *key, char *out, size_t outlen);
 
-int usbmux_enumerate(api_device *out, int max)
-{
-    int fd = usbmux_connect();
-    if (fd < 0) return 0;
-    CFMutableDictionaryRef req = usbmux_msg("ListDevices");
-    CFDictionaryRef reply = usbmux_request(fd, req, 1);
-    CFRelease(req);
-    if (!reply) { close(fd); return 0; }
-
-    int n = 0;
-    CFArrayRef list = dict_get(reply, "DeviceList");
-    for (CFIndex i = 0; list && i < CFArrayGetCount(list) && n < max; i++) {
-        CFDictionaryRef dev = CFArrayGetValueAtIndex(list, i);
-        CFDictionaryRef props = dict_get(dev, "Properties");
-        char ser[128] = "", conn[32] = "";
-        dict_get_cstr(props, "SerialNumber", ser, sizeof ser);
-        dict_get_cstr(props, "ConnectionType", conn, sizeof conn);
-        if (!ser[0]) continue;
-
-        int existing = -1;
-        for (int k = 0; k < n; k++) if (!strcmp(out[k].udid, ser)) { existing = k; break; }
-        if (existing >= 0) {
-            /* Same phone on both transports: keep USB, which is the more reliable one. */
-            if (!strcmp(conn, "USB")) snprintf(out[existing].connection,
-                                               sizeof out[existing].connection, "%s", conn);
-            continue;
-        }
-        memset(&out[n], 0, sizeof out[n]);
-        snprintf(out[n].udid, sizeof out[n].udid, "%s", ser);
-        snprintf(out[n].connection, sizeof out[n].connection, "%s", conn[0] ? conn : "USB");
-        long long did = 0;
-        CFNumberRef idn = dict_get(dev, "DeviceID");
-        if (idn) CFNumberGetValue(idn, kCFNumberLongLongType, &did);
-        out[n].device_id = (int)did;
-        n++;
-    }
-    CFRelease(reply);
-    close(fd);
-
-    /* Name every device, not just the bound one. DeviceName, ProductVersion and ProductType are
-     * readable from lockdown before any session (Layer 1 reads them the same way), so each costs
-     * one usbmux connection and three round trips. A device that does not answer -- unpaired,
-     * or a wifi phone that has gone to sleep -- is listed by udid as before. Device Hub shows
-     * names for all of them, and a row reading "DEVICE-UDID-REDACTED" was mistaken for a
-     * missing device on the first side-by-side comparison (2026-08-23). */
-    for (int i = 0; i < n; i++) {
-        int lfd = usbmux_connect();
-        if (lfd < 0) continue;
-        struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
-        setsockopt(lfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-        if (usbmux_connect_port(lfd, out[i].device_id, LOCKDOWN_PORT) == 0) {
-            conn_t lk = { lfd, NULL };
-            lockdown_get_value(&lk, "DeviceName", out[i].name, sizeof out[i].name);
-            lockdown_get_value(&lk, "ProductVersion", out[i].version, sizeof out[i].version);
-            lockdown_get_value(&lk, "ProductType", out[i].product_type, sizeof out[i].product_type);
-        }
-        close(lfd);
-    }
-    return n;
-}
 
 static int usbmux_connect_port(int fd, int device_id, int port) {
     CFMutableDictionaryRef req = usbmux_msg("Connect");
