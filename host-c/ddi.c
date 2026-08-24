@@ -1,7 +1,8 @@
 /* ddi.c -- see ddi.h. A direct C port of host/ddi_mount.py, which worked end to end on a rebooted
- * iPhone 13 (2026-08-23). Plists are built and parsed with CoreFoundation; the mounter is a
- * classic shim service (u32-be length + plist, after RSDCheckin); the TSS request goes to
- * gs.apple.com over OpenSSL HTTPS. */
+ * iPhone 13 (2026-08-23). Plists via libplist (migrated off CoreFoundation 2026-08-24); the mounter
+ * is a classic shim service (u32-be length + plist, after RSDCheckin); the TSS request goes to
+ * gs.apple.com over OpenSSL HTTPS. The TSS request build stays byte-identical to the Python (and to
+ * the pre-migration CoreFoundation version) -- verified by diff. */
 #include "ddi.h"
 
 #include <arpa/inet.h>
@@ -18,37 +19,32 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <CoreFoundation/CoreFoundation.h>
+#include <plist/plist.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-/* ------------------------------------------------------------------ CF helpers */
+/* ------------------------------------------------------------------ plist helpers */
 
-static CFStringRef cfstr(const char *s) { return CFStringCreateWithCString(NULL, s, kCFStringEncodingUTF8); }
+static void dset_str(plist_t d, const char *k, const char *v) { plist_dict_set_item(d, k, plist_new_string(v)); }
+static void dset_bool(plist_t d, const char *k, int v) { plist_dict_set_item(d, k, plist_new_bool(v)); }
+static void dset_int(plist_t d, const char *k, long long v) { plist_dict_set_item(d, k, plist_new_uint((uint64_t)v)); }
+static void dset_data(plist_t d, const char *k, const uint8_t *b, size_t n) { plist_dict_set_item(d, k, plist_new_data((const char *)b, n)); }
+/* Put a COPY of a borrowed node (owned by another plist) into d. */
+static void dset_copy(plist_t d, const char *k, plist_t v) { plist_dict_set_item(d, k, plist_copy(v)); }
 
-static void dict_set_str(CFMutableDictionaryRef d, const char *k, const char *v)
-{ CFStringRef ks = cfstr(k), vs = cfstr(v); CFDictionarySetValue(d, ks, vs); CFRelease(ks); CFRelease(vs); }
+static plist_t dget(plist_t d, const char *k) { return d ? plist_dict_get_item(d, k) : NULL; }
 
-static void dict_set_bool(CFMutableDictionaryRef d, const char *k, int v)
-{ CFStringRef ks = cfstr(k); CFDictionarySetValue(d, ks, v ? kCFBooleanTrue : kCFBooleanFalse); CFRelease(ks); }
-
-static void dict_set_int(CFMutableDictionaryRef d, const char *k, long long v)
-{ CFStringRef ks = cfstr(k); CFNumberRef n = CFNumberCreate(NULL, kCFNumberLongLongType, &v);
-  CFDictionarySetValue(d, ks, n); CFRelease(ks); CFRelease(n); }
-
-static void dict_set_data(CFMutableDictionaryRef d, const char *k, const uint8_t *b, size_t n)
-{ CFStringRef ks = cfstr(k); CFDataRef v = CFDataCreate(NULL, b, (CFIndex)n);
-  CFDictionarySetValue(d, ks, v); CFRelease(ks); CFRelease(v); }
-
-static void dict_set_obj(CFMutableDictionaryRef d, const char *k, CFTypeRef v)
-{ CFStringRef ks = cfstr(k); CFDictionarySetValue(d, ks, v); CFRelease(ks); }
-
-static CFTypeRef dget(CFDictionaryRef d, const char *k)
-{ if (!d) return NULL; CFStringRef ks = cfstr(k); CFTypeRef v = CFDictionaryGetValue(d, ks); CFRelease(ks); return v; }
-
-static int dget_str(CFDictionaryRef d, const char *k, char *out, size_t cap)
-{ CFTypeRef v = dget(d, k); if (!v || CFGetTypeID(v) != CFStringGetTypeID()) return -1;
-  return CFStringGetCString((CFStringRef)v, out, cap, kCFStringEncodingUTF8) ? 0 : -1; }
+static int dget_str(plist_t d, const char *k, char *out, size_t cap)
+{
+    plist_t v = dget(d, k);
+    if (!v || plist_get_node_type(v) != PLIST_STRING) return -1;
+    char *s = NULL;
+    plist_get_string_val(v, &s);
+    if (!s) return -1;
+    snprintf(out, cap, "%s", s);
+    free(s);
+    return 0;
+}
 
 /* ------------------------------------------------------------------ framed plist over the tunnel */
 
@@ -70,18 +66,19 @@ static int mounter_connect(const char *addr, long port)
     return fd;
 }
 
-static int send_plist(int fd, CFDictionaryRef d)
+static int send_plist(int fd, plist_t d)
 {
-    CFDataRef body = CFPropertyListCreateData(NULL, d, kCFPropertyListXMLFormat_v1_0, 0, NULL);
-    if (!body) return -1;
-    CFIndex n = CFDataGetLength(body);
-    uint8_t hdr[4] = { (uint8_t)(n >> 24), (uint8_t)(n >> 16), (uint8_t)(n >> 8), (uint8_t)n };
-    int rc = (send(fd, hdr, 4, 0) == 4 && send(fd, CFDataGetBytePtr(body), n, 0) == (ssize_t)n) ? 0 : -1;
-    CFRelease(body);
+    char *xml = NULL;
+    uint32_t xlen = 0;
+    plist_to_xml(d, &xml, &xlen);
+    if (!xml) return -1;
+    uint8_t hdr[4] = { (uint8_t)(xlen >> 24), (uint8_t)(xlen >> 16), (uint8_t)(xlen >> 8), (uint8_t)xlen };
+    int rc = (send(fd, hdr, 4, 0) == 4 && send(fd, xml, xlen, 0) == (ssize_t)xlen) ? 0 : -1;
+    plist_mem_free(xml);
     return rc;
 }
 
-static CFDictionaryRef recv_plist(int fd)
+static plist_t recv_plist(int fd)
 {
     uint8_t len[4];
     if (recvn(fd, len, 4) != 0) return NULL;
@@ -89,50 +86,47 @@ static CFDictionaryRef recv_plist(int fd)
     if (n == 0 || n > (64u << 20)) return NULL;
     uint8_t *buf = malloc(n);
     if (!buf || recvn(fd, buf, n) != 0) { free(buf); return NULL; }
-    CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, buf, (CFIndex)n, kCFAllocatorNull);
-    CFPropertyListRef pl = CFPropertyListCreateWithData(NULL, data, kCFPropertyListImmutable, NULL, NULL);
-    CFRelease(data);
+    plist_t pl = NULL;
+    plist_from_memory((const char *)buf, (uint32_t)n, &pl, NULL);
     free(buf);
-    if (pl && CFGetTypeID(pl) != CFDictionaryGetTypeID()) { CFRelease(pl); return NULL; }
+    if (pl && plist_get_node_type(pl) != PLIST_DICT) { plist_free(pl); return NULL; }
     return pl;
 }
 
-/* RSDCheckin preamble, same two exchanges the other shim services need. */
 static int rsd_checkin(int fd)
 {
-    CFMutableDictionaryRef req = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    dict_set_str(req, "Label", "rplay-hub");
-    dict_set_str(req, "ProtocolVersion", "2");
-    dict_set_str(req, "Request", "RSDCheckin");
+    plist_t req = plist_new_dict();
+    dset_str(req, "Label", "rplay-hub");
+    dset_str(req, "ProtocolVersion", "2");
+    dset_str(req, "Request", "RSDCheckin");
     int ok = send_plist(fd, req) == 0;
-    CFRelease(req);
+    plist_free(req);
     if (!ok) return -1;
-    CFDictionaryRef r = recv_plist(fd);
+    plist_t r = recv_plist(fd);
     if (!r) return -1;
     char v[32]; int good = dget_str(r, "Request", v, sizeof v) == 0 && !strcmp(v, "RSDCheckin");
-    CFRelease(r);
+    plist_free(r);
     if (!good) return -1;
     r = recv_plist(fd);
     if (!r) return -1;
     good = dget_str(r, "Request", v, sizeof v) == 0 && !strcmp(v, "StartService");
-    CFRelease(r);
+    plist_free(r);
     return good ? 0 : -1;
 }
 
-/* One command with keyword args already in `req` (Command is set by caller). Returns the reply. */
-static CFDictionaryRef mounter_cmd(int fd, CFDictionaryRef req)
+static plist_t mounter_cmd(int fd, plist_t req)
 {
     if (send_plist(fd, req) != 0) return NULL;
     return recv_plist(fd);
 }
 
-static CFDictionaryRef simple_cmd(int fd, const char *command, const char *k2, const char *v2)
+static plist_t simple_cmd(int fd, const char *command, const char *k2, const char *v2)
 {
-    CFMutableDictionaryRef req = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    dict_set_str(req, "Command", command);
-    if (k2) dict_set_str(req, k2, v2);
-    CFDictionaryRef r = mounter_cmd(fd, req);
-    CFRelease(req);
+    plist_t req = plist_new_dict();
+    dset_str(req, "Command", command);
+    if (k2) dset_str(req, k2, v2);
+    plist_t r = mounter_cmd(fd, req);
+    plist_free(req);
     return r;
 }
 
@@ -140,16 +134,16 @@ static CFDictionaryRef simple_cmd(int fd, const char *command, const char *k2, c
 
 static int copy_devices_has_personalized(int fd)
 {
-    CFDictionaryRef r = simple_cmd(fd, "CopyDevices", NULL, NULL);
+    plist_t r = simple_cmd(fd, "CopyDevices", NULL, NULL);
     if (!r) return 0;
     int found = 0;
-    CFArrayRef list = dget(r, "EntryList");
-    for (CFIndex i = 0; list && CFGetTypeID(list) == CFArrayGetTypeID() && i < CFArrayGetCount(list); i++) {
-        CFDictionaryRef e = CFArrayGetValueAtIndex(list, i);
+    plist_t list = dget(r, "EntryList");
+    for (uint32_t i = 0; list && plist_get_node_type(list) == PLIST_ARRAY && i < plist_array_get_size(list); i++) {
+        plist_t e = plist_array_get_item(list, i);
         char t[32];
         if (dget_str(e, "DiskImageType", t, sizeof t) == 0 && !strcmp(t, "Personalized")) { found = 1; break; }
     }
-    CFRelease(r);
+    plist_free(r);
     return found;
 }
 
@@ -178,26 +172,25 @@ static int read_file(const char *path, uint8_t **out, size_t *n)
     return 0;
 }
 
-static CFDictionaryRef load_manifest(const char *ddi_dir)
+static plist_t load_manifest(const char *ddi_dir)
 {
     char path[1200];
     snprintf(path, sizeof path, "%s/Restore/BuildManifest.plist", ddi_dir);
     uint8_t *b; size_t n;
     if (read_file(path, &b, &n) != 0) return NULL;
-    CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, b, (CFIndex)n, kCFAllocatorNull);
-    CFPropertyListRef pl = CFPropertyListCreateWithData(NULL, data, kCFPropertyListImmutable, NULL, NULL);
-    CFRelease(data);
+    plist_t pl = NULL;
+    plist_from_memory((const char *)b, (uint32_t)n, &pl, NULL);
     free(b);
-    if (pl && CFGetTypeID(pl) != CFDictionaryGetTypeID()) { CFRelease(pl); return NULL; }
+    if (pl && plist_get_node_type(pl) != PLIST_DICT) { plist_free(pl); return NULL; }
     return pl;
 }
 
-/* The BuildIdentity whose ApChipID/ApBoardID (hex strings) match the phone. */
-static CFDictionaryRef pick_identity(CFDictionaryRef manifest, long chip, long board)
+/* The BuildIdentity whose ApChipID/ApBoardID (hex strings) match the phone. Borrowed reference. */
+static plist_t pick_identity(plist_t manifest, long chip, long board)
 {
-    CFArrayRef ids = dget(manifest, "BuildIdentities");
-    for (CFIndex i = 0; ids && i < CFArrayGetCount(ids); i++) {
-        CFDictionaryRef bi = CFArrayGetValueAtIndex(ids, i);
+    plist_t ids = dget(manifest, "BuildIdentities");
+    for (uint32_t i = 0; ids && plist_get_node_type(ids) == PLIST_ARRAY && i < plist_array_get_size(ids); i++) {
+        plist_t bi = plist_array_get_item(ids, i);
         char cs[16], bs[16];
         if (dget_str(bi, "ApChipID", cs, sizeof cs) == 0 && dget_str(bi, "ApBoardID", bs, sizeof bs) == 0
             && strtol(cs, NULL, 16) == chip && strtol(bs, NULL, 16) == board)
@@ -208,113 +201,130 @@ static CFDictionaryRef pick_identity(CFDictionaryRef manifest, long chip, long b
 
 /* ------------------------------------------------------------------ TSS request (see host/ddi_mount.py) */
 
-static void apply_restore_rules(CFMutableDictionaryRef e, CFArrayRef rules, int production, int security, int img4)
+static int node_is_true(plist_t v) { uint8_t b = 0; if (v && plist_get_node_type(v) == PLIST_BOOLEAN) plist_get_bool_val(v, &b); return b; }
+
+static void apply_restore_rules(plist_t e, plist_t rules, int production, int security, int img4)
 {
-    for (CFIndex i = 0; i < CFArrayGetCount(rules); i++) {
-        CFDictionaryRef rule = CFArrayGetValueAtIndex(rules, i);
-        CFDictionaryRef cond = dget(rule, "Conditions");
-        CFDictionaryRef acts = dget(rule, "Actions");
+    for (uint32_t i = 0; i < plist_array_get_size(rules); i++) {
+        plist_t rule = plist_array_get_item(rules, i);
+        plist_t cond = dget(rule, "Conditions");
+        plist_t acts = dget(rule, "Actions");
         if (!cond || !acts) continue;
         int ok = 1;
-        CFIndex nc = CFDictionaryGetCount(cond);
-        CFStringRef *ck = malloc(sizeof(CFStringRef) * nc); CFTypeRef *cv = malloc(sizeof(CFTypeRef) * nc);
-        CFDictionaryGetKeysAndValues(cond, (const void **)ck, (const void **)cv);
-        for (CFIndex j = 0; j < nc && ok; j++) {
-            char key[64]; CFStringGetCString(ck[j], key, sizeof key, kCFStringEncodingUTF8);
+        plist_dict_iter it = NULL;
+        plist_dict_new_iter(cond, &it);
+        char *key = NULL;
+        plist_t cval = NULL;
+        for (;;) {
+            plist_dict_next_item(cond, it, &key, &cval);
+            if (!key) break;
             int actual;
             if (!strcmp(key, "ApRawProductionMode") || !strcmp(key, "ApCurrentProductionMode")) actual = production;
             else if (!strcmp(key, "ApRawSecurityMode")) actual = security;
             else if (!strcmp(key, "ApRequiresImage4")) actual = img4;
             else if (!strcmp(key, "ApInRomDFU")) actual = 0;
-            else { ok = 0; break; }
-            int want = (cv[j] == kCFBooleanTrue);
-            if (actual != want) ok = 0;
+            else { ok = 0; free(key); key = NULL; break; }
+            int want = node_is_true(cval);
+            free(key); key = NULL;
+            if (actual != want) { ok = 0; break; }
         }
-        free(ck); free(cv);
+        free(it);
         if (!ok) continue;
-        CFIndex na = CFDictionaryGetCount(acts);
-        CFStringRef *ak = malloc(sizeof(CFStringRef) * na); CFTypeRef *av = malloc(sizeof(CFTypeRef) * na);
-        CFDictionaryGetKeysAndValues(acts, (const void **)ak, (const void **)av);
-        for (CFIndex j = 0; j < na; j++)
-            if (av[j] == kCFBooleanTrue || av[j] == kCFBooleanFalse)
-                CFDictionarySetValue(e, ak[j], av[j]);
-        free(ak); free(av);
+        plist_dict_iter ait = NULL;
+        plist_dict_new_iter(acts, &ait);
+        char *akey = NULL;
+        plist_t aval = NULL;
+        for (;;) {
+            plist_dict_next_item(acts, ait, &akey, &aval);
+            if (!akey) break;
+            if (aval && plist_get_node_type(aval) == PLIST_BOOLEAN)
+                plist_dict_set_item(e, akey, plist_copy(aval));
+            free(akey); akey = NULL;
+        }
+        free(ait);
     }
 }
 
-static CFDictionaryRef build_tss_request(CFDictionaryRef bi, CFDictionaryRef ids, const uint8_t *nonce, size_t nlen)
+static plist_t build_tss_request(plist_t bi, plist_t ids, const uint8_t *nonce, size_t nlen)
 {
     const int production = 1, security = 1, img4 = 1;
-    CFMutableDictionaryRef req = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    dict_set_str(req, "@HostPlatformInfo", "mac");
-    dict_set_str(req, "@VersionInfo", "libauthinstall-1049.100.23");
-    dict_set_str(req, "@UUID", "00000000-0000-4000-8000-000000000000");
+    plist_t req = plist_new_dict();
+    dset_str(req, "@HostPlatformInfo", "mac");
+    dset_str(req, "@VersionInfo", "libauthinstall-1049.100.23");
+    dset_str(req, "@UUID", "00000000-0000-4000-8000-000000000000");
 
     /* Ap,* identifiers the device reports go in verbatim. */
-    CFIndex ni = CFDictionaryGetCount(ids);
-    CFStringRef *ik = malloc(sizeof(CFStringRef) * ni); CFTypeRef *iv = malloc(sizeof(CFTypeRef) * ni);
-    CFDictionaryGetKeysAndValues(ids, (const void **)ik, (const void **)iv);
-    for (CFIndex i = 0; i < ni; i++) {
-        char k[64]; CFStringGetCString(ik[i], k, sizeof k, kCFStringEncodingUTF8);
-        if (!strncmp(k, "Ap,", 3)) CFDictionarySetValue(req, ik[i], iv[i]);
+    plist_dict_iter iit = NULL;
+    plist_dict_new_iter(ids, &iit);
+    char *ik = NULL;
+    plist_t iv = NULL;
+    for (;;) {
+        plist_dict_next_item(ids, iit, &ik, &iv);
+        if (!ik) break;
+        if (!strncmp(ik, "Ap,", 3)) plist_dict_set_item(req, ik, plist_copy(iv));
+        free(ik); ik = NULL;
     }
-    free(ik); free(iv);
+    free(iit);
 
     /* One entry per manifest component (tss_request_add_ap_tags). */
-    CFDictionaryRef manifest = dget(bi, "Manifest");
-    CFIndex nm = manifest ? CFDictionaryGetCount(manifest) : 0;
-    CFStringRef *mk = malloc(sizeof(CFStringRef) * nm); CFTypeRef *mv = malloc(sizeof(CFTypeRef) * nm);
-    if (manifest) CFDictionaryGetKeysAndValues(manifest, (const void **)mk, (const void **)mv);
-    for (CFIndex i = 0; i < nm; i++) {
-        CFDictionaryRef entry = mv[i];
-        CFDictionaryRef info = dget(entry, "Info");
-        if (!info) continue;
-        if (dget(info, "IsFTAB") == kCFBooleanTrue) continue;
-        int trusted = (dget(entry, "Trusted") == kCFBooleanTrue);
-        CFArrayRef rules = dget(info, "RestoreRequestRules");
-        if (img4 && !rules && !trusted) continue;
-        CFMutableDictionaryRef e = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        CFIndex ne = CFDictionaryGetCount(entry);
-        CFStringRef *ek = malloc(sizeof(CFStringRef) * ne); CFTypeRef *ev = malloc(sizeof(CFTypeRef) * ne);
-        CFDictionaryGetKeysAndValues(entry, (const void **)ek, (const void **)ev);
-        for (CFIndex j = 0; j < ne; j++) {
-            char k[64]; CFStringGetCString(ek[j], k, sizeof k, kCFStringEncodingUTF8);
-            if (strcmp(k, "Info")) CFDictionarySetValue(e, ek[j], ev[j]);
+    plist_t manifest = dget(bi, "Manifest");
+    plist_dict_iter mit = NULL;
+    if (manifest) plist_dict_new_iter(manifest, &mit);
+    char *mk = NULL;
+    plist_t entry = NULL;
+    while (manifest) {
+        plist_dict_next_item(manifest, mit, &mk, &entry);
+        if (!mk) break;
+        plist_t info = dget(entry, "Info");
+        if (!info) { free(mk); mk = NULL; continue; }
+        if (node_is_true(dget(info, "IsFTAB"))) { free(mk); mk = NULL; continue; }
+        int trusted = node_is_true(dget(entry, "Trusted"));
+        plist_t rules = dget(info, "RestoreRequestRules");
+        if (img4 && !rules && !trusted) { free(mk); mk = NULL; continue; }
+        /* Copy the entry minus Info. */
+        plist_t e = plist_new_dict();
+        plist_dict_iter eit = NULL;
+        plist_dict_new_iter(entry, &eit);
+        char *ek = NULL;
+        plist_t ev = NULL;
+        for (;;) {
+            plist_dict_next_item(entry, eit, &ek, &ev);
+            if (!ek) break;
+            if (strcmp(ek, "Info")) plist_dict_set_item(e, ek, plist_copy(ev));
+            free(ek); ek = NULL;
         }
-        free(ek); free(ev);
+        free(eit);
         if (rules) apply_restore_rules(e, rules, production, security, img4);
-        else if (img4) { dict_set_bool(e, "EPRO", production); dict_set_bool(e, "ESEC", security); }
-        if (trusted && !dget(entry, "Digest")) dict_set_data(e, "Digest", NULL, 0);
-        if (CFDictionaryGetCount(e) > 0) CFDictionarySetValue(req, mk[i], e);
-        CFRelease(e);
+        else if (img4) { dset_bool(e, "EPRO", production); dset_bool(e, "ESEC", security); }
+        if (trusted && !dget(entry, "Digest")) dset_data(e, "Digest", NULL, 0);
+        if (plist_dict_get_size(e) > 0) plist_dict_set_item(req, mk, e);
+        else plist_free(e);
+        free(mk); mk = NULL;
     }
-    free(mk); free(mv);
+    free(mit);
 
     /* common + img4 tags */
-    CFTypeRef ecid = dget(ids, "UniqueChipID"); if (ecid) dict_set_obj(req, "ApECID", ecid);
-    CFTypeRef ubid = dget(bi, "UniqueBuildID"); if (ubid) dict_set_obj(req, "UniqueBuildID", ubid);
+    plist_t ecid = dget(ids, "UniqueChipID"); if (ecid) dset_copy(req, "ApECID", ecid);
+    plist_t ubid = dget(bi, "UniqueBuildID"); if (ubid) dset_copy(req, "UniqueBuildID", ubid);
     char cs[16], bs[16];
-    if (dget_str(bi, "ApChipID", cs, sizeof cs) == 0) dict_set_int(req, "ApChipID", strtol(cs, NULL, 16));
-    if (dget_str(bi, "ApBoardID", bs, sizeof bs) == 0) dict_set_int(req, "ApBoardID", strtol(bs, NULL, 16));
-    char ds[16]; if (dget_str(bi, "ApSecurityDomain", ds, sizeof ds) == 0) dict_set_int(req, "ApSecurityDomain", strtol(ds, NULL, 16));
-    const char *img4_keys[] = { "Ap,OSLongVersion","Ap,OSReleaseType","Ap,ProductMarketingVersion","Ap,ProductType","Ap,SDKPlatform","Ap,Target","Ap,TargetType","Ap,Timestamp", NULL };
-    for (int i = 0; img4_keys[i]; i++) { CFTypeRef v = dget(bi, img4_keys[i]); if (v) dict_set_obj(req, img4_keys[i], v); }
-    dict_set_data(req, "ApNonce", nonce, nlen);
-    dict_set_bool(req, "@ApImg4Ticket", 1);
-    dict_set_bool(req, "ApSecurityMode", security);
-    dict_set_bool(req, "ApProductionMode", production);
+    if (dget_str(bi, "ApChipID", cs, sizeof cs) == 0) dset_int(req, "ApChipID", strtol(cs, NULL, 16));
+    if (dget_str(bi, "ApBoardID", bs, sizeof bs) == 0) dset_int(req, "ApBoardID", strtol(bs, NULL, 16));
+    char ds[16]; if (dget_str(bi, "ApSecurityDomain", ds, sizeof ds) == 0) dset_int(req, "ApSecurityDomain", strtol(ds, NULL, 16));
+    const char *img4_keys[] = { "Ap,OSLongVersion", "Ap,OSReleaseType", "Ap,ProductMarketingVersion", "Ap,ProductType", "Ap,SDKPlatform", "Ap,Target", "Ap,TargetType", "Ap,Timestamp", NULL };
+    for (int i = 0; img4_keys[i]; i++) { plist_t v = dget(bi, img4_keys[i]); if (v) dset_copy(req, img4_keys[i], v); }
+    dset_data(req, "ApNonce", nonce, nlen);
+    dset_bool(req, "@ApImg4Ticket", 1);
+    dset_bool(req, "ApSecurityMode", security);
+    dset_bool(req, "ApProductionMode", production);
     static const uint8_t zero20[20] = {0};
-    dict_set_data(req, "SepNonce", zero20, 20);
-    CFTypeRef pearl = dget(bi, "PearlCertificationRootPub"); if (pearl) dict_set_obj(req, "PearlCertificationRootPub", pearl);
-    dict_set_bool(req, "UID_MODE", 0);
+    dset_data(req, "SepNonce", zero20, 20);
+    plist_t pearl = dget(bi, "PearlCertificationRootPub"); if (pearl) dset_copy(req, "PearlCertificationRootPub", pearl);
+    dset_bool(req, "UID_MODE", 0);
     return req;
 }
 
 /* ------------------------------------------------------------------ HTTPS POST to gs.apple.com */
 
-/* POST `body` to gs.apple.com/TSS/controller?action=2, return the response body (caller frees).
- * Server cert not verified -- same as libtatsu (CURLOPT_SSL_VERIFYPEER 0); the ticket is what is
- * trusted, and it is checked by the phone's kernel, not by us. */
 static char *tss_post(const uint8_t *body, size_t blen, size_t *rlen)
 {
     struct addrinfo hints, *res = NULL;
@@ -361,7 +371,6 @@ static char *tss_post(const uint8_t *body, size_t blen, size_t *rlen)
     return resp;
 }
 
-/* The ticket, from the &-joined form after STATUS=0. Returns malloc'd DER, caller frees. */
 static uint8_t *tss_extract_ticket(const char *resp, size_t rlen, size_t *tlen)
 {
     (void)rlen;
@@ -371,19 +380,17 @@ static uint8_t *tss_extract_ticket(const char *resp, size_t rlen, size_t *tlen)
     const char *rs = strstr(body, "REQUEST_STRING=");
     if (!rs) return NULL;
     rs += strlen("REQUEST_STRING=");
-    size_t xlen = strlen(rs);
-    CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, (const uint8_t *)rs, (CFIndex)xlen, kCFAllocatorNull);
-    CFDictionaryRef pl = CFPropertyListCreateWithData(NULL, data, kCFPropertyListImmutable, NULL, NULL);
-    CFRelease(data);
-    if (!pl || CFGetTypeID(pl) != CFDictionaryGetTypeID()) { if (pl) CFRelease(pl); return NULL; }
-    CFDataRef ticket = dget(pl, "ApImg4Ticket");
+    plist_t pl = NULL;
+    plist_from_memory(rs, (uint32_t)strlen(rs), &pl, NULL);
+    if (!pl || plist_get_node_type(pl) != PLIST_DICT) { if (pl) plist_free(pl); return NULL; }
+    plist_t ticket = dget(pl, "ApImg4Ticket");
     uint8_t *out = NULL;
-    if (ticket && CFGetTypeID(ticket) == CFDataGetTypeID()) {
-        *tlen = (size_t)CFDataGetLength(ticket);
-        out = malloc(*tlen);
-        if (out) memcpy(out, CFDataGetBytePtr(ticket), *tlen);
+    if (ticket && plist_get_node_type(ticket) == PLIST_DATA) {
+        uint64_t dl = 0;
+        const char *bytes = plist_get_data_ptr(ticket, &dl);
+        if (bytes) { *tlen = (size_t)dl; out = malloc(*tlen); if (out) memcpy(out, bytes, *tlen); }
     }
-    CFRelease(pl);
+    plist_free(pl);
     return out;
 }
 
@@ -420,39 +427,42 @@ int cdhost_ddi_activate(const char *addr, long port, const char *ddi_dir_in)
     if (copy_devices_has_personalized(fd)) { close(fd); return RP_DDI_ALREADY; }
 
     /* identity + nonce */
-    CFDictionaryRef ir = simple_cmd(fd, "QueryPersonalizationIdentifiers", "PersonalizedImageType", "DeveloperDiskImage");
-    CFDictionaryRef ids = ir ? dget(ir, "PersonalizationIdentifiers") : NULL;
-    if (!ids) { if (ir) CFRelease(ir); close(fd); fprintf(stderr, "  QueryPersonalizationIdentifiers failed\n"); return RP_DDI_ERR; }
+    plist_t ir = simple_cmd(fd, "QueryPersonalizationIdentifiers", "PersonalizedImageType", "DeveloperDiskImage");
+    plist_t ids = ir ? dget(ir, "PersonalizationIdentifiers") : NULL;
+    if (!ids) { if (ir) plist_free(ir); close(fd); fprintf(stderr, "  QueryPersonalizationIdentifiers failed\n"); return RP_DDI_ERR; }
     long chip = 0, board = 0;
-    { CFNumberRef v = (CFNumberRef)dget(ids, "ChipID"); if (v) CFNumberGetValue(v, kCFNumberLongType, &chip);
-      v = (CFNumberRef)dget(ids, "BoardId"); if (v) CFNumberGetValue(v, kCFNumberLongType, &board); }
+    { plist_t v = dget(ids, "ChipID"); if (v) { uint64_t u = 0; plist_get_uint_val(v, &u); chip = (long)u; }
+      v = dget(ids, "BoardId"); if (v) { uint64_t u = 0; plist_get_uint_val(v, &u); board = (long)u; } }
 
-    CFDictionaryRef nr = simple_cmd(fd, "QueryNonce", "PersonalizedImageType", "DeveloperDiskImage");
-    CFDataRef nonce = nr ? dget(nr, "PersonalizationNonce") : NULL;
-    if (!nonce || CFGetTypeID(nonce) != CFDataGetTypeID()) { if (nr) CFRelease(nr); CFRelease(ir); close(fd); fprintf(stderr, "  QueryNonce failed\n"); return RP_DDI_ERR; }
+    plist_t nr = simple_cmd(fd, "QueryNonce", "PersonalizedImageType", "DeveloperDiskImage");
+    plist_t nonce = nr ? dget(nr, "PersonalizationNonce") : NULL;
+    if (!nonce || plist_get_node_type(nonce) != PLIST_DATA) { if (nr) plist_free(nr); plist_free(ir); close(fd); fprintf(stderr, "  QueryNonce failed\n"); return RP_DDI_ERR; }
+    uint64_t nonce_len = 0;
+    const char *nonce_bytes = plist_get_data_ptr(nonce, &nonce_len);
 
-    CFDictionaryRef manifest = load_manifest(ddi_dir);
-    CFDictionaryRef bi = manifest ? pick_identity(manifest, chip, board) : NULL;
-    if (!bi) { if (manifest) CFRelease(manifest); CFRelease(nr); CFRelease(ir); close(fd);
+    plist_t manifest = load_manifest(ddi_dir);
+    plist_t bi = manifest ? pick_identity(manifest, chip, board) : NULL;
+    if (!bi) { if (manifest) plist_free(manifest); plist_free(nr); plist_free(ir); close(fd);
                fprintf(stderr, "  no BuildIdentity for chip %#lx board %#lx\n", chip, board); return RP_DDI_ERR; }
 
     /* ticket from Apple */
     fprintf(stderr, "  requesting a DDI ticket from Apple...\n");
-    CFDictionaryRef tss = build_tss_request(bi, ids, CFDataGetBytePtr(nonce), (size_t)CFDataGetLength(nonce));
-    CFDataRef tss_xml = CFPropertyListCreateData(NULL, tss, kCFPropertyListXMLFormat_v1_0, 0, NULL);
+    plist_t tss = build_tss_request(bi, ids, (const uint8_t *)nonce_bytes, (size_t)nonce_len);
+    char *tss_xml = NULL; uint32_t tss_len = 0;
+    plist_to_xml(tss, &tss_xml, &tss_len);
     size_t rlen = 0;
-    char *resp = tss_xml ? tss_post(CFDataGetBytePtr(tss_xml), (size_t)CFDataGetLength(tss_xml), &rlen) : NULL;
+    char *resp = tss_xml ? tss_post((const uint8_t *)tss_xml, (size_t)tss_len, &rlen) : NULL;
     size_t tlen = 0;
     uint8_t *ticket = resp ? tss_extract_ticket(resp, rlen, &tlen) : NULL;
-    if (tss_xml) CFRelease(tss_xml);
-    CFRelease(tss);
+    if (tss_xml) plist_mem_free(tss_xml);
+    plist_free(tss);
     free(resp);
-    if (!ticket) { CFRelease(manifest); CFRelease(nr); CFRelease(ir); close(fd); return RP_DDI_TSS_FAILED; }
+    if (!ticket) { plist_free(manifest); plist_free(nr); plist_free(ir); close(fd); return RP_DDI_TSS_FAILED; }
 
     /* the .dmg and trust cache paths from the manifest */
     char dmg_rel[256] = "", tc_rel[256] = "";
-    { CFDictionaryRef man = dget(bi, "Manifest");
-      CFDictionaryRef pd = dget(man, "PersonalizedDMG"), lt = dget(man, "LoadableTrustCache");
+    { plist_t man = dget(bi, "Manifest");
+      plist_t pd = dget(man, "PersonalizedDMG"), lt = dget(man, "LoadableTrustCache");
       dget_str(dget(pd, "Info"), "Path", dmg_rel, sizeof dmg_rel);
       dget_str(dget(lt, "Info"), "Path", tc_rel, sizeof tc_rel); }
     char dmg_path[1400], tc_path[1400];
@@ -460,51 +470,50 @@ int cdhost_ddi_activate(const char *addr, long port, const char *ddi_dir_in)
     snprintf(tc_path, sizeof tc_path, "%s/Restore/%s", ddi_dir, tc_rel);
     uint8_t *dmg = NULL, *tc = NULL; size_t dmg_n = 0, tc_n = 0;
     if (read_file(dmg_path, &dmg, &dmg_n) != 0 || read_file(tc_path, &tc, &tc_n) != 0) {
-        free(ticket); free(dmg); free(tc); CFRelease(manifest); CFRelease(nr); CFRelease(ir); close(fd);
+        free(ticket); free(dmg); free(tc); plist_free(manifest); plist_free(nr); plist_free(ir); close(fd);
         fprintf(stderr, "  could not read the DDI image files\n"); return RP_DDI_NO_DDI;
     }
 
     /* ReceiveBytes -> upload -> MountImage */
     int rc = RP_DDI_ERR;
-    CFMutableDictionaryRef rb = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    dict_set_str(rb, "Command", "ReceiveBytes");
-    dict_set_str(rb, "ImageType", "Personalized");
-    dict_set_int(rb, "ImageSize", (long long)dmg_n);
-    dict_set_data(rb, "ImageSignature", ticket, tlen);
-    CFDictionaryRef ack = mounter_cmd(fd, rb);
-    CFRelease(rb);
+    plist_t rb = plist_new_dict();
+    dset_str(rb, "Command", "ReceiveBytes");
+    dset_str(rb, "ImageType", "Personalized");
+    dset_int(rb, "ImageSize", (long long)dmg_n);
+    dset_data(rb, "ImageSignature", ticket, tlen);
+    plist_t ack = mounter_cmd(fd, rb);
+    plist_free(rb);
     char st[32] = "";
     if (!ack || dget_str(ack, "Status", st, sizeof st) != 0 || strcmp(st, "ReceiveBytesAck") != 0) {
-        /* A locked phone closes the connection here with no reply. */
-        if (ack) CFRelease(ack);
+        if (ack) plist_free(ack);
         fprintf(stderr, "  ReceiveBytes refused -- is the phone unlocked?\n");
         rc = RP_DDI_LOCKED;
         goto done;
     }
-    CFRelease(ack);
+    plist_free(ack);
     if (send(fd, dmg, dmg_n, 0) != (ssize_t)dmg_n) { fprintf(stderr, "  upload failed\n"); goto done; }
-    { CFDictionaryRef up = recv_plist(fd); char s2[32] = "";
+    { plist_t up = recv_plist(fd); char s2[32] = "";
       int good = up && dget_str(up, "Status", s2, sizeof s2) == 0 && !strcmp(s2, "Complete");
-      if (up) CFRelease(up);
+      if (up) plist_free(up);
       if (!good) { fprintf(stderr, "  upload not acknowledged\n"); goto done; } }
 
-    { CFMutableDictionaryRef mi = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-      dict_set_str(mi, "Command", "MountImage");
-      dict_set_str(mi, "ImagePath", "/private/var/mobile/Media/PublicStaging/staging.dimage");
-      dict_set_data(mi, "ImageSignature", ticket, tlen);
-      dict_set_str(mi, "ImageType", "Personalized");
-      dict_set_data(mi, "ImageTrustCache", tc, tc_n);
-      CFDictionaryRef mr = mounter_cmd(fd, mi);
-      CFRelease(mi);
+    { plist_t mi = plist_new_dict();
+      dset_str(mi, "Command", "MountImage");
+      dset_str(mi, "ImagePath", "/private/var/mobile/Media/PublicStaging/staging.dimage");
+      dset_data(mi, "ImageSignature", ticket, tlen);
+      dset_str(mi, "ImageType", "Personalized");
+      dset_data(mi, "ImageTrustCache", tc, tc_n);
+      plist_t mr = mounter_cmd(fd, mi);
+      plist_free(mi);
       char s3[32] = "";
       int good = mr && dget_str(mr, "Status", s3, sizeof s3) == 0 && !strcmp(s3, "Complete");
       if (mr && !good) { char e[64] = ""; dget_str(mr, "Error", e, sizeof e); fprintf(stderr, "  MountImage failed: %s\n", e[0] ? e : "?"); }
-      if (mr) CFRelease(mr);
+      if (mr) plist_free(mr);
       rc = good ? RP_DDI_OK : RP_DDI_ERR; }
 
 done:
     free(ticket); free(dmg); free(tc);
-    CFRelease(manifest); CFRelease(nr); CFRelease(ir);
+    plist_free(manifest); plist_free(nr); plist_free(ir);
     close(fd);
     if (rc == RP_DDI_OK) fprintf(stderr, "  DDI mounted -- developer services are live.\n");
     return rc;
