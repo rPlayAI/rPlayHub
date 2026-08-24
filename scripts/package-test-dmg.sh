@@ -59,8 +59,9 @@ for lib in $(otool -L "$APP/Contents/MacOS/cdhost" | awk '/opt\/homebrew/{print 
     install_name_tool -id "@loader_path/$base" "$APP/Contents/MacOS/$base"
 done
 
-say "4/6  signing inside-out (dylibs, cdhost, then the app bundle)"
+say "4/6  signing inside-out (dylibs if any, cdhost, then the app bundle)"
 for f in "$APP"/Contents/MacOS/*.dylib; do
+    [ -e "$f" ] || continue          # static build has no dylibs -- the glob stays literal
     codesign --force --timestamp --options=runtime -s "$SIGN_ID" "$f"
 done
 codesign --force --timestamp --options=runtime -s "$SIGN_ID" "$APP/Contents/MacOS/cdhost"
