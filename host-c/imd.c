@@ -295,11 +295,16 @@ int imd_conn_send(void *conn, const void *buf, size_t n)
 
 int imd_conn_recv(void *conn, void *buf, size_t n)
 {
+    /* Block until exactly n bytes arrive, like the raw-socket recv the pump used to use.
+     * idevice_connection_receive_timeout returns SUCCESS with 0 bytes on a timeout (a quiet
+     * tunnel between packets is normal), so a 0-byte read is NOT end-of-stream -- keep waiting.
+     * Only a non-success error (connection dropped) ends it. Treating a timeout as fatal killed
+     * the packet pump the moment the tunnel went quiet after the startup RSD burst. */
     size_t off = 0;
     while (off < n) {
         uint32_t got = 0;
-        idevice_error_t e = idevice_connection_receive((idevice_connection_t)conn, (char *)buf + off, (uint32_t)(n - off), &got);
-        if (e != IDEVICE_E_SUCCESS || got == 0) return -1;
+        idevice_error_t e = idevice_connection_receive_timeout((idevice_connection_t)conn, (char *)buf + off, (uint32_t)(n - off), &got, 30000);
+        if (e != IDEVICE_E_SUCCESS) return -1;
         off += got;
     }
     return 0;
