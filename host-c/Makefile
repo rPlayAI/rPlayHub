@@ -30,7 +30,20 @@ CFLAGS  += -Wall -Wextra -O2
 # macOS; a Linux/Windows build points these at the system or vendored copies.
 IMD_PREFIX ?= /opt/homebrew
 CFLAGS  += -I$(IMD_PREFIX)/include
-LDFLAGS += -L$(IMD_PREFIX)/lib -limobiledevice-1.0 -lplist-2.0
+
+# STATIC=1 links the libimobiledevice stack from its .a archives, so the shipped binary needs no
+# installed libimobiledevice/libplist (only OpenSSL, which the DMG bundles, and system libs). The
+# order matters -- dependents before dependencies -- and libplist is C++, hence -lc++. Homebrew
+# ships these .a files; a Linux/Windows build points the paths at its own static build.
+ifeq ($(STATIC),1)
+  IMD_LIBS := $(IMD_PREFIX)/opt/libimobiledevice/lib/libimobiledevice-1.0.a \
+              $(IMD_PREFIX)/opt/libimobiledevice-glue/lib/libimobiledevice-glue-1.0.a \
+              $(IMD_PREFIX)/opt/libusbmuxd/lib/libusbmuxd-2.0.a \
+              $(IMD_PREFIX)/opt/libplist/lib/libplist-2.0.a -lc++
+else
+  IMD_LIBS := -L$(IMD_PREFIX)/lib -limobiledevice-1.0 -lplist-2.0
+endif
+LDFLAGS += $(IMD_LIBS)
 
 # CoreFoundation is gone: the engine's plists are libplist and its usbmux/lockdown is
 # libimobiledevice, so no macOS framework is needed. (The CFLite include for non-Darwin is no

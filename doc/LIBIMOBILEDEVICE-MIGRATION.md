@@ -49,8 +49,14 @@ does the CoreDeviceProxy handshake over it.
    longer links `-framework CoreFoundation`. `otool -L cdhost` shows only libimobiledevice +
    libplist (+ OpenSSL, libz). **The whole C engine is CoreFoundation-free** and builds/links with
    no macOS framework -- the portability goal. Bringup re-verified live after removal.
-6. **Port build**: on Linux/Windows link libimobiledevice + libplist + libusbmuxd (+ libtatsu for
-   the DDI) from the system or a vendored static build (rplay's `build-libimobiledevice-osx.sh` is
+6. **DONE (static link)** -- `make STATIC=1` links the four .a archives (libimobiledevice,
+   -glue, libusbmuxd, libplist; + `-lc++` since libplist is C++), so the shipped binary needs no
+   installed libimobiledevice/libplist. `otool -L` then shows only libc++, OpenSSL, libz, libSystem
+   -- all system except OpenSSL, which the DMG already bundles. `scripts/package-test-dmg.sh`
+   builds the embedded engine with STATIC=1, so the app is fully self-contained. Homebrew ships the
+   .a files; a Linux/Windows build points the paths at its own static build.
+7. **Port build**: on Linux/Windows link the same stack (+ libtatsu for the DDI if used) from the
+   system or a vendored static build (rplay's `build-libimobiledevice-osx.sh` is
    the recipe; it builds all three static). Only the four OS seams in `app/PORTING.md` (tunnel
    interface, video decode/display, input capture) remain platform-specific; the transport no
    longer is.

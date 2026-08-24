@@ -29,7 +29,7 @@ xcodebuild -project "$ROOT/app/rPlayHub.xcodeproj" -scheme rPlayHub -configurati
 cp -R "$DD/Build/Products/Release/rPlayHub.app" "$APP"
 
 say "2/6  building cdhost (OpenSSL) and embedding it in the bundle"
-make -C "$ROOT/host-c" clean >/dev/null; make -C "$ROOT/host-c" >/dev/null
+make -C "$ROOT/host-c" clean >/dev/null; make -C "$ROOT/host-c" STATIC=1 >/dev/null
 cp "$ROOT/host-c/cdhost" "$APP/Contents/MacOS/cdhost"
 mkdir -p "$APP/Contents/Library/LaunchDaemons"
 cp "$ROOT/app/rPlayHub/daemon/com.rplay.rplayhub.engine.plist" "$APP/Contents/Library/LaunchDaemons/"
