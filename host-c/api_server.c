@@ -1,6 +1,6 @@
 #include "api_server.h"
 
-#include <CoreFoundation/CoreFoundation.h>
+#include <plist/plist.h>
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -845,12 +845,13 @@ static uint8_t *relay_recv_alloc(int fd, size_t *n_out)
     return buf;
 }
 
-static void sb_cfstring(strbuf *b, CFStringRef s)
+static void sb_plstr(strbuf *b, plist_t v)
 {
-    if (!s) { sb_puts(b, "\"\""); return; }
-    char tmp[1024];
-    if (!CFStringGetCString(s, tmp, sizeof tmp, kCFStringEncodingUTF8)) tmp[0] = 0;
-    sb_json_string(b, tmp);
+    if (!v || plist_get_node_type(v) != PLIST_STRING) { sb_puts(b, "\"\""); return; }
+    char *s = NULL;
+    plist_get_string_val(v, &s);
+    sb_json_string(b, s ? s : "");
+    free(s);
 }
 
 /* ------------------------------------------------------------------ app list (installation_proxy)
@@ -904,36 +905,35 @@ static void method_list_apps(int fd, long id, const char *line)
         size_t n = 0;
         uint8_t *raw = relay_recv_alloc(s, &n);
         if (!raw) { failed = 1; break; }
-        CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, raw, (CFIndex)n, kCFAllocatorNull);
-        CFPropertyListRef pl = data ? CFPropertyListCreateWithData(NULL, data, kCFPropertyListImmutable, NULL, NULL) : NULL;
-        if (data) CFRelease(data);
-        if (!pl || CFGetTypeID(pl) != CFDictionaryGetTypeID()) { failed = 1; free(raw); if (pl) CFRelease(pl); break; }
-        CFDictionaryRef d = pl;
-        CFStringRef status = CFDictionaryGetValue(d, CFSTR("Status"));
-        if (CFDictionaryGetValue(d, CFSTR("Error"))) failed = 1;
-        if (status && CFStringCompare(status, CFSTR("Complete"), 0) == kCFCompareEqualTo) done = 1;
-        CFArrayRef list = CFDictionaryGetValue(d, CFSTR("CurrentList"));
-        if (list && CFGetTypeID(list) == CFArrayGetTypeID()) {
-            for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
-                CFDictionaryRef app = CFArrayGetValueAtIndex(list, i);
-                if (CFGetTypeID(app) != CFDictionaryGetTypeID()) continue;
-                CFStringRef bid = CFDictionaryGetValue(app, CFSTR("CFBundleIdentifier"));
+        plist_t pl = NULL;
+        plist_from_memory((const char *)raw, (uint32_t)n, &pl, NULL);
+        if (!pl || plist_get_node_type(pl) != PLIST_DICT) { failed = 1; free(raw); if (pl) plist_free(pl); break; }
+        plist_t status = plist_dict_get_item(pl, "Status");
+        if (plist_dict_get_item(pl, "Error")) failed = 1;
+        if (status) { char *sv = NULL; plist_get_string_val(status, &sv); if (sv && !strcmp(sv, "Complete")) done = 1; free(sv); }
+        plist_t list = plist_dict_get_item(pl, "CurrentList");
+        if (list && plist_get_node_type(list) == PLIST_ARRAY) {
+            for (uint32_t i = 0; i < plist_array_get_size(list); i++) {
+                plist_t app = plist_array_get_item(list, i);
+                if (plist_get_node_type(app) != PLIST_DICT) continue;
+                plist_t bid = plist_dict_get_item(app, "CFBundleIdentifier");
                 if (!bid) continue;
-                CFStringRef name = CFDictionaryGetValue(app, CFSTR("CFBundleDisplayName"));
-                if (!name) name = CFDictionaryGetValue(app, CFSTR("CFBundleName"));
+                plist_t name = plist_dict_get_item(app, "CFBundleDisplayName");
+                if (!name) name = plist_dict_get_item(app, "CFBundleName");
                 if (!name) name = bid;
-                CFStringRef ver = CFDictionaryGetValue(app, CFSTR("CFBundleShortVersionString"));
-                CFStringRef type = CFDictionaryGetValue(app, CFSTR("ApplicationType"));
-                int user = type && CFStringCompare(type, CFSTR("User"), 0) == kCFCompareEqualTo;
+                plist_t ver = plist_dict_get_item(app, "CFBundleShortVersionString");
+                plist_t type = plist_dict_get_item(app, "ApplicationType");
+                int user = 0;
+                if (type) { char *tv = NULL; plist_get_string_val(type, &tv); if (tv && !strcmp(tv, "User")) user = 1; free(tv); }
                 sb_puts(&b, first ? "{" : ",{");
                 first = 0;
-                sb_puts(&b, "\"bundleIdentifier\":"); sb_cfstring(&b, bid);
-                sb_puts(&b, ",\"name\":");             sb_cfstring(&b, name);
-                sb_puts(&b, ",\"version\":");          sb_cfstring(&b, ver);
+                sb_puts(&b, "\"bundleIdentifier\":"); sb_plstr(&b, bid);
+                sb_puts(&b, ",\"name\":");             sb_plstr(&b, name);
+                sb_puts(&b, ",\"version\":");          sb_plstr(&b, ver);
                 sb_printf(&b, ",\"isFirstParty\":%s}", user ? "false" : "true");
             }
         }
-        CFRelease(pl);
+        plist_free(pl);
         free(raw);
     }
     close(s);
@@ -1027,32 +1027,28 @@ static void method_terminate_app(int fd, long id, const char *line)
  * parsed -- what host/deviceinfo-era prototypes did in Python. Configuration profiles come from
  * MCInstall's GetProfileList as metadata keyed by identifier. Both proven live 2026-08-23.
  */
-static void sb_cf_str_field(strbuf *b, const char *jkey, CFDictionaryRef d, const char *key, int first)
+static void sb_pl_field(strbuf *b, const char *jkey, plist_t d, const char *key, int first)
 {
-    CFStringRef ks = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
-    CFTypeRef v = CFDictionaryGetValue(d, ks);
-    CFRelease(ks);
+    plist_t v = plist_dict_get_item(d, key);
     sb_puts(b, first ? "" : ",");
     sb_json_string(b, jkey);
     sb_puts(b, ":");
     if (!v) { sb_puts(b, "\"\""); return; }
-    if (CFGetTypeID(v) == CFStringGetTypeID()) { sb_cfstring(b, v); return; }
-    if (CFGetTypeID(v) == CFDateGetTypeID()) {
-        /* ISO-8601 UTC, which the app formats for the locale. */
-        CFAbsoluteTime t = CFDateGetAbsoluteTime(v);
-        time_t unix = (time_t)(t + kCFAbsoluteTimeIntervalSince1970);
-        char tmp[32];
-        strftime(tmp, sizeof tmp, "%Y-%m-%dT%H:%M:%SZ", gmtime(&unix));
+    switch (plist_get_node_type(v)) {
+    case PLIST_STRING: sb_plstr(b, v); return;
+    case PLIST_DATE: {
+        /* plist dates are seconds since 2001-01-01 UTC; +978307200 to Unix. ISO-8601 for the app. */
+        int64_t sec = 0; plist_get_unix_date_val(v, &sec);
+        time_t u = (time_t)sec;
+        char tmp[32]; strftime(tmp, sizeof tmp, "%Y-%m-%dT%H:%M:%SZ", gmtime(&u));
         sb_json_string(b, tmp);
         return;
     }
-    if (CFGetTypeID(v) == CFBooleanGetTypeID()) { sb_puts(b, CFBooleanGetValue(v) ? "true" : "false"); return; }
-    if (CFGetTypeID(v) == CFNumberGetTypeID()) {
-        long long n = 0; CFNumberGetValue(v, kCFNumberLongLongType, &n);
-        sb_printf(b, "%lld", n);
-        return;
+    case PLIST_BOOLEAN: { uint8_t bv = 0; plist_get_bool_val(v, &bv); sb_puts(b, bv ? "true" : "false"); return; }
+    case PLIST_UINT: { uint64_t nn = 0; plist_get_uint_val(v, &nn); sb_printf(b, "%llu", (unsigned long long)nn); return; }
+    case PLIST_REAL: { double dd = 0; plist_get_real_val(v, &dd); sb_printf(b, "%g", dd); return; }
+    default: sb_puts(b, "\"\""); return;
     }
-    sb_puts(b, "\"\"");
 }
 
 static void method_list_profiles(int fd, long id)
@@ -1074,43 +1070,40 @@ static void method_list_profiles(int fd, long id)
             size_t n = 0;
             uint8_t *raw = relay_send(s, req, sizeof req - 1) == 0 ? relay_recv_alloc(s, &n) : NULL;
             close(s);
-            CFDataRef data = raw ? CFDataCreateWithBytesNoCopy(NULL, raw, (CFIndex)n, kCFAllocatorNull) : NULL;
-            CFPropertyListRef pl = data ? CFPropertyListCreateWithData(NULL, data, kCFPropertyListImmutable, NULL, NULL) : NULL;
-            if (data) CFRelease(data);
-            CFArrayRef payload = (pl && CFGetTypeID(pl) == CFDictionaryGetTypeID())
-                               ? CFDictionaryGetValue(pl, CFSTR("Payload")) : NULL;
-            for (CFIndex i = 0; payload && CFGetTypeID(payload) == CFArrayGetTypeID()
-                                && i < CFArrayGetCount(payload); i++) {
-                CFDataRef blob = CFArrayGetValueAtIndex(payload, i);
-                if (CFGetTypeID(blob) != CFDataGetTypeID()) continue;
-                const char *bytes = (const char *)CFDataGetBytePtr(blob);
-                size_t len = (size_t)CFDataGetLength(blob);
+            plist_t pl = NULL;
+            if (raw) plist_from_memory((const char *)raw, (uint32_t)n, &pl, NULL);
+            plist_t payload = (pl && plist_get_node_type(pl) == PLIST_DICT) ? plist_dict_get_item(pl, "Payload") : NULL;
+            for (uint32_t i = 0; payload && plist_get_node_type(payload) == PLIST_ARRAY
+                                && i < plist_array_get_size(payload); i++) {
+                plist_t blob = plist_array_get_item(payload, i);
+                if (plist_get_node_type(blob) != PLIST_DATA) continue;
+                uint64_t len = 0;
+                const char *bytes = plist_get_data_ptr(blob, &len);
                 /* memmem-free scan: the CMS wrapper is binary, the plist inside is text. */
                 const char *start = NULL, *stop = NULL;
-                for (size_t k = 0; k + 8 < len; k++) {
+                for (size_t k = 0; bytes && k + 8 < len; k++) {
                     if (!start && !memcmp(bytes + k, "<?xml", 5)) start = bytes + k;
                     if (start && !memcmp(bytes + k, "</plist>", 8)) { stop = bytes + k + 8; break; }
                 }
                 if (!start || !stop) continue;
-                CFDataRef x = CFDataCreateWithBytesNoCopy(NULL, (const UInt8 *)start, stop - start, kCFAllocatorNull);
-                CFPropertyListRef prof = CFPropertyListCreateWithData(NULL, x, kCFPropertyListImmutable, NULL, NULL);
-                CFRelease(x);
+                plist_t prof = NULL;
+                plist_from_memory(start, (uint32_t)(stop - start), &prof, NULL);
                 if (!prof) continue;
-                if (CFGetTypeID(prof) == CFDictionaryGetTypeID()) {
+                if (plist_get_node_type(prof) == PLIST_DICT) {
                     sb_puts(&b, first ? "{" : ",{");
                     first = 0;
-                    sb_cf_str_field(&b, "name", prof, "Name", 1);
-                    sb_cf_str_field(&b, "app_id_name", prof, "AppIDName", 0);
-                    sb_cf_str_field(&b, "team", prof, "TeamName", 0);
-                    sb_cf_str_field(&b, "uuid", prof, "UUID", 0);
-                    sb_cf_str_field(&b, "expires", prof, "ExpirationDate", 0);
-                    sb_cf_str_field(&b, "created", prof, "CreationDate", 0);
-                    CFArrayRef devs = CFDictionaryGetValue(prof, CFSTR("ProvisionedDevices"));
-                    sb_printf(&b, ",\"devices\":%ld}", devs && CFGetTypeID(devs) == CFArrayGetTypeID() ? (long)CFArrayGetCount(devs) : 0L);
+                    sb_pl_field(&b, "name", prof, "Name", 1);
+                    sb_pl_field(&b, "app_id_name", prof, "AppIDName", 0);
+                    sb_pl_field(&b, "team", prof, "TeamName", 0);
+                    sb_pl_field(&b, "uuid", prof, "UUID", 0);
+                    sb_pl_field(&b, "expires", prof, "ExpirationDate", 0);
+                    sb_pl_field(&b, "created", prof, "CreationDate", 0);
+                    plist_t devs = plist_dict_get_item(prof, "ProvisionedDevices");
+                    sb_printf(&b, ",\"devices\":%u}", devs && plist_get_node_type(devs) == PLIST_ARRAY ? plist_array_get_size(devs) : 0u);
                 }
-                CFRelease(prof);
+                plist_free(prof);
             }
-            if (pl) CFRelease(pl);
+            if (pl) plist_free(pl);
             free(raw);
         }
     }
@@ -1127,28 +1120,30 @@ static void method_list_profiles(int fd, long id)
             size_t n = 0;
             uint8_t *raw = relay_send(s, req, sizeof req - 1) == 0 ? relay_recv_alloc(s, &n) : NULL;
             close(s);
-            CFDataRef data = raw ? CFDataCreateWithBytesNoCopy(NULL, raw, (CFIndex)n, kCFAllocatorNull) : NULL;
-            CFPropertyListRef pl = data ? CFPropertyListCreateWithData(NULL, data, kCFPropertyListImmutable, NULL, NULL) : NULL;
-            if (data) CFRelease(data);
-            if (pl && CFGetTypeID(pl) == CFDictionaryGetTypeID()) {
-                CFArrayRef ids = CFDictionaryGetValue(pl, CFSTR("OrderedIdentifiers"));
-                CFDictionaryRef meta = CFDictionaryGetValue(pl, CFSTR("ProfileMetadata"));
-                for (CFIndex i = 0; ids && CFGetTypeID(ids) == CFArrayGetTypeID() && i < CFArrayGetCount(ids); i++) {
-                    CFStringRef ident = CFArrayGetValueAtIndex(ids, i);
-                    CFDictionaryRef m = meta && CFGetTypeID(meta) == CFDictionaryGetTypeID() ? CFDictionaryGetValue(meta, ident) : NULL;
+            plist_t pl = NULL;
+            if (raw) plist_from_memory((const char *)raw, (uint32_t)n, &pl, NULL);
+            if (pl && plist_get_node_type(pl) == PLIST_DICT) {
+                plist_t ids = plist_dict_get_item(pl, "OrderedIdentifiers");
+                plist_t meta = plist_dict_get_item(pl, "ProfileMetadata");
+                for (uint32_t i = 0; ids && plist_get_node_type(ids) == PLIST_ARRAY && i < plist_array_get_size(ids); i++) {
+                    plist_t ident = plist_array_get_item(ids, i);
+                    char *ident_s = NULL;
+                    plist_get_string_val(ident, &ident_s);
+                    plist_t m = (meta && plist_get_node_type(meta) == PLIST_DICT && ident_s) ? plist_dict_get_item(meta, ident_s) : NULL;
                     sb_puts(&b, first ? "{" : ",{");
                     first = 0;
-                    sb_puts(&b, "\"identifier\":"); sb_cfstring(&b, ident);
-                    if (m && CFGetTypeID(m) == CFDictionaryGetTypeID()) {
-                        sb_cf_str_field(&b, "name", m, "PayloadDisplayName", 0);
-                        sb_cf_str_field(&b, "organization", m, "PayloadOrganization", 0);
-                        sb_cf_str_field(&b, "description", m, "PayloadDescription", 0);
-                        sb_cf_str_field(&b, "uuid", m, "PayloadUUID", 0);
+                    sb_puts(&b, "\"identifier\":"); sb_plstr(&b, ident);
+                    if (m && plist_get_node_type(m) == PLIST_DICT) {
+                        sb_pl_field(&b, "name", m, "PayloadDisplayName", 0);
+                        sb_pl_field(&b, "organization", m, "PayloadOrganization", 0);
+                        sb_pl_field(&b, "description", m, "PayloadDescription", 0);
+                        sb_pl_field(&b, "uuid", m, "PayloadUUID", 0);
                     }
                     sb_puts(&b, "}");
+                    free(ident_s);
                 }
             }
-            if (pl) CFRelease(pl);
+            if (pl) plist_free(pl);
             free(raw);
         }
     }
