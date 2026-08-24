@@ -263,21 +263,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// carry no daemon and expect a manually-run cdhost.
     private func enableEngineIfEmbedded() {
         guard EngineService.isEmbedded else { return }
+        // SMAppService only trusts a daemon whose app is in /Applications. Say so plainly rather
+        // than letting the approval silently fail to stick -- the exact trap the first tester hit.
+        if !EngineService.isInApplications {
+            let a = NSAlert()
+            a.messageText = "Move rPlayHub to Applications"
+            a.informativeText = "Drag rPlayHub into your Applications folder and open it from "
+                + "there. Its background engine can only be approved from /Applications, not from "
+                + "the disk image or Downloads."
+            a.addButton(withTitle: "OK")
+            a.runModal()
+            return
+        }
         switch EngineService.enable() {
-        case .requiresApproval:
-            // First run: guide the user to approve it, once.
-            let alert = NSAlert()
-            alert.messageText = "Approve the rPlayHub engine"
-            alert.informativeText = "rPlayHub needs its background engine, which runs with system "
-                + "privileges to reach the device. Turn on \u{201C}rPlayHub\u{201D} under Login "
-                + "Items, then it starts automatically from now on."
-            alert.addButton(withTitle: "Open Login Items")
-            alert.addButton(withTitle: "Later")
-            if alert.runModal() == .alertFirstButtonReturn { EngineService.openApprovalSettings() }
+        case .enabled:
+            break                       // already approved; the engine is up
+        case .requiresApproval, .notRegistered:
+            promptEngineApproval()
         case .failed(let why):
-            AppBuild.log("engine register failed: \(why)")
-        default:
+            present(title: "Could not register the engine", text: why)
+        case .notEmbedded:
             break
+        }
+    }
+
+    private func promptEngineApproval() {
+        let alert = NSAlert()
+        alert.messageText = "Turn on the rPlayHub engine"
+        alert.informativeText = "In the window that opens, find rPlayHub under \u{201C}Allow in "
+            + "the Background\u{201D} and switch it ON (it starts OFF). That one-time approval "
+            + "lets the engine reach your device; after it, rPlayHub connects on its own."
+        alert.addButton(withTitle: "Open Login Items")
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn {
+            EngineService.openApprovalSettings()
+            // Poll: when the user flips it on, the engine comes up and connect() succeeds.
+            pollEngineUp(attempts: 60)
+        }
+    }
+
+    private func pollEngineUp(attempts: Int) {
+        guard attempts > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            if case .enabled = EngineService.state {
+                self.reconnect()        // engine is up; (re)connect to it
+            } else {
+                self.pollEngineUp(attempts: attempts - 1)
+            }
         }
     }
 
@@ -724,6 +757,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             // Control is how taps reach the phone, so its absence still deserves a retry — but
             // not at the cost of a picture that is already working.
+            if EngineService.isEmbedded, EngineService.isInApplications {
+                if case .enabled = EngineService.state {} else {
+                    // The engine is bundled but not switched on yet -- point the user at the toggle.
+                    deviceLabel = "engine not enabled"
+                    updateStatus()
+                    promptEngineApproval()
+                    return
+                }
+            }
             scheduleRetry(because: "engine not reachable on port \(controlPort)")
             return
         }

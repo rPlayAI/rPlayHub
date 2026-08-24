@@ -54,19 +54,31 @@ enum EngineService {
     /// Register the daemon. On first registration macOS marks it "requires approval" and the user
     /// must switch it on in System Settings > General > Login Items & Extensions. Returns the
     /// resulting state.
+    ///
+    /// Self-heals the classic trap of launching the app from Downloads (or the DMG) once before
+    /// dragging it to /Applications: that leaves a registration pointing at the old, now-gone
+    /// path, which shadows the good one. If we are already enabled/approval-pending we leave it;
+    /// otherwise a fresh register() from the current bundle location supersedes any stale record.
     @discardableResult
     static func enable() -> State {
         guard isEmbedded else { return .notEmbedded }
+        // A prior registration from a different location can leave the daemon stuck. Clearing it
+        // first makes register() bind to wherever this bundle now lives.
+        if case .notRegistered = state { try? service.unregister() }
         do {
             try service.register()
             return state
         } catch {
-            // Already-registered shows up as an error on some OS versions; treat a live status as
-            // success rather than surfacing noise.
             if case .enabled = state { return .enabled }
             if case .requiresApproval = state { return .requiresApproval }
             return .failed("\(error.localizedDescription)")
         }
+    }
+
+    /// Where macOS runs the app from. SMAppService only trusts a daemon whose app lives in
+    /// /Applications; from Downloads or a mounted DMG the approval never sticks.
+    static var isInApplications: Bool {
+        Bundle.main.bundlePath.hasPrefix("/Applications/")
     }
 
     static func disable() {

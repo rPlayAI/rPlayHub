@@ -46,10 +46,15 @@ What the sandbox still cannot do is run our root daemon, so a TestFlight build i
    is also what the Windows/Linux ports want (no TUN driver there either). lwIP is the obvious
    vendoring candidate: C, small, portable, and it serves RSD, every service channel and the RTP
    receive. The existing JSON API survives as an in-process call surface so nothing above it moves.
-2. **usbmuxd access under sandbox** — test the absolute-path exception on `/var/run/usbmuxd` the
-   way rplay tested its exceptions: build, sign for App Store Connect, run, see `CONNECTED` or
-   `EPERM`. If it fails, the fallback is the RemotePairing transport (section "2." below), which
-   needs no usbmuxd at all and which the parity table wants anyway for Pair/Unpair.
+2. **usbmuxd access under sandbox** — TESTED 2026-08-23, and it **fails**: a sandboxed bundle with
+   `com.apple.security.temporary-exception.files.absolute-path.read-write` on `/var/run/usbmuxd`
+   still gets `Operation not permitted` on connect (both with and without the exception; the probe
+   is in the scratch history). The file-path exception does not cover a unix-socket connect, and
+   rplay's approval is no precedent -- rplay never used usbmuxd. So there is **no entitlement path
+   to usbmuxd under the sandbox**, which means TestFlight requires the **RemotePairing transport**
+   (direct wifi to the phone, no usbmuxd at all) in addition to the userspace stack. That is the
+   big unbuilt pairing handshake in `doc/REMOTEPAIRING-PROTOCOL.md`. Net: TestFlight now costs two
+   large pieces, not one -- userspace TCP/IP AND RemotePairing.
 3. **Bundle the DDI and mount it ourselves.** DONE 2026-08-23. Proven end to end via
    `host/ddi_mount.py`, then ported to C as `host-c/ddi.c` and wired into the engine: cdhost mounts
    the DDI automatically on connect (a "Layer 3c" step) for any iOS 17+ device that lacks one, and
