@@ -632,6 +632,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inspector.control = nil
         DeviceInfo.engine = nil
         hevc = nil
+        // Drop the previous device's still at once, and reset the still timer so a fresh capture
+        // is taken on the next idle tick rather than the old picture lingering for up to four
+        // seconds after a device switch.
+        view.hideStill()
+        framesAtLastTick = 0
+        quietTicks = 0
+        lastStillAt = 0
         connect()
     }
 
