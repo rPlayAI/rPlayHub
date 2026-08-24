@@ -52,7 +52,8 @@ does the CoreDeviceProxy handshake over it.
 6. **DONE (static link)** -- `make STATIC=1` links the four .a archives (libimobiledevice,
    -glue, libusbmuxd, libplist; + `-lc++` since libplist is C++), so the shipped binary needs no
    installed libimobiledevice/libplist. `otool -L` then shows only libc++, OpenSSL, libz, libSystem
-   -- all system except OpenSSL, which the DMG already bundles. `scripts/package-test-dmg.sh`
+   -- and with OpenSSL also static (STATIC=1 links libssl.a/libcrypto.a) the binary depends on
+   **only system libs** (libc++, libz, libSystem). Nothing to install, nothing to bundle. `scripts/package-test-dmg.sh`
    builds the embedded engine with STATIC=1, so the app is fully self-contained. Homebrew ships the
    .a files; a Linux/Windows build points the paths at its own static build.
 7. **Port build**: on Linux/Windows link the same stack (+ libtatsu for the DDI if used) from the

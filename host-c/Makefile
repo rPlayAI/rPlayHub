@@ -61,7 +61,13 @@ ifeq ($(TLS),mbedtls)
 else
   OPENSSL ?= /opt/homebrew/opt/openssl@3
   CFLAGS  += -I$(OPENSSL)/include
-  LDFLAGS += -L$(OPENSSL)/lib -lssl -lcrypto
+  ifeq ($(STATIC),1)
+    # Link OpenSSL from its .a too, so the shipped binary needs no OpenSSL dylib -- only system
+    # libs remain. libimobiledevice.a's OpenSSL symbols resolve against these same archives.
+    LDFLAGS += $(OPENSSL)/lib/libssl.a $(OPENSSL)/lib/libcrypto.a
+  else
+    LDFLAGS += -L$(OPENSSL)/lib -lssl -lcrypto
+  endif
   TLS_SRC := tls_openssl.c
 endif
 

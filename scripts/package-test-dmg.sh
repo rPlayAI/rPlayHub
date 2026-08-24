@@ -45,8 +45,11 @@ else
     echo "    (no DDI at $DDI_SRC -- skipping; the colleague will need Xcode/Device Hub after a reboot)"
 fi
 
-say "3/6  bundling OpenSSL dylibs beside cdhost, rewriting load paths"
-for lib in $(otool -L "$APP/Contents/MacOS/cdhost" | awk '/opt\/homebrew.*(ssl|crypto)/{print $1}'); do
+# With STATIC=1 the engine links libimobiledevice + libplist + OpenSSL from .a archives, so it has
+# NO non-system dylib dependency (only libc++, libz, libSystem). This loop bundles any Homebrew
+# dylib that somehow remains; with the static build it finds none and is a no-op.
+say "3/6  bundling any non-system dylibs beside cdhost (none expected -- static build)"
+for lib in $(otool -L "$APP/Contents/MacOS/cdhost" | awk '/opt\/homebrew/{print $1}'); do
     base="$(basename "$lib")"
     cp "$lib" "$APP/Contents/MacOS/$base"; chmod 644 "$APP/Contents/MacOS/$base"
     install_name_tool -change "$lib" "@loader_path/$base" "$APP/Contents/MacOS/cdhost"
