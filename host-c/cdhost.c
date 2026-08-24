@@ -170,14 +170,25 @@ typedef struct {
     unsigned long tx, rx;
 } pump_t;
 
+/* When either pump thread fails, the CoreDevice tunnel is dead and cannot be recovered without
+ * re-establishing it -- which needs a full restart. Rather than leave the daemon serving a
+ * live-looking-but-dead session (bug #7: it keeps answering tunnel_info while nothing flows),
+ * exit the process. The kernel destroys the utun on exit; the app's control connection drops and
+ * it reconnects; under launchd the daemon auto-restarts. A clean drop beats a silent black. */
+static void pump_die(const char *reason) {
+    fprintf(stderr, "\n  tunnel died: %s -- exiting so the session does not go stale (bug #7)\n",
+            reason ? reason : "unknown");
+    _exit(1);
+}
+
 static void *pump_host_to_device(void *arg) {
     pump_t *p = arg;
     uint8_t buf[70000];
     for (;;) {
         ssize_t n = read(p->utun, buf, sizeof buf);
-        if (n <= 4) { p->reason = "utun read ended"; p->failed = 1; return NULL; }
+        if (n <= 4) { pump_die("utun read ended"); }
         if (cwrite(p->tun, buf + 4, (size_t)(n - 4)) < 0) {   /* strip the 4-byte AF prefix */
-            p->reason = "tunnel write failed"; p->failed = 1; return NULL;
+            pump_die("tunnel write failed");
         }
         p->tx++;
     }
@@ -190,15 +201,15 @@ static void *pump_device_to_host(void *arg) {
     for (;;) {
         /* Reframe from a byte stream: Payload Length covers everything after the fixed header. */
         if (cread_n(p->tun, frame + 4, IPV6_HDR_LEN) < 0) {
-            p->reason = "tunnel read ended"; p->failed = 1; return NULL;
+            pump_die("tunnel read ended");
         }
         uint16_t plen = ntohs(*(uint16_t *)(frame + 4 + 4));
         if (plen && cread_n(p->tun, frame + 4 + IPV6_HDR_LEN, plen) < 0) {
-            p->reason = "tunnel read ended mid-packet"; p->failed = 1; return NULL;
+            pump_die("tunnel read ended mid-packet");
         }
         memcpy(frame, &af, 4);
         if (write(p->utun, frame, 4 + IPV6_HDR_LEN + plen) < 0) {
-            p->reason = "utun write failed"; p->failed = 1; return NULL;
+            pump_die("utun write failed");
         }
         p->rx++;
     }

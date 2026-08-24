@@ -132,7 +132,12 @@ are each an afternoon on the existing HID path.
   Worse, a re-executed daemon once ignored Ctrl-C and a root `kill -INT` (inherited signal
   state is the only mechanism that fits); `own_signals()` in `cdhost.c` and the `quit` API
   method are the answer, to be confirmed the next time a rebound daemon is stopped.
-- **Dead-session liveness (bug #7).** When the phone leaves wifi the daemon keeps answering `tunnel_info`/`stream_info` while nothing flows; only a restart clears it. Device Hub does not have this failure. Any parity claim should include fixing it — it is exactly the kind of thing a drop-in replacement gets judged on.
+- **Dead-session liveness (bug #7) -- PARTIALLY FIXED 2026-08-24.** The pump now exits the daemon
+  when the CoreDevice tunnel dies (`pump_die` in cdhost.c), so a dead session drops the app's
+  connection (and auto-restarts under launchd) instead of answering `tunnel_info`/`stream_info`
+  while nothing flows. The remaining gap is proactive detection of a *silently* half-dead link
+  (device on wifi but not sending) that never triggers a read/write error.
+- **(original) Dead-session liveness (bug #7).** When the phone leaves wifi the daemon keeps answering `tunnel_info`/`stream_info` while nothing flows; only a restart clears it. Device Hub does not have this failure. Any parity claim should include fixing it — it is exactly the kind of thing a drop-in replacement gets judged on.
 - **iOS < 27 cannot mirror.** Same limit as Device Hub ("screen viewing is unsupported"), so not a parity gap — but the app should say so as plainly as Device Hub does when such a device is selected. It currently warns in the daemon log only.
 - **Portability caveat.** Decoding the RVRA-adapted stream works on Apple hardware only today (`doc/RVRA-AND-PORTABILITY.md`). Irrelevant for replacing Device Hub on macOS, decisive if the same product is asked to serve Linux/Windows viewers.
 
