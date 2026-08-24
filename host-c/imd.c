@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
 
 #include <libimobiledevice/libimobiledevice.h>
 #include <libimobiledevice/lockdown.h>
@@ -209,9 +211,25 @@ int usbmux_enumerate(api_device *out, int max)
  */
 #include <libimobiledevice/lockdown.h>
 
+/* libimobiledevice's connect to a network device has no short timeout: if the target phone is not
+ * reachable when a bringup runs (a wifi device that dropped, a re-exec onto the wrong device), the
+ * whole daemon hangs for the OS TCP timeout or longer. A watchdog bounds it -- a stuck bringup
+ * exits cleanly with a clear message rather than locking up (under launchd, that restarts on the
+ * default device; a manual run just exits). 30s is generous: a healthy bringup takes ~1-2s. */
+static void imd_bringup_timeout(int sig)
+{
+    (void)sig;
+    static const char msg[] = "\n  bringup timed out (30s): the device is not reachable. "
+                              "Is it on this network and unlocked?\n";
+    if (write(2, msg, sizeof msg - 1)) { /* ignore */ }
+    _exit(2);
+}
+
 int imd_bringup(void **out_conn, char *udid_out, size_t udidlen,
                 char *devname, size_t dnlen, char *prodver, size_t pvlen)
 {
+    signal(SIGALRM, imd_bringup_timeout);
+    alarm(30);
     printf("== Layer 0: usbmux (libusbmuxd) ==\n");
     api_device devs[API_MAX_DEVICES];
     int n = usbmux_enumerate(devs, API_MAX_DEVICES);
@@ -275,6 +293,7 @@ int imd_bringup(void **out_conn, char *udid_out, size_t udidlen,
     lockdownd_service_descriptor_free(svc);
     lockdownd_client_free(lk);          /* the service is started; the client is no longer needed */
     /* dev is intentionally NOT freed: the connection rides on it for the daemon's life. */
+    alarm(0);            /* bringup done; the pump has its own (blocking) timeout handling */
     *out_conn = conn;
     return 0;
 }
