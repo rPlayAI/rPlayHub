@@ -36,6 +36,12 @@ CFLAGS  += -I$(IMD_PREFIX)/include
 # order matters -- dependents before dependencies -- and libplist is C++, hence -lc++. Homebrew
 # ships these .a files; a Linux/Windows build points the paths at its own static build.
 ifeq ($(STATIC),1)
+  # Strip unused code so a whole-archive static link does not bloat the binary. macOS's linker
+  # dead-strips at the symbol/atom level; -ffunction-sections helps it split further.
+  CFLAGS  += -ffunction-sections -fdata-sections
+  # -dead_strip removes unused functions; -S/-x strip debug and local symbols (this is a shipped
+  # binary, not one you debug). Together they cut the whole-archive static link by ~1.2 MB.
+  LDFLAGS += -Wl,-dead_strip -Wl,-S -Wl,-x
   IMD_LIBS := $(IMD_PREFIX)/opt/libimobiledevice/lib/libimobiledevice-1.0.a \
               $(IMD_PREFIX)/opt/libimobiledevice-glue/lib/libimobiledevice-glue-1.0.a \
               $(IMD_PREFIX)/opt/libusbmuxd/lib/libusbmuxd-2.0.a \
@@ -85,6 +91,7 @@ all: cdhost
 cdhost: cdhost.c api_server.c media.c ddi.c imd.c $(CORE_SRC) $(TLS_SRC)
 	@echo "  TLS backend: $(TLS)"
 	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c ddi.c imd.c $(CORE_SRC) $(TLS_SRC) $(LDFLAGS) -lz
+	$(if $(filter 1,$(STATIC)),strip $@,)   # full symbol strip on the shipped static build
 
 clean:
 	rm -f cdhost
