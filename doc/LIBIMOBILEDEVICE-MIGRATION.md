@@ -57,10 +57,13 @@ does the CoreDeviceProxy handshake over it.
 
 ## Status
 
-Stages 1-5 done and verified against the phone (bringup non-root; device_info / enumerate /
-list_apps / list_profiles live). The C engine is CoreFoundation-free. The only untested path is
-the utun + packet pump under sudo (Layer 3a), which uses the same conn_t the verified tunnel
-handshake drives.
+Stages 1-5 done and **fully verified against the phone under sudo** (2026-08-24): the whole path
+now runs on libimobiledevice -- Layers 0-2, the utun + packet pump over the idevice_connection,
+and services over the tunnel (take_screenshot returned a 1170x2532 PNG; list_apps returned 301
+apps; device_info / enumerate / list_profiles live). The C engine is CoreFoundation-free and links
+no macOS framework. One follow-up fix was needed: idevice_connection_receive_timeout returns
+SUCCESS with 0 bytes on a timeout, which the pump reader must treat as "keep waiting", not EOF
+(commit b16d1ee) -- otherwise the pump dies when the tunnel goes quiet after startup.
 
 ## Notes
 
