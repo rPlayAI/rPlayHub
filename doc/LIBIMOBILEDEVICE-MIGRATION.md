@@ -44,8 +44,23 @@ does the CoreDeviceProxy handshake over it.
 4. **Remaining plist usage** in `api_server.c` (profiles) and `ddi.c` (mounter plists + TSS) →
    libplist. After this the C engine has **no CoreFoundation dependency**, so it builds on
    Linux/Windows. (`ddi.c` already leans on `libtatsu` conceptually; libplist finishes it.)
-5. **Port build**: on Linux/Windows link libimobiledevice + libplist (+ libusbmuxd, libtatsu) from
-   the system or a vendored build; drop `-framework CoreFoundation`.
+5. **DONE (macOS) — CoreFoundation removed.** With the transport on libimobiledevice, the 250-line
+   hand-rolled usbmux/lockdown/TLS/CFLite block in cdhost.c is dead and deleted; the Makefile no
+   longer links `-framework CoreFoundation`. `otool -L cdhost` shows only libimobiledevice +
+   libplist (+ OpenSSL, libz). **The whole C engine is CoreFoundation-free** and builds/links with
+   no macOS framework -- the portability goal. Bringup re-verified live after removal.
+6. **Port build**: on Linux/Windows link libimobiledevice + libplist + libusbmuxd (+ libtatsu for
+   the DDI) from the system or a vendored static build (rplay's `build-libimobiledevice-osx.sh` is
+   the recipe; it builds all three static). Only the four OS seams in `app/PORTING.md` (tunnel
+   interface, video decode/display, input capture) remain platform-specific; the transport no
+   longer is.
+
+## Status
+
+Stages 1-5 done and verified against the phone (bringup non-root; device_info / enumerate /
+list_apps / list_profiles live). The C engine is CoreFoundation-free. The only untested path is
+the utun + packet pump under sudo (Layer 3a), which uses the same conn_t the verified tunnel
+handshake drives.
 
 ## Notes
 

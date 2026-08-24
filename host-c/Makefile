@@ -32,10 +32,10 @@ IMD_PREFIX ?= /opt/homebrew
 CFLAGS  += -I$(IMD_PREFIX)/include
 LDFLAGS += -L$(IMD_PREFIX)/lib -limobiledevice-1.0 -lplist-2.0
 
-ifeq ($(UNAME),Darwin)
-  LDFLAGS += -framework CoreFoundation
-else
-  CFLAGS  += -I$(SDK_SUPPORT) -I$(SDK_EXTERNAL)
+# CoreFoundation is gone: the engine's plists are libplist and its usbmux/lockdown is
+# libimobiledevice, so no macOS framework is needed. (The CFLite include for non-Darwin is no
+# longer needed either now that nothing uses CFLite.)
+ifneq ($(UNAME),Darwin)
   LDFLAGS += -lpthread
 endif
 
