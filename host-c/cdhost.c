@@ -17,6 +17,8 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <mach-o/dyld.h>
+#include <limits.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -973,7 +975,20 @@ int main(int argc, char **argv) {
      * daemon binds whatever it would have anyway -- silently, and three runs were lost to that
      * before anyone noticed. `sudo env VAR=... ./cdhost` works, but a flag cannot be got wrong.
      * The environment variables still work for anything already using them. */
-    if (!realpath(argv[0], g_self)) snprintf(g_self, sizeof g_self, "%s", argv[0]);
+    /* The absolute path to THIS executable, for the device-switch re-exec (cdhost_rebind).
+     * argv[0] is unreliable under launchd -- the SMAppService daemon is started with the relative
+     * BundleProgram path "Contents/MacOS/cdhost" and an unknown CWD, so realpath(argv[0]) fails and
+     * execv then gets "No such file or directory". _NSGetExecutablePath always returns the real
+     * path. */
+    {
+        char raw[PATH_MAX];
+        uint32_t sz = sizeof raw;
+        if (_NSGetExecutablePath(raw, &sz) == 0 && realpath(raw, g_self)) {
+            /* got it */
+        } else if (!realpath(argv[0], g_self)) {
+            snprintf(g_self, sizeof g_self, "%s", argv[0]);
+        }
+    }
 
     for (int i = 1; i < argc; i++) {
         int matched = 0;
