@@ -25,6 +25,13 @@ SDK_SUPPORT  := $(SDK_ROOT)/Support
 SDK_EXTERNAL := $(SDK_ROOT)/External
 
 CFLAGS  += -Wall -Wextra -O2
+
+# libimobiledevice stack (Stage-1 migration: device_info, and more to come). Homebrew prefix on
+# macOS; a Linux/Windows build points these at the system or vendored copies.
+IMD_PREFIX ?= /opt/homebrew
+CFLAGS  += -I$(IMD_PREFIX)/include
+LDFLAGS += -L$(IMD_PREFIX)/lib -limobiledevice-1.0 -lplist-2.0
+
 ifeq ($(UNAME),Darwin)
   LDFLAGS += -framework CoreFoundation
 else
@@ -56,9 +63,9 @@ CFLAGS   += -I$(CORE_DIR)
 
 all: cdhost
 
-cdhost: cdhost.c api_server.c media.c ddi.c $(CORE_SRC) $(TLS_SRC)
+cdhost: cdhost.c api_server.c media.c ddi.c imd.c $(CORE_SRC) $(TLS_SRC)
 	@echo "  TLS backend: $(TLS)"
-	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c ddi.c $(CORE_SRC) $(TLS_SRC) $(LDFLAGS) -lz
+	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c ddi.c imd.c $(CORE_SRC) $(TLS_SRC) $(LDFLAGS) -lz
 
 clean:
 	rm -f cdhost
