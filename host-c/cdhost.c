@@ -34,6 +34,7 @@
 #include "api_server.h"
 #include "../core/rp_xpc.h"
 #include "ddi.h"
+#include "usernet.h"
 
 #define USBMUX_TYPE_PLIST 8
 #define CDTUNNEL_MAGIC "CDTunnel"
@@ -213,7 +214,14 @@ static void *pump_device_to_host(void *arg) {
 }
 
 /* Prove the routing works: an ordinary TCP connect to the device's RSD port. */
+static int g_userspace;   /* fwd: set in main from RPLAY_USERSPACE_NET */
 static int rsd_reachable(const char *device, long rsd_port) {
+    if (g_userspace) {
+        int s = usernet_connect(device, (int)rsd_port);
+        if (s < 0) return -1;
+        usernet_close(s);
+        return 0;
+    }
     struct sockaddr_in6 sa;
     memset(&sa, 0, sizeof sa);
     sa.sin6_family = AF_INET6;
@@ -238,18 +246,23 @@ static int rsd_reachable(const char *device, long rsd_port) {
  * The session layer lives in ../core so the daemon and the ports share it; only the socket
  * plumbing is here.
  */
+/* g_userspace (declared above): reach the device over lwIP (no root utun) instead of kernel
+ * sockets routed through the utun. Read/write route by fd: lwIP fds are offset above kernel fds. */
 static long sock_read(void *ctx, void *buf, size_t len)
 {
-    return (long)recv(*(int *)ctx, buf, len, 0);
+    int fd = *(int *)ctx;
+    return usernet_owns(fd) ? usernet_read(fd, buf, len) : (long)recv(fd, buf, len, 0);
 }
 
 static long sock_write(void *ctx, const void *buf, size_t len)
 {
-    return (long)send(*(int *)ctx, buf, len, 0);
+    int fd = *(int *)ctx;
+    return usernet_owns(fd) ? usernet_write(fd, buf, len) : (long)send(fd, buf, len, 0);
 }
 
 static int rsd_connect(const char *addr, long port)
 {
+    if (g_userspace) return usernet_connect(addr, (int)port);
     struct sockaddr_in6 sa;
     memset(&sa, 0, sizeof sa);
     sa.sin6_family = AF_INET6;
@@ -515,6 +528,7 @@ static void own_signals(void)
 }
 
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: a daemon's layer log should appear live */
     own_signals();
 
     /* Flags rather than environment only, because sudo strips the environment.
@@ -594,37 +608,45 @@ int main(int argc, char **argv) {
     }
     printf("  handshake: us=%s device=%s serverRSDPort=%ld mtu=%ld\n", ours, addr, rsd, mtu);
 
-    printf("\n== Layer 3a: utun + packet pump ==\n");
-    if (geteuid() != 0) {
-        printf("  not root — cannot create a utun. Re-run with sudo to bring the tunnel up:\n");
-        printf("      sudo %s\n", "./cdhost");
-        printf("\nLayers 0-2 verified in C against the device.\n");
-        return 0;
-    }
+    g_userspace = getenv("RPLAY_USERSPACE_NET") && getenv("RPLAY_USERSPACE_NET")[0] == '1';
+    usernet_enable(g_userspace);
 
-    char ifname[64] = {0};
-    int utun = utun_open(ifname, sizeof ifname);
-    if (utun < 0) { perror("  utun_open"); return 1; }
-    printf("  utun: %s\n", ifname);
-    if (utun_configure(ifname, ours, addr, mtu) < 0) {
-        fprintf(stderr, "  could not configure %s\n", ifname);
-        return 1;
+    if (g_userspace) {
+        /* Userspace TCP/IP over the tunnel -- no root, no utun, no TUN driver (the Linux/Windows
+         * and App Store path). lwIP runs the IP stack in-process over the CoreDeviceProxy
+         * connection; every tunnel connection below opens an lwIP socket instead of a kernel one. */
+        printf("\n== Layer 3a: userspace TCP/IP (lwIP, no root) ==\n");
+        if (usernet_start(tun.idev, ours, addr) != 0) { fprintf(stderr, "  usernet_start failed\n"); return 1; }
+        printf("  lwIP netif up over the tunnel\n");
+    } else {
+        printf("\n== Layer 3a: utun + packet pump ==\n");
+        if (geteuid() != 0) {
+            printf("  not root — cannot create a utun. Re-run with sudo, or set RPLAY_USERSPACE_NET=1\n");
+            printf("      sudo %s\n", "./cdhost");
+            printf("\nLayers 0-2 verified in C against the device.\n");
+            return 0;
+        }
+        char ifname[64] = {0};
+        int utun = utun_open(ifname, sizeof ifname);
+        if (utun < 0) { perror("  utun_open"); return 1; }
+        printf("  utun: %s\n", ifname);
+        if (utun_configure(ifname, ours, addr, mtu) < 0) {
+            fprintf(stderr, "  could not configure %s\n", ifname);
+            return 1;
+        }
+        static pump_t pump;
+        pump.utun = utun; pump.tun = &tun; pump.failed = 0; pump.reason = NULL;
+        pthread_t t1, t2;
+        pthread_create(&t1, NULL, pump_host_to_device, &pump);
+        pthread_create(&t2, NULL, pump_device_to_host, &pump);
+        printf("  pump running\n");
     }
-
-    static pump_t pump;
-    pump.utun = utun; pump.tun = &tun; pump.failed = 0; pump.reason = NULL;
-    pthread_t t1, t2;
-    pthread_create(&t1, NULL, pump_host_to_device, &pump);
-    pthread_create(&t2, NULL, pump_device_to_host, &pump);
-    printf("  pump running\n");
 
     sleep(1);
     if (rsd_reachable(addr, rsd) == 0)
-        printf("  ✅ RSD reachable at [%s]:%ld with an ordinary socket — the tunnel is live\n",
-               addr, rsd);
+        printf("  ✅ RSD reachable at [%s]:%ld — the tunnel is live\n", addr, rsd);
     else
-        printf("  ✗ could not connect to [%s]:%ld (%s)\n", addr, rsd,
-               pump.failed ? pump.reason : strerror(errno));
+        printf("  ✗ could not connect to [%s]:%ld\n", addr, rsd);
 
     printf("\n== Layer 3b: RSD over RemoteXPC ==\n");
     static api_session session;
@@ -685,14 +707,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "  api server did not start; shutting down\n");
         return 1;
     }
-
-    while (!pump.failed) {
-        sleep(2);
-        printf("  pump: tx=%lu rx=%lu\n", pump.tx, pump.rx);
-    }
-    fprintf(stderr, "  tunnel died: %s\n", pump.reason ? pump.reason : "unknown");
-
-    run_cmd("ifconfig %s destroy >/dev/null 2>&1", ifname);
-    close(utun);
+    /* api_serve blocks until the process is killed; a dead tunnel exits via pump_die (utun path)
+     * and the kernel reclaims the utun on exit. Reaching here means the server stopped. */
     return 1;
 }

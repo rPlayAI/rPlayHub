@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include <plist/plist.h>
+#include "usernet.h"
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
@@ -49,21 +50,11 @@ static int dget_str(plist_t d, const char *k, char *out, size_t cap)
 /* ------------------------------------------------------------------ framed plist over the tunnel */
 
 static int recvn(int fd, uint8_t *buf, size_t n)
-{ size_t g = 0; while (g < n) { ssize_t r = recv(fd, buf + g, n - g, 0); if (r <= 0) return -1; g += (size_t)r; } return 0; }
+{ size_t g = 0; while (g < n) { long r = tun_read(fd, buf + g, n - g); if (r <= 0) return -1; g += (size_t)r; } return 0; }
 
 static int mounter_connect(const char *addr, long port)
 {
-    struct sockaddr_in6 sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin6_family = AF_INET6;
-    sa.sin6_port = htons((uint16_t)port);
-    if (inet_pton(AF_INET6, addr, &sa.sin6_addr) != 1) return -1;
-    int fd = socket(AF_INET6, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-    struct timeval tv = { .tv_sec = 60, .tv_usec = 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
-    return fd;
+    return tun_connect(addr, (int)port, 15);   /* tunnel: kernel socket or lwIP per userspace mode */
 }
 
 static int send_plist(int fd, plist_t d)
@@ -152,7 +143,7 @@ int cdhost_ddi_is_mounted(const char *addr, long port)
     int fd = mounter_connect(addr, port);
     if (fd < 0) return 0;
     int m = rsd_checkin(fd) == 0 && copy_devices_has_personalized(fd);
-    close(fd);
+    tun_close(fd);
     return m;
 }
 
@@ -422,27 +413,27 @@ int cdhost_ddi_activate(const char *addr, long port, const char *ddi_dir_in)
 
     int fd = mounter_connect(addr, port);
     if (fd < 0) return RP_DDI_NO_SERVICE;
-    if (rsd_checkin(fd) != 0) { close(fd); return RP_DDI_ERR; }
+    if (rsd_checkin(fd) != 0) { tun_close(fd); return RP_DDI_ERR; }
 
-    if (copy_devices_has_personalized(fd)) { close(fd); return RP_DDI_ALREADY; }
+    if (copy_devices_has_personalized(fd)) { tun_close(fd); return RP_DDI_ALREADY; }
 
     /* identity + nonce */
     plist_t ir = simple_cmd(fd, "QueryPersonalizationIdentifiers", "PersonalizedImageType", "DeveloperDiskImage");
     plist_t ids = ir ? dget(ir, "PersonalizationIdentifiers") : NULL;
-    if (!ids) { if (ir) plist_free(ir); close(fd); fprintf(stderr, "  QueryPersonalizationIdentifiers failed\n"); return RP_DDI_ERR; }
+    if (!ids) { if (ir) plist_free(ir); tun_close(fd); fprintf(stderr, "  QueryPersonalizationIdentifiers failed\n"); return RP_DDI_ERR; }
     long chip = 0, board = 0;
     { plist_t v = dget(ids, "ChipID"); if (v) { uint64_t u = 0; plist_get_uint_val(v, &u); chip = (long)u; }
       v = dget(ids, "BoardId"); if (v) { uint64_t u = 0; plist_get_uint_val(v, &u); board = (long)u; } }
 
     plist_t nr = simple_cmd(fd, "QueryNonce", "PersonalizedImageType", "DeveloperDiskImage");
     plist_t nonce = nr ? dget(nr, "PersonalizationNonce") : NULL;
-    if (!nonce || plist_get_node_type(nonce) != PLIST_DATA) { if (nr) plist_free(nr); plist_free(ir); close(fd); fprintf(stderr, "  QueryNonce failed\n"); return RP_DDI_ERR; }
+    if (!nonce || plist_get_node_type(nonce) != PLIST_DATA) { if (nr) plist_free(nr); plist_free(ir); tun_close(fd); fprintf(stderr, "  QueryNonce failed\n"); return RP_DDI_ERR; }
     uint64_t nonce_len = 0;
     const char *nonce_bytes = plist_get_data_ptr(nonce, &nonce_len);
 
     plist_t manifest = load_manifest(ddi_dir);
     plist_t bi = manifest ? pick_identity(manifest, chip, board) : NULL;
-    if (!bi) { if (manifest) plist_free(manifest); plist_free(nr); plist_free(ir); close(fd);
+    if (!bi) { if (manifest) plist_free(manifest); plist_free(nr); plist_free(ir); tun_close(fd);
                fprintf(stderr, "  no BuildIdentity for chip %#lx board %#lx\n", chip, board); return RP_DDI_ERR; }
 
     /* ticket from Apple */
@@ -457,7 +448,7 @@ int cdhost_ddi_activate(const char *addr, long port, const char *ddi_dir_in)
     if (tss_xml) plist_mem_free(tss_xml);
     plist_free(tss);
     free(resp);
-    if (!ticket) { plist_free(manifest); plist_free(nr); plist_free(ir); close(fd); return RP_DDI_TSS_FAILED; }
+    if (!ticket) { plist_free(manifest); plist_free(nr); plist_free(ir); tun_close(fd); return RP_DDI_TSS_FAILED; }
 
     /* the .dmg and trust cache paths from the manifest */
     char dmg_rel[256] = "", tc_rel[256] = "";
@@ -470,7 +461,7 @@ int cdhost_ddi_activate(const char *addr, long port, const char *ddi_dir_in)
     snprintf(tc_path, sizeof tc_path, "%s/Restore/%s", ddi_dir, tc_rel);
     uint8_t *dmg = NULL, *tc = NULL; size_t dmg_n = 0, tc_n = 0;
     if (read_file(dmg_path, &dmg, &dmg_n) != 0 || read_file(tc_path, &tc, &tc_n) != 0) {
-        free(ticket); free(dmg); free(tc); plist_free(manifest); plist_free(nr); plist_free(ir); close(fd);
+        free(ticket); free(dmg); free(tc); plist_free(manifest); plist_free(nr); plist_free(ir); tun_close(fd);
         fprintf(stderr, "  could not read the DDI image files\n"); return RP_DDI_NO_DDI;
     }
 
@@ -491,7 +482,7 @@ int cdhost_ddi_activate(const char *addr, long port, const char *ddi_dir_in)
         goto done;
     }
     plist_free(ack);
-    if (send(fd, dmg, dmg_n, 0) != (ssize_t)dmg_n) { fprintf(stderr, "  upload failed\n"); goto done; }
+    if (tun_write(fd, dmg, dmg_n) != (ssize_t)dmg_n) { fprintf(stderr, "  upload failed\n"); goto done; }
     { plist_t up = recv_plist(fd); char s2[32] = "";
       int good = up && dget_str(up, "Status", s2, sizeof s2) == 0 && !strcmp(s2, "Complete");
       if (up) plist_free(up);
@@ -514,7 +505,7 @@ int cdhost_ddi_activate(const char *addr, long port, const char *ddi_dir_in)
 done:
     free(ticket); free(dmg); free(tc);
     plist_free(manifest); plist_free(nr); plist_free(ir);
-    close(fd);
+    tun_close(fd);
     if (rc == RP_DDI_OK) fprintf(stderr, "  DDI mounted -- developer services are live.\n");
     return rc;
 }

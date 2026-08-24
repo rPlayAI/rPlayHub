@@ -23,6 +23,7 @@
 #include "media.h"
 #include "../core/rp_xpc.h"
 #include "ddi.h"
+#include "usernet.h"
 
 /* Big enough for the largest reply we ask for, which is a full-screen PNG.
  *
@@ -114,8 +115,8 @@ static void reply_error(int fd, long id, const char *code, const char *message)
 }
 
 
-static long svc_read(void *ctx, void *buf, size_t len)  { return (long)recv(*(int *)ctx, buf, len, 0); }
-static long svc_write(void *ctx, const void *buf, size_t len) { return (long)send(*(int *)ctx, buf, len, 0); }
+static long svc_read(void *ctx, void *buf, size_t len)  { return tun_read(*(int *)ctx, buf, len); }
+static long svc_write(void *ctx, const void *buf, size_t len) { return tun_write(*(int *)ctx, buf, len); }
 
 /* ------------------------------------------------------------------ talking to a service
  *
@@ -143,35 +144,9 @@ static int svc_open(svc_conn *c, const char *addr, long port)
     c->raw = malloc(1 << 16);
     if (!c->reassembly || !c->raw) { free(c->reassembly); free(c->raw); return -1; }
 
-    struct sockaddr_in6 sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin6_family = AF_INET6;
-    sa.sin6_port = htons((uint16_t)port);
-    if (inet_pton(AF_INET6, addr, &sa.sin6_addr) != 1) goto fail;
-    c->fd = socket(AF_INET6, SOCK_STREAM, 0);
+    /* Connect through the tunnel (kernel socket, or lwIP when userspace mode is on). */
+    c->fd = tun_connect(addr, (int)port, 3);
     if (c->fd < 0) goto fail;
-
-    /* Connect with a deadline. The default would block for over a minute on an unreachable
-     * service, and the caller is answering a request while that happens. */
-    int flags = fcntl(c->fd, F_GETFL, 0);
-    fcntl(c->fd, F_SETFL, flags | O_NONBLOCK);
-    int rc = connect(c->fd, (struct sockaddr *)&sa, sizeof sa);
-    if (rc != 0) {
-        if (errno != EINPROGRESS) goto fail;
-        fd_set wr;
-        FD_ZERO(&wr);
-        FD_SET(c->fd, &wr);
-        struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
-        if (select(c->fd + 1, NULL, &wr, NULL, &tv) <= 0) goto fail;
-        int err = 0;
-        socklen_t elen = sizeof err;
-        if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) goto fail;
-    }
-    fcntl(c->fd, F_SETFL, flags);
-
-    /* A full-screen PNG takes the device time to render and push over wifi. */
-    struct timeval rtv = { .tv_sec = 30, .tv_usec = 0 };
-    setsockopt(c->fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof rtv);
 
     rp_rxpc_io io = { svc_read, svc_write, &c->fd };
     rp_rxpc_init(&c->s, io, c->reassembly, SVC_REASSEMBLY, c->raw, 1 << 16);
@@ -179,7 +154,7 @@ static int svc_open(svc_conn *c, const char *addr, long port)
     return 0;
 
 fail:
-    if (c->fd >= 0) close(c->fd);
+    if (c->fd >= 0) tun_close(c->fd);
     c->fd = -1;
     free(c->reassembly); c->reassembly = NULL;
     free(c->raw); c->raw = NULL;
@@ -188,7 +163,7 @@ fail:
 
 static void svc_close(svc_conn *c)
 {
-    if (c->fd >= 0) close(c->fd);
+    if (c->fd >= 0) tun_close(c->fd);
     c->fd = -1;
     free(c->reassembly); c->reassembly = NULL;
     free(c->raw); c->raw = NULL;
@@ -505,42 +480,15 @@ static void method_touch(int fd, long id, const char *line, int is_swipe)
  * restart is exactly the stale-session shape bug #7 punishes; nothing here is worth reusing. */
 static int relay_open(const api_session *sess, long port, int read_timeout_s)
 {
-    struct sockaddr_in6 sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin6_family = AF_INET6;
-    sa.sin6_port = htons((uint16_t)port);
-    if (inet_pton(AF_INET6, sess->tunnel_addr, &sa.sin6_addr) != 1) return -1;
-
-    int fd = socket(AF_INET6, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-    int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
-        if (errno != EINPROGRESS) { close(fd); return -1; }
-        fd_set wr;
-        FD_ZERO(&wr);
-        FD_SET(fd, &wr);
-        struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
-        if (select(fd + 1, NULL, &wr, NULL, &tv) <= 0) { close(fd); return -1; }
-        int err = 0;
-        socklen_t elen = sizeof err;
-        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) {
-            close(fd);
-            return -1;
-        }
-    }
-    fcntl(fd, F_SETFL, flags);
-
-    struct timeval rtv = { .tv_sec = read_timeout_s, .tv_usec = 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof rtv);
-    return fd;
+    (void)read_timeout_s;   /* tun_connect applies its own timeout; lwIP has no per-socket knob */
+    return tun_connect(sess->tunnel_addr, (int)port, 3);
 }
 
 static int recvn(int fd, uint8_t *buf, size_t n)
 {
     size_t got = 0;
     while (got < n) {
-        ssize_t r = recv(fd, buf + got, n - got, 0);
+        long r = tun_read(fd, buf + got, n - got);
         if (r <= 0) return -1;
         got += (size_t)r;
     }
@@ -553,7 +501,7 @@ static int recvn(int fd, uint8_t *buf, size_t n)
 static int relay_send(int fd, const char *xml, size_t n)
 {
     uint8_t head[4] = { (uint8_t)(n >> 24), (uint8_t)(n >> 16), (uint8_t)(n >> 8), (uint8_t)n };
-    if (send(fd, head, 4, 0) != 4 || send(fd, xml, n, 0) != (ssize_t)n) return -1;
+    if (tun_write(fd, head, 4) != 4 || tun_write(fd, xml, n) != (ssize_t)n) return -1;
     return 0;
 }
 

@@ -72,6 +72,31 @@ no macOS framework. One follow-up fix was needed: idevice_connection_receive_tim
 SUCCESS with 0 bytes on a timeout, which the pump reader must treat as "keep waiting", not EOF
 (commit b16d1ee) -- otherwise the pump dies when the tunnel goes quiet after startup.
 
+## Userspace TCP/IP (no root) -- 2026-08-24
+
+The last engine wall for the Linux port (and the TestFlight no-root requirement) was the kernel
+`utun`, which needs root on macOS and a TUN device on Linux. **Removed.** With `RPLAY_USERSPACE_NET=1`
+the engine runs lwIP in-process over the CoreDeviceProxy connection instead of a utun:
+
+- `deps/lwip` (STABLE-2_2_1_RELEASE, `git clone --branch STABLE-2_2_1_RELEASE
+  https://github.com/lwip-tcpip/lwip.git deps/lwip`; vendored like the other deps, gitignored).
+- `host-c/lwip-engine/lwipopts.h` -- OS-mode config (sockets + pthread port, IPv6/TCP/UDP,
+  `LWIP_SOCKET_OFFSET` so lwIP fds sit clear of kernel fds).
+- `host-c/usernet.c` -- an lwIP netif over the tunnel (a reader thread feeds received IPv6 packets
+  to `tcpip_input`; `output_ip6` writes back), plus `usernet_connect` (an lwIP TCP socket to the
+  device) -- lwIP-only translation unit.
+- `host-c/tunio.c` -- the kernel-vs-lwIP routing (`tun_connect/read/write/close`), kept separate
+  because lwIP's and the system's `<sockets.h>` cannot share a file. Every tunnel consumer
+  (rsd_enumerate, svc_open, relay_open, ddi mounter) now goes through `tun_*`.
+
+**Verified 2026-08-24, non-root:** the whole control path -- RSD enumeration, screencaptureservice
+(a 1170x2532 screenshot), installation_proxy (301 apps), AFC, the DDI mounter -- works over lwIP
+with no utun and no sudo. The default (no env var) still uses the kernel utun, unchanged.
+
+Remaining: the **media/video path** (`media.c`, UDP RTP) is still kernel-socket only, so live
+mirroring needs the utun for now -- converting it to lwIP UDP is the one follow-up (Phase 2). The
+SDK / agent use case is screenshot-based and already fully no-root.
+
 ## Notes
 
 - The CoreDevice tunnel itself (RemoteXPC/RSD/media in `core/`) is NOT libimobiledevice's -- it is

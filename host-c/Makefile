@@ -80,6 +80,25 @@ endif
 # The protocol core is shared with the app and the ports, so it is compiled from ../core rather
 # than duplicated here. Those files are platform-neutral by design -- no sockets, no allocation,
 # no Apple headers -- which is what lets the same objects build on Linux and Windows.
+# Userspace TCP/IP over the tunnel (lwIP) -- removes the root utun. Compiled in always; the
+# engine uses it only when RPLAY_USERSPACE_NET=1 (default stays the kernel utun). This is what
+# makes the engine run unprivileged and portable (no TUN device on Linux).
+LWIP_DIR  := ../deps/lwip
+LWIP_PORT := $(LWIP_DIR)/contrib/ports/unix/port
+CFLAGS    += -I lwip-engine -I $(LWIP_DIR)/src/include -I $(LWIP_PORT)/include
+LWIP_SRC  := $(LWIP_DIR)/src/core/init.c $(LWIP_DIR)/src/core/def.c $(LWIP_DIR)/src/core/inet_chksum.c \
+             $(LWIP_DIR)/src/core/ip.c $(LWIP_DIR)/src/core/mem.c $(LWIP_DIR)/src/core/memp.c \
+             $(LWIP_DIR)/src/core/netif.c $(LWIP_DIR)/src/core/pbuf.c $(LWIP_DIR)/src/core/tcp.c \
+             $(LWIP_DIR)/src/core/tcp_in.c $(LWIP_DIR)/src/core/tcp_out.c $(LWIP_DIR)/src/core/timeouts.c \
+             $(LWIP_DIR)/src/core/udp.c $(LWIP_DIR)/src/core/sys.c \
+             $(LWIP_DIR)/src/core/ipv6/ip6.c $(LWIP_DIR)/src/core/ipv6/ip6_addr.c \
+             $(LWIP_DIR)/src/core/ipv6/icmp6.c $(LWIP_DIR)/src/core/ipv6/nd6.c \
+             $(LWIP_DIR)/src/core/ipv6/ip6_frag.c $(LWIP_DIR)/src/core/ipv6/inet6.c \
+             $(LWIP_DIR)/src/core/ipv6/mld6.c \
+             $(LWIP_DIR)/src/api/api_lib.c $(LWIP_DIR)/src/api/api_msg.c $(LWIP_DIR)/src/api/netbuf.c \
+             $(LWIP_DIR)/src/api/sockets.c $(LWIP_DIR)/src/api/tcpip.c $(LWIP_DIR)/src/api/err.c \
+             $(LWIP_PORT)/sys_arch.c
+
 CORE_DIR := ../core
 CORE_SRC := $(CORE_DIR)/rp_xpc.c $(CORE_DIR)/rp_http2.c $(CORE_DIR)/rp_remotexpc.c \
             $(CORE_DIR)/rp_coredevice.c $(CORE_DIR)/rp_media_offer.c \
@@ -88,9 +107,9 @@ CFLAGS   += -I$(CORE_DIR)
 
 all: cdhost
 
-cdhost: cdhost.c api_server.c media.c ddi.c imd.c $(CORE_SRC) $(TLS_SRC)
+cdhost: cdhost.c api_server.c media.c ddi.c imd.c usernet.c tunio.c $(CORE_SRC) $(LWIP_SRC) $(TLS_SRC)
 	@echo "  TLS backend: $(TLS)"
-	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c ddi.c imd.c $(CORE_SRC) $(TLS_SRC) $(LDFLAGS) -lz
+	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c ddi.c imd.c usernet.c tunio.c $(CORE_SRC) $(LWIP_SRC) $(TLS_SRC) $(LDFLAGS) -lz
 	$(if $(filter 1,$(STATIC)),strip $@,)   # full symbol strip on the shipped static build
 
 clean:
