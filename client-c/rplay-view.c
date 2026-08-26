@@ -8,17 +8,19 @@
  * cached VPS/SPS/PPS re-sent to a joining viewer, and ONE IDR per session, so no access unit may
  * be dropped before decode (frame skipping, if ever needed, must happen after).
  *
- * KNOWN LIMITATION — RVRA (read doc/RVRA-AND-PORTABILITY.md before "fixing" this): under motion
- * the encoder downshifts the coded picture into the top-left of the same frame and appends
- * [w:u16be][h:u16be][00...][session tag] to the slice NAL. This client parses that trailer and
- * crops, which fixes the geometry — but RVRA also requires REFERENCE RESAMPLING in the decoder
- * (references coded at the old size rescaled before prediction), which standard HEVC does not
- * have. ffmpeg therefore decodes downshifted-and-after frames conformantly, silently, and
- * WRONG: a garbled mosaic from the first downshift until fresh content paints over it. Only
- * VideoToolbox with the private RVRA properties decodes this stream clean, which is why the
- * macOS app uses the hardware decoder. This program is the harness for the portable options
- * (hold-last-clean during downshifts, PLI on tier-up, a resampling decoder), not a shippable
- * viewer. The trailer parser is ported from HEVCStream.swift.
+ * RVRA (doc/RVRA-AND-PORTABILITY.md): under motion the encoder downshifts the coded picture
+ * into the top-left of the same frame and appends [w:u16be][h:u16be][00...][session tag] to
+ * the slice NAL. Decoding that correctly needs REFERENCE RESAMPLING, which standard HEVC does
+ * not have — so this client must be linked against the RVRA-patched ffmpeg in deps/ffmpeg
+ * (scripts/build-ffmpeg-rvra.sh; the Makefile picks it up automatically), and it arms the
+ * patch via RPLAY_RVRA=1. The macOS app keeps using VideoToolbox with the private RVRA
+ * properties; this decoder is the same picture for every other platform — worst frame 39 dB
+ * against the VideoToolbox ground truth, visually indistinguishable. Linked against a stock
+ * ffmpeg it still runs, but pictures garble from the first downshift under motion.
+ *
+ * The trailer does double duty: the patched decoder reads it off the packet tail to know when
+ * to resample (so it must NOT be stripped before decode — it is spec-invisible), and this
+ * client parses it for the display crop. Parser ported from HEVCStream.swift.
  *
  * Modes:
  *   rplay-view [-s HOST] [-p PORT]     live view (default 127.0.0.1:9877; codec asked over 9876)
@@ -230,9 +232,10 @@ static void flush_au(stream_state *s)
 {
     if (!s->au_len) return;
 
-    /* Strip the trailer from the last slice NAL and remember what it said: the size is the only
-     * signal that the encoder downshifted. avconferenced does the same before VideoToolbox
-     * (measured: 601/601 slice NALs on the wire carry it, 0/1368 of what reaches the decoder). */
+    /* Read the active size off the trailer — the only signal that the encoder downshifted —
+     * but leave the bytes in place: the RVRA-patched decoder finds the trailer on the packet
+     * tail to know when to resample its references, and to a stock decoder it is spec-invisible
+     * (it sits past rbsp_slice_trailing_bits). Stripping it here starved the patch. */
     if (s->last_vcl_len) {
         int w, h;
         size_t cut;
@@ -240,7 +243,6 @@ static void flush_au(stream_state *s)
             s->trailers++;
             s->active_w = w;
             s->active_h = h;
-            s->au_len = s->last_vcl_off + cut;
         }
     }
     if (s->last_vcl_len) s->frames_submitted++;   /* parameter-set-only packets are not frames */
@@ -341,6 +343,29 @@ static void show_frame(AVFrame *f, int active_w, int active_h)
     SDL_RenderPresent(d->ren);
 }
 
+/* --dump: write every decoded frame as y4m (full range, full coded size), so the client's own
+ * end-to-end path — parser, access units, patched decoder — can be scored against the
+ * VideoToolbox ground truth with scripts/compare-decodes.py. */
+static FILE *g_dump;
+static int g_dump_started;
+
+static void dump_frame(AVFrame *f, int active_w, int active_h)
+{
+    (void)active_w; (void)active_h;
+    if (!g_dump_started) {
+        g_dump_started = 1;
+        fprintf(g_dump, "YUV4MPEG2 W%d H%d F60:1 Ip A1:1 C420jpeg XYSCSS=420JPEG"
+                        " XCOLORRANGE=FULL\n", f->width, f->height);
+    }
+    fprintf(g_dump, "FRAME\n");
+    for (int p = 0; p < 3; p++) {
+        int w = p ? (f->width + 1) / 2 : f->width;
+        int h = p ? (f->height + 1) / 2 : f->height;
+        for (int y = 0; y < h; y++)
+            fwrite(f->data[p] + (ptrdiff_t)y * f->linesize[p], 1, w, g_dump);
+    }
+}
+
 static void poll_events(void)
 {
     if (!g_disp.win) return;
@@ -402,7 +427,7 @@ static int stream_says_h264(const char *host, int api_port)
 
 int main(int argc, char **argv)
 {
-    const char *host = "127.0.0.1", *file = NULL, *codec_arg = NULL;
+    const char *host = "127.0.0.1", *file = NULL, *codec_arg = NULL, *dump_path = NULL;
     int port = 9877, check = 0;
     double fps = 60;
     for (int i = 1; i < argc; i++) {
@@ -412,10 +437,11 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) fps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--codec") && i + 1 < argc) codec_arg = argv[++i];
         else if (!strcmp(argv[i], "--check")) check = 1;
+        else if (!strcmp(argv[i], "--dump") && i + 1 < argc) { dump_path = argv[++i]; check = 1; }
         else if (argv[i][0] != '-') host = argv[i];
         else {
             fprintf(stderr, "usage: rplay-view [-s host] [-p port] [-f file.h265] [-r fps]"
-                            " [--codec hevc|h264] [--check]\n");
+                            " [--codec hevc|h264] [--check] [--dump out.y4m]\n");
             return 2;
         }
     }
@@ -423,9 +449,20 @@ int main(int argc, char **argv)
     if (codec_arg) g_h264 = !strcmp(codec_arg, "h264");
     else if (!file) g_h264 = stream_says_h264(host, 9876);
 
+    /* Arm RVRA reference resampling in the linked libavcodec (a no-op on stock ffmpeg, which
+     * just never reads the variable). Respect an explicit setting, so RPLAY_RVRA=0 disables. */
+    if (!g_h264)
+        setenv("RPLAY_RVRA", "1", 0);
+
     stream_state s = { 0 };
     s.awaiting_keyframe = 1;
-    s.on_frame = check ? NULL : show_frame;
+    if (dump_path) {
+        g_dump = fopen(dump_path, "wb");
+        if (!g_dump) { fprintf(stderr, "%s: %s\n", dump_path, strerror(errno)); return 1; }
+        s.on_frame = dump_frame;
+    } else {
+        s.on_frame = check ? NULL : show_frame;
+    }
 
     const AVCodec *codec = avcodec_find_decoder(g_h264 ? AV_CODEC_ID_H264 : AV_CODEC_ID_HEVC);
     if (!codec) { fprintf(stderr, "libavcodec has no %s decoder\n", g_h264 ? "h264" : "hevc"); return 1; }
@@ -505,6 +542,7 @@ int main(int argc, char **argv)
             (unsigned long long)s.trailers, (unsigned long long)s.frames_before_keyframe,
             s.active_w, s.active_h);
 
+    if (g_dump) fclose(g_dump);
     if (in) fclose(in);
     if (fd >= 0) close(fd);
     avcodec_free_context(&s.dec);
