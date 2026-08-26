@@ -1,15 +1,16 @@
 # Linux port — handoff
 
-Written 2026-08-25, closing out the session that removed the engine's last portability wall
-(userspace TCP/IP) and evaluated ffmpeg software decode for the Linux client. Live state (which
-device is attached, whether a daemon runs) should be re-checked, not assumed.
+Written 2026-08-25; updated the same day by the session that converted media.c to lwIP and wrote
+the portable client spike. Live state (which device is attached, whether a daemon runs) should be
+re-checked, not assumed.
 
 ## State
 
-Branch `rendering-resolution-switch`, 68 commits ahead of main, **nothing pushed**. HEAD is
-`80c6a12` "Userspace TCP/IP over the tunnel (lwIP): the engine runs non-root". The engine builds
-static (`make STATIC=1`, 4.0 MB, no CoreFoundation, no installed deps). `deps/lwip` is vendored
-but gitignored like the other deps — a fresh clone needs
+Branch `rendering-resolution-switch`, 71 commits ahead of main, **nothing pushed — the repo has
+no git remote configured**, so pushing first needs a destination. HEAD is "Portable client spike:
+rplay-view (ffmpeg software decode + SDL2)". The engine builds static (`make STATIC=1`, 4.3 MB,
+no CoreFoundation, no installed deps). `deps/lwip` is vendored but gitignored like the other
+deps — a fresh clone needs
 `git clone --branch STABLE-2_2_1_RELEASE https://github.com/lwip-tcpip/lwip.git deps/lwip`.
 
 ## Where the port stands
@@ -26,10 +27,16 @@ Verified non-root against the phone on 2026-08-24: RSD enumeration, screencaptur
 screenshot (1170x2532), installation_proxy (301 apps), AFC, DDI mounter — the whole control path
 over lwIP. Details in `doc/LIBIMOBILEDEVICE-MIGRATION.md` ("Userspace TCP/IP" section).
 
+**Phase 2 — media.c over lwIP — is CODE-COMPLETE but not live-verified.** With
+`RPLAY_USERSPACE_NET=1` the RTP/RTCP socket and the negotiation channel now ride the same lwIP
+stack as the control path (usernet.c grew a small UDP API with an opaque peer blob; burst
+headroom is sized in lwip-engine/lwipopts.h — PBUF pool, tcpip mbox, UDP recvmbox — replacing
+the kernel SO_RCVBUF fight). Both `make` and `make STATIC=1` build clean. **Not yet run against
+the phone** — it was not attached during that session. First live check: start the engine
+non-root with `RPLAY_USERSPACE_NET=1`, start mirroring, watch `stream_info` for rtp_packets
+climbing and viewer loss at 0.
+
 Still open on the engine:
-- **Phase 2 — media.c over lwIP.** The live-video path (RTP over UDP) still uses kernel sockets,
-  so mirroring needs the root utun for now. Converting media.c to lwIP UDP sockets makes video
-  fully no-root. The SDK/agent path is screenshot-based and already needs nothing.
 - **syslog streaming** mixes a kernel client fd and a tunnel fd in one `select()`; in userspace
   mode the tunnel fd is an lwIP fd (>= 768) and `select` won't cover both. Needs a small pump.
 
@@ -75,29 +82,36 @@ wire signal. ffmpeg decodes the frame happily either way — but the renderer mu
 `parseActiveRectTrailer` (HEVCStream.swift:355, ~25 lines) and crop/upscale the active rect, or
 motion frames render squeezed into a corner. See `doc/RVRA-AND-PORTABILITY.md`.
 
-**Client shape that follows.** Read TCP 9877 → split Annex-B (AnnexBParser is ~40 lines) →
-assemble access units → strip/record trailer → `avcodec_send_packet`/`receive_frame`
-(feed the decoder directly; do not run the file demuxer on a live socket) → crop to active rect →
-scale → display (SDL2 texture is the obvious choice, and SDL also answers the input-capture
-seam). Control is the JSON API on 9876 — already portable, already exercised by rplayhub-sdk.
+**The client spike EXISTS: `client-c/rplay-view.c`** (one file, libavcodec + SDL2, `make` in
+client-c/). It implements exactly the shape above: TCP 9877 → Annex-B split → access units on
+the first-slice flag → keyframe gating → trailer strip → single-thread decode → SDL source-crop
+to the active rect → letterboxed scale. Codec is asked over 9876 (`stream_info`), overridable
+with `--codec`. `--check` decodes headless and prints stats; `-f capture.h265 -r fps` plays a
+file. Verified offline: apple_video_REFERENCE.h265 → 601/601 decoded, 601/601 trailers,
+0 errors; gop-reproducer.h265 → 117/117 with the 720x1280 tier; windowed playback runs. **Not
+yet run against a live 9877** (same reason: no phone attached). Input capture is future work —
+SDL is also the answer to that seam.
 
 ## Suggested next steps, in order
 
-1. Phase 2: media.c → lwIP UDP (finishes no-root video; also what TestFlight needs).
-2. Spike the Linux/portable client: ffmpeg + SDL2 consuming 9877 + 9876. The decode side is
-   proven above; the spike is really about the render/input loop.
-3. Push the branch (68 commits, nothing pushed).
+1. Live-verify both new pieces at once, phone attached: engine non-root with
+   `RPLAY_USERSPACE_NET=1`, then `client-c/rplay-view` against it. Compare loss/discontinuities
+   with a kernel-mode run.
+2. Configure a git remote and push the branch (71 commits, nothing pushed anywhere).
+3. Engine: the syslog select() pump for userspace mode; client: input capture via SDL events →
+   whatever input injection the engine grows.
 
 ## Kickoff text for a fresh session
 
 Paste this to start the next session:
 
-> Continue rplay-hub on branch `rendering-resolution-switch` (68 commits ahead of main, nothing
-> pushed). Read `doc/LINUX-PORT-HANDOFF.md` first — it has the current state. Summary: the C
-> engine is fully portable and runs non-root via lwIP userspace TCP/IP (`RPLAY_USERSPACE_NET=1`;
-> control path verified against the phone); ffmpeg software HEVC decode of our stream is
-> evaluated and works (601/601 frames clean, 13.5x realtime single-thread — the client just has
-> to port the ~25-line active-rect trailer parser). Remaining: (1) convert `host-c/media.c`
-> (RTP/UDP video) to lwIP so live video is also no-root, (2) a portable ffmpeg+SDL2 client spike
-> for the Linux port, (3) push the branch. The daemon needs sudo to (re)start — ask me rather
-> than trying. Task for this session: <fill in>.
+> Continue rplay-hub on branch `rendering-resolution-switch` (71 commits ahead of main; no git
+> remote is configured, so nothing is pushed anywhere). Read `doc/LINUX-PORT-HANDOFF.md` first —
+> it has the current state. Summary: the C engine is fully portable and non-root via lwIP
+> userspace TCP/IP (`RPLAY_USERSPACE_NET=1`), now including the live-video path (media.c rides
+> lwIP UDP — code-complete, builds clean, NOT yet live-verified); the portable client exists at
+> `client-c/rplay-view.c` (ffmpeg + SDL2, verified against the reference captures, NOT yet run
+> against a live 9877). Remaining: (1) live-verify engine + client with the phone attached,
+> (2) set a git remote and push, (3) syslog pump for userspace mode and client input capture.
+> The daemon needs sudo to (re)start — ask me rather than trying; the userspace-mode engine
+> needs no sudo. Task for this session: <fill in>.
