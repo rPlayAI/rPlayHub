@@ -1,12 +1,15 @@
-# Remote iPhone over a mesh VPN (Tailscale) — analysis and plan
+# Remote iPhone — the option space, the mesh-VPN path, and the agent spike
 
-Written 2026-08-26. Companion to `doc/REMOTE-SUPPORT.md` (the three architectures) and
-`doc/REMOTEPAIRING-PROTOCOL.md` (the wire protocol Architecture B needs). This doc is specifically
-about the **mesh-VPN shape**: the phone is *with the user, somewhere else*, and the host (a Mac or
-a Linux box) is here, with only an internet path between them.
+Written 2026-08-26. Companion to `doc/REMOTE-SUPPORT.md` (the original three-architecture framing)
+and `doc/REMOTEPAIRING-PROTOCOL.md` (the wire protocol Architecture B needs). The goal is the
+project's founding objective: **a USB port sitting across the internet** — remote viewing and
+control, and, where possible, Apple's own tools (Xcode / Device Hub) reaching the same phone.
 
-Prompted by kvnpt's write-up, "How to remotely iterate & deploy your sideloaded iOS apps over
-tailnet" (dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak).
+This doc surveys the full option space, then details the two things worth building first: the
+**mesh-VPN (Tailscale) path** for a phone that is alone with the user, and the **agent spike** for
+the far more common case where *some* machine sits next to the phone. Prompted by kvnpt's write-up,
+"How to remotely iterate & deploy your sideloaded iOS apps over tailnet"
+(dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak).
 
 ## The scenario
 
@@ -105,10 +108,150 @@ From `REMOTE-SUPPORT.md`, unchanged by the VPN shape:
 - **Security**: full control of a paired phone ≈ a private key. Pinned identities, no anonymous
   listeners.
 
-## The spike, concretely
+## The deciding variable: is there a machine next to the phone?
 
-Goal: rPlayHub mirrors + taps a phone that is on a *different* network, reachable only over
-Tailscale. Smallest real proof:
+Every remote approach forks here.
+
+- **Yes — any box at the phone's site** (a laptop, a Mac mini, a $60 Raspberry Pi): the phone
+  plugs into it over USB and a small **rPlayHub agent** dials *out* to the host. No RemotePairing,
+  no Wi-Fi-association gate, no inbound NAT. This is **Architecture A**, the least new code —
+  build it first (spike at the end).
+- **No — only the phone travels**: the phone itself must reach the host over IP, which forces the
+  CoreDevice network path (**Architecture B**, RemotePairing) and the Wi-Fi-association gate. More
+  capable, more to build. The mesh-VPN analysis above is this case.
+
+## The full option space
+
+### Remote viewing & control (our own stack)
+
+| Approach | Box at the phone? | New code | Notes |
+|---|---|---|---|
+| **A. Agent relay** | yes | small (RelayTransport + agent) | fastest to a demo; transport is a menu below |
+| **B. RemotePairing direct** | no | large (the handshake) | phone-only; the mesh-VPN path |
+| **ReplayKit broadcast** | no | a separate iOS app | *viewing only, no control*; escapes the Wi-Fi gate (works on cellular); a different product |
+
+Transport choices for **A** (how the agent reaches the host):
+- **Mesh VPN (Tailscale)** — cleanest, direct P2P when possible, no router config.
+- **SSH reverse tunnel** (`ssh -R`) — zero infra, ideal for the first localhost/LAN proof.
+- **Rendezvous VPS** — both ends dial a cheap cloud box; solves double-NAT without a full mesh; put it near the phone to keep RTT down.
+- **WebRTC / ICE (STUN+TURN)** — P2P with no VPN dependency; most work, best "from anywhere."
+
+### Xcode / Device Hub access (Apple's stack)
+
+Xcode talks to Apple's daemons, not to us, so a relayed phone must be injected into *Apple's*
+discovery. Worst-to-best:
+
+1. **usbmux Network device** (advertise `_apple-mobdev2._tcp` + proxy lockdown) — surfaces the
+   phone to Finder/lockdown-era tooling, but **not** the CoreDevice tunnel modern Xcode debugging
+   needs. Partial.
+2. **The article's method** — Bonjour-spoof `_remotepairing._tcp` on the host Mac's `en0` + relay
+   to the remote phone; Apple's `remoted` (hence Xcode, Device Hub, `devicectl`) sees it. Requires
+   a Mac (Xcode needs one anyway). Works today-ish; this is C-option-2 in `REMOTE-SUPPORT.md`.
+3. **The unification proxy** — build the engine as one CoreDevice proxy that (a) holds the real
+   tunnel to the remote phone via our own RemotePairing (B) and (b) re-advertises it locally via
+   Bonjour so Apple's `remoted`/Xcode connect *through us*. One component then serves rPlayHub's
+   viewing/control **and** Xcode from the same tunnel — the phone appears local to everything on
+   the Mac. B's tunnel + C's advertisement, fused; the satisfying end state.
+
+## The recommended ladder
+
+1. **Premise test (no code):** confirm the phone's CoreDevice door is reachable over the tailnet
+   at all — see "Testing it" next. Make-or-break, five minutes.
+2. **Architecture A** over `ssh -R` then Tailscale (spike below). rPlayHub remote view+control the
+   soonest. If the phone-side box is a Mac, the article's method on it adds Xcode access nearly
+   for free.
+3. **Architecture B** (RemotePairing) — the phone-only unlock, also the Pair/Unpair feature and
+   the prerequisite for the unification proxy.
+4. **The unification proxy** — one engine serving rPlayHub *and* Xcode from the remote tunnel.
+
+## Testing it (Tailscale premise test — do this first; needs no rPlayHub code)
+
+The whole thesis rests on one unverified fact for *your* devices: does the iPhone expose its
+CoreDevice front door over the tailnet when it is on Wi-Fi? Test that directly, before building
+anything.
+
+1. **Host (this Mac):** install Tailscale — `brew install tailscale` for the CLI, or the Mac app —
+   then `sudo tailscale up` and authenticate to your tailnet.
+2. **iPhone:** install the Tailscale app from the App Store, sign into the **same** tailnet, and
+   put the phone on **real Wi-Fi** (not cellular-only — the `WiFiManager` gate). Read its tailnet
+   IP (`100.x.y.z`) from the Tailscale app.
+3. **From the host**, probe the RemotePairing front door:
+   ```sh
+   nc -vz <iphone-tailnet-ip> 49152     # CoreDevice / RemotePairing door
+   ```
+   - **Connects** → premise holds: the dev-services door is reachable over unicast Tailscale, and
+     Architecture B is worth building. (The article's `socat` targets exactly this
+     `iPhone_tailnet_ip:49152`, so a modern iOS RemotePairing listener does bind the tailnet
+     interface when Wi-Fi-associated.)
+   - **Refused / times out** → the phone isn't Wi-Fi-associated, Developer Mode is off, or the port
+     isn't exposed on that interface. Fix the gate before building.
+
+**What this does *not* test:** rPlayHub actually driving the phone — that needs Architecture B (not
+built). A passing premise test is the green light to build B, not a working mirror yet. For a
+*working* remote mirror the soonest, use the Architecture-A agent below with a second machine at the
+phone's site.
+
+## Architecture A — the agent spike (build this first)
+
+The cheapest path to a real remote mirror. Today's engine is unchanged above the transport seam;
+all that is new is a byte pump.
+
+```
+  phone site (any box, phone on USB)                 host site (rPlayHub + app)
+┌───────────────────────────────┐                 ┌──────────────────────────────┐
+│ cdhost --agent <host:port>    │                 │ cdhost --relay-listen :port  │
+│  usbmux → CoreDeviceProxy      │◀── TLS ────────▶│  relay socket → usernet(lwIP)│
+│  → raw-IPv6 tunnel conn        │  raw IPv6 pkts  │  → RSD → displayservice/HID  │
+│  → pump conn ⇄ TLS socket      │                 │  app connects :9876 / :9877  │
+└───────────────────────────────┘                 └──────────────────────────────┘
+```
+
+**The splice point already exists.** `usernet_start(conn, our_addr, dev_addr)` drives the lwIP
+stack off a connection it reads raw IPv6 packets from via `imd_conn_recv` / `imd_conn_send`
+(`host-c/usernet.c`). Today that `conn` is the CoreDeviceProxy tunnel; for the relay host, hand
+`usernet_start` a connection whose recv/send are the relay socket instead — nothing above changes.
+The Python seam mirrors this: `Transport.open() → TunnelLink(stream, params)` with `stream`
+carrying raw IPv6 packets (`host/rplayhub/transport/__init__.py`); `relay.RelayTransport` is the
+stub to fill in.
+
+**Wire protocol** (trivial; refines `relay.py`'s docstring):
+- On connect, the **agent** sends a one-time JSON preamble = the tunnel params
+  `{our_addr, dev_addr, rsd_port, mtu}` (u32-length-prefixed).
+- Then **raw IPv6 packets both ways, verbatim.** Prefer self-delimiting packets — each IPv6 header
+  carries its own payload length, which is how `usernet.c`'s reader already frames them — so the
+  relay is a byte-identical pipe and the host stack is unchanged. TCP segments the stream, so the
+  16000-vs-1400 MTU gap needs no IP fragmentation; large tunnel packets ride fine. (The u32
+  per-packet framing in the old docstring is an equivalent alternative, not a requirement.)
+
+**Two cdhost modes**
+- `cdhost --agent <host:port>`: run the normal usbmux→CoreDeviceProxy path to get the tunnel conn,
+  TLS-connect *out* to the host (so the phone site needs no inbound NAT rule), send the params
+  preamble, then pump conn⇄socket until either side closes.
+- `cdhost --relay-listen :port`: accept the agent (TLS), read the params, feed `usernet_start` a
+  relay-backed conn, then serve exactly as a local session — the app talks to :9876/:9877 unaware.
+
+**Transport for the first proof:** skip TLS/VPN at first — `ssh -R` from the phone-site box to the
+host, agent dials `localhost:port`. Once green, swap in Tailscale (both boxes on the tailnet, agent
+dials the host's tailnet IP) for the real internet path; add pinned-TLS as production auth — this
+carries full device control, never a bare listener.
+
+**Acceptance:** rPlayHub on the host mirrors and taps a phone plugged into a *different* machine —
+the two connected first by `ssh -R`, then by Tailscale across networks. A Linux phone-site box also
+proves the no-Mac path.
+
+**Open items** (small): one device for the spike, so ignore the IPv6-address collision noted in
+`relay.py` (multi-device gets a per-device utun/route the registry already assumes); liveness
+(bug #7) sits *above* the transport, so a relayed session can go dead like a local Wi-Fi one and
+its check must cover all transports.
+
+**Effort:** days — the pump, the two modes, and an `ssh -R` proof; the C splice is small because
+`usernet_start` already takes an arbitrary conn.
+
+## Architecture B spike — phone-only, over the mesh VPN
+
+The phone-only path: no box at the phone's site, so RemotePairing does the work. Goal: rPlayHub
+mirrors + taps a phone that is on a *different* network, reachable only over Tailscale. Smallest
+real proof:
 
 1. **Route**: iPhone on Wi-Fi + Tailscale; host on the same tailnet; confirm
    `nc -vz <tailnet-ip> 49152` (or the RSD port) succeeds from the host.
@@ -128,8 +271,10 @@ capture per open item (SRP/HKDF params, OPACK schemas) as listed in the protocol
 ## Bottom line
 
 The article does **not** let rPlayHub see a remote phone today — rPlayHub is USB/usbmux-only until
-Architecture B is built, and the article drives Apple's stack, not ours. What it *does* is confirm
-the approach is sound: a unicast mesh VPN is enough transport, the hard constraint is Wi-Fi
-association, and the only substantial code we owe is the RemotePairing handshake we already
-specced. Build that, and "a USB port across the internet" — the project's original objective —
-is real, on Linux, with no Mac in the path.
+Architecture A or B is built, and the article drives Apple's stack, not ours. What it *does* is
+confirm the approach is sound: a unicast mesh VPN is enough transport, and the hard constraint is
+Wi-Fi association. The fastest route to a working remote mirror is **Architecture A** (a byte pump
+over `ssh -R`, then Tailscale) with any box next to the phone; the phone-only unlock is
+**Architecture B** (the RemotePairing handshake we already specced). Either way, "a USB port
+across the internet" — the project's original objective — is real, on Linux, with no Mac in the
+path. Run the premise test first; it costs five minutes and decides whether B is worth the build.
