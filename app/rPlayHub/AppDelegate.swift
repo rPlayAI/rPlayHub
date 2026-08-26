@@ -390,9 +390,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.helpMenu = helpMenu   // routes the Help-menu search field and ⌘? here
     }
 
-    /// Where the Help menu points: the help page hosted in the SDK repo on GitHub. (Source of
-    /// the page lives in `app/rPlayHub/Help/`.)
-    private static let helpURL = "https://github.com/rPlayAI/rplayhub-sdk/blob/main/docs/help.html"
+    /// Where the Help menu points: the help page served by GitHub Pages from the SDK repo, so it
+    /// renders as a real page rather than as source. (Source lives in `app/rPlayHub/Help/` and is
+    /// published to the SDK repo's `docs/`, which Pages serves.)
+    private static let helpURL = "https://rplayai.github.io/rplayhub-sdk/help.html"
     private static let sdkURL  = "https://github.com/rPlayAI/rplayhub-sdk"
 
     @objc private func openHelp() {
