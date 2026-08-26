@@ -90,7 +90,9 @@ static uint64_t now_ms(void)
 static long udp_send_peer(media_session *m, const void *buf, size_t len)
 {
     if (!m->have_peer) return -1;
+#ifdef HAVE_USERNET
     if (usernet_owns(m->udp)) return usernet_sendto(m->udp, buf, len, &m->upeer);
+#endif
     return (long)sendto(m->udp, buf, len, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
 }
 
@@ -133,11 +135,14 @@ static void *recv_loop(void *arg)
     uint8_t pkt[65536];
     while (!m->stop) {
         ssize_t n;
+#ifdef HAVE_USERNET
         if (usernet_owns(m->udp)) {
             usernet_addr from;
             n = (ssize_t)usernet_recvfrom(m->udp, pkt, sizeof pkt, &from);
             if (n > 0 && !m->have_peer) { m->upeer = from; m->have_peer = 1; }
-        } else {
+        } else
+#endif
+        {
             struct sockaddr_in6 from;
             socklen_t flen = sizeof from;
             n = recvfrom(m->udp, pkt, sizeof pkt, 0, (struct sockaddr *)&from, &flen);
@@ -463,11 +468,14 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
      * (PBUF pool, tcpip mbox, UDP recvmbox), and the traffic-class options do not apply because
      * the packets travel inside the tunnel's TCP connection, which has its own socket setup. */
     int recv_port = 0;
+#ifdef HAVE_USERNET
     if (usernet_is_on()) {
         m->udp = usernet_udp_socket(&recv_port);
         if (m->udp < 0) goto fail;
         usernet_set_recv_timeout_ms(m->udp, 1000);
-    } else {
+    } else
+#endif
+    {
         m->udp = kernel_udp_socket(&recv_port);
         if (m->udp < 0) goto fail;
     }
@@ -598,6 +606,7 @@ fail:
 
 static int connect_service(media_session *m, const char *addr, long port)
 {
+#ifdef HAVE_USERNET
     if (usernet_is_on()) {
         /* The negotiation channel over the userspace stack. lwIP's connect enforces its own
          * SYN-retry deadline, so the SYN_SENT hang the kernel path guards against below cannot
@@ -607,6 +616,7 @@ static int connect_service(media_session *m, const char *addr, long port)
         usernet_set_recv_timeout_ms(m->svc, 10000);
         goto handshake;
     }
+#endif
 
     struct sockaddr_in6 sa;
     memset(&sa, 0, sizeof sa);
@@ -644,7 +654,9 @@ static int connect_service(media_session *m, const char *addr, long port)
     }
     fcntl(m->svc, F_SETFL, flags);
 
+#ifdef HAVE_USERNET
 handshake:;
+#endif
     extern long media_sock_read(void *ctx, void *buf, size_t len);
     extern long media_sock_write(void *ctx, const void *buf, size_t len);
     rp_rxpc_io io = { media_sock_read, media_sock_write, &m->svc };
@@ -652,8 +664,16 @@ handshake:;
     return rp_rxpc_handshake(&m->rxpc);
 }
 
+/* When userspace networking is compiled in (the engine), tunnel I/O routes through tun_*, which
+ * dispatches to lwIP for lwIP fds. The app compiles media.c without usernet/lwIP and only ever
+ * runs the kernel path, so there it is a plain recv/send. */
+#ifdef HAVE_USERNET
 long media_sock_read(void *ctx, void *buf, size_t len)  { return tun_read(*(int *)ctx, buf, len); }
 long media_sock_write(void *ctx, const void *buf, size_t len) { return tun_write(*(int *)ctx, buf, len); }
+#else
+long media_sock_read(void *ctx, void *buf, size_t len)  { return (long)recv(*(int *)ctx, buf, len, 0); }
+long media_sock_write(void *ctx, const void *buf, size_t len) { return (long)send(*(int *)ctx, buf, len, 0); }
+#endif
 
 void media_stop(media_session *m)
 {
@@ -692,8 +712,13 @@ void media_stop(media_session *m)
     m->stop = 1;
     if (m->recv_thread) pthread_join(m->recv_thread, NULL);
     if (m->rtcp_thread) pthread_join(m->rtcp_thread, NULL);
+#ifdef HAVE_USERNET
     if (m->udp >= 0) tun_close(m->udp);
     if (m->svc >= 0) tun_close(m->svc);
+#else
+    if (m->udp >= 0) close(m->udp);
+    if (m->svc >= 0) close(m->svc);
+#endif
     free(m->rtp_storage);
     free(m->rxpc_reassembly);
     free(m->rxpc_raw);

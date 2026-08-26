@@ -373,8 +373,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                            keyEquivalent: "")
         windowItem.submenu = windowMenu
 
+        let helpItem = NSMenuItem()
+        mainMenu.addItem(helpItem)
+        let helpMenu = NSMenu(title: "Help")
+        let help = helpMenu.addItem(withTitle: "rPlayHub Help", action: #selector(openHelp),
+                                    keyEquivalent: "?")   // ⌘? is the standard Help shortcut
+        help.target = self
+        helpMenu.addItem(.separator())
+        let sdk = helpMenu.addItem(withTitle: "rPlayHub SDK on GitHub",
+                                   action: #selector(openSDK), keyEquivalent: "")
+        sdk.target = self
+        helpItem.submenu = helpMenu
+
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+        NSApp.helpMenu = helpMenu   // routes the Help-menu search field and ⌘? here
+    }
+
+    /// Where the Help menu points: the help page hosted in the SDK repo on GitHub. (Source of
+    /// the page lives in `app/rPlayHub/Help/`.)
+    private static let helpURL = "https://github.com/rPlayAI/rplayhub-sdk/blob/main/docs/help.html"
+    private static let sdkURL  = "https://github.com/rPlayAI/rplayhub-sdk"
+
+    @objc private func openHelp() {
+        if let url = URL(string: Self.helpURL) { NSWorkspace.shared.open(url) }
+    }
+
+    @objc private func openSDK() {
+        if let url = URL(string: Self.sdkURL) { NSWorkspace.shared.open(url) }
     }
 
     // MARK: - engine connection

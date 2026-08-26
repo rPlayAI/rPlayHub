@@ -85,7 +85,9 @@ endif
 # makes the engine run unprivileged and portable (no TUN device on Linux).
 LWIP_DIR  := ../deps/lwip
 LWIP_PORT := $(LWIP_DIR)/contrib/ports/unix/port
-CFLAGS    += -I lwip-engine -I $(LWIP_DIR)/src/include -I $(LWIP_PORT)/include
+# HAVE_USERNET compiles media.c's userspace (lwIP) networking path. The macOS app also builds
+# media.c, but without usernet/lwIP, so the guard keeps it on kernel sockets there.
+CFLAGS    += -DHAVE_USERNET -I lwip-engine -I $(LWIP_DIR)/src/include -I $(LWIP_PORT)/include
 LWIP_SRC  := $(LWIP_DIR)/src/core/init.c $(LWIP_DIR)/src/core/def.c $(LWIP_DIR)/src/core/inet_chksum.c \
              $(LWIP_DIR)/src/core/ip.c $(LWIP_DIR)/src/core/mem.c $(LWIP_DIR)/src/core/memp.c \
              $(LWIP_DIR)/src/core/netif.c $(LWIP_DIR)/src/core/pbuf.c $(LWIP_DIR)/src/core/tcp.c \

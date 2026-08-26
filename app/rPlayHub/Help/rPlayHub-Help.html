@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rPlayHub Help</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#f5f7f9; --surface:#ffffff; --surface-2:#eef1f5;
+  --ink:#171a21; --muted:#565f6d; --faint:#828c9b; --line:#e2e7ee;
+  --accent:#1668d6; --accent-ink:#0f4fa8; --live:#0c8a99;
+  --warn:#9c6400; --warn-bg:#faf0da; --warn-line:#ecd39a;
+  --note-bg:#e9f2fd; --note-line:#c8ddf7;
+  --kbd:#f2f4f8; --kbd-line:#d3dae4;
+  --shadow:0 1px 2px rgba(20,28,40,.05),0 8px 28px rgba(20,28,40,.06);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0e1116; --surface:#161b22; --surface-2:#1b222b;
+  --ink:#e7ecf3; --muted:#9aa4b3; --faint:#68727f; --line:#252d38;
+  --accent:#4c9bff; --accent-ink:#84b8ff; --live:#2fbecd;
+  --warn:#e0a44e; --warn-bg:#241d12; --warn-line:#4a3c22;
+  --note-bg:#12212f; --note-line:#26405a;
+  --kbd:#1d242d; --kbd-line:#303a46;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+}}
+:root[data-theme="dark"]{
+  --ground:#0e1116; --surface:#161b22; --surface-2:#1b222b;
+  --ink:#e7ecf3; --muted:#9aa4b3; --faint:#68727f; --line:#252d38;
+  --accent:#4c9bff; --accent-ink:#84b8ff; --live:#2fbecd;
+  --warn:#e0a44e; --warn-bg:#241d12; --warn-line:#4a3c22;
+  --note-bg:#12212f; --note-line:#26405a;
+  --kbd:#1d242d; --kbd-line:#303a46;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+  font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased;
+}
+code,kbd,.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+
+/* ---------- shell ---------- */
+.wrap{max-width:1100px; margin:0 auto; padding:0 24px}
+.layout{display:grid; grid-template-columns:236px minmax(0,1fr); gap:48px; align-items:start}
+
+/* ---------- header ---------- */
+header.top{
+  border-bottom:1px solid var(--line); background:var(--surface);
+  position:sticky; top:0; z-index:20;
+}
+header.top .wrap{display:flex; align-items:center; gap:14px; padding-top:16px; padding-bottom:16px}
+.glyph{
+  width:34px; height:34px; border-radius:9px; flex:none; position:relative;
+  background:linear-gradient(160deg,var(--accent),var(--live));
+  box-shadow:var(--shadow);
+}
+.glyph::after{
+  content:""; position:absolute; inset:9px 8px; border-radius:3px;
+  border:1.5px solid rgba(255,255,255,.9);
+}
+.brand{display:flex; flex-direction:column; line-height:1.2}
+.brand b{font-family:"Sora",sans-serif; font-weight:700; font-size:16px; letter-spacing:-.01em}
+.brand span{font-size:12.5px; color:var(--muted)}
+.top .spacer{flex:1}
+.ver{font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--faint);
+  border:1px solid var(--line); padding:3px 9px; border-radius:20px}
+
+/* ---------- sidebar nav ---------- */
+nav.side{position:sticky; top:83px; padding:34px 0; max-height:calc(100vh - 83px); overflow-y:auto}
+nav.side .grp{font-family:"Sora",sans-serif; font-weight:600; font-size:11px; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--faint); margin:22px 0 9px}
+nav.side .grp:first-child{margin-top:0}
+nav.side a{
+  display:block; color:var(--muted); text-decoration:none; font-size:13.5px;
+  padding:5px 12px; border-radius:7px; border-left:2px solid transparent; margin-left:-2px;
+}
+nav.side a:hover{color:var(--ink); background:var(--surface-2)}
+nav.side a.active{color:var(--accent-ink); border-left-color:var(--accent);
+  background:var(--surface-2); font-weight:500}
+
+/* ---------- content ---------- */
+main{padding:40px 0 96px; min-width:0}
+.hero{margin-bottom:14px}
+.hero .eyebrow{font-family:"Sora",sans-serif; font-weight:600; font-size:12px;
+  letter-spacing:.08em; text-transform:uppercase; color:var(--live)}
+.hero h1{font-family:"Sora",sans-serif; font-weight:700; font-size:32px; letter-spacing:-.02em;
+  line-height:1.12; margin:.28em 0 .35em; text-wrap:balance}
+.hero p.lede{font-size:16.5px; color:var(--muted); max-width:60ch; margin:0}
+
+section{padding-top:40px; margin-top:8px; scroll-margin-top:96px; max-width:72ch}
+section > h2{
+  font-family:"Sora",sans-serif; font-weight:700; font-size:21px; letter-spacing:-.01em;
+  margin:0 0 4px; padding-top:12px; border-top:1px solid var(--line); text-wrap:balance;
+}
+section .sub{color:var(--faint); font-size:13.5px; margin:0 0 18px}
+h3{font-family:"Sora",sans-serif; font-weight:600; font-size:15.5px; margin:26px 0 6px}
+p{margin:11px 0}
+a.link{color:var(--accent-ink); text-decoration:none; border-bottom:1px solid var(--note-line)}
+a.link:hover{border-bottom-color:var(--accent)}
+strong{font-weight:600}
+code{background:var(--surface-2); border:1px solid var(--line); border-radius:5px;
+  padding:.09em .38em; font-size:.86em; color:var(--ink); word-break:break-word}
+kbd{background:var(--kbd); border:1px solid var(--kbd-line); border-bottom-width:2px;
+  border-radius:6px; padding:1px 7px; font-size:.82em; font-weight:500; white-space:nowrap}
+
+/* lists */
+ul.plain{list-style:none; padding:0; margin:12px 0; display:flex; flex-direction:column; gap:9px}
+ul.plain li{position:relative; padding-left:20px}
+ul.plain li::before{content:""; position:absolute; left:3px; top:9px; width:6px; height:6px;
+  border-radius:50%; background:var(--accent)}
+ol.steps{list-style:none; counter-reset:s; padding:0; margin:14px 0; display:flex;
+  flex-direction:column; gap:11px}
+ol.steps li{position:relative; padding-left:40px; counter-increment:s}
+ol.steps li::before{
+  content:counter(s); position:absolute; left:0; top:-1px; width:25px; height:25px;
+  display:grid; place-items:center; border-radius:50%; background:var(--accent); color:#fff;
+  font-family:"IBM Plex Mono",monospace; font-size:12.5px; font-weight:500;
+}
+
+/* callouts */
+.callout{border-radius:11px; padding:14px 16px; margin:18px 0; font-size:14px; border:1px solid}
+.callout .lbl{font-family:"Sora",sans-serif; font-weight:600; font-size:11.5px;
+  letter-spacing:.06em; text-transform:uppercase; display:block; margin-bottom:3px}
+.callout.note{background:var(--note-bg); border-color:var(--note-line)}
+.callout.note .lbl{color:var(--accent-ink)}
+.callout.warn{background:var(--warn-bg); border-color:var(--warn-line)}
+.callout.warn .lbl{color:var(--warn)}
+.callout p{margin:5px 0 0}
+.callout p:first-of-type{margin-top:0}
+
+/* key/value table */
+.kv{border:1px solid var(--line); border-radius:11px; overflow:hidden; margin:18px 0;
+  background:var(--surface)}
+.kv .row{display:grid; grid-template-columns:180px minmax(0,1fr); gap:16px;
+  padding:11px 16px; border-top:1px solid var(--line); align-items:baseline}
+.kv .row:first-child{border-top:none}
+.kv .row .k{font-weight:600; font-size:13.5px}
+.kv .row .k.mono{font-size:12.5px; color:var(--accent-ink); font-weight:500}
+.kv .row .v{color:var(--muted); font-size:13.5px}
+.kv .row:nth-child(even){background:var(--surface-2)}
+
+/* tabs strip illustration */
+.tabs{display:flex; flex-wrap:wrap; gap:7px; margin:16px 0}
+.tabs .t{font-size:12.5px; padding:5px 11px; border-radius:7px; background:var(--surface-2);
+  border:1px solid var(--line); color:var(--muted)}
+.tabs .t b{color:var(--ink); font-weight:600}
+
+footer{border-top:1px solid var(--line); color:var(--faint); font-size:12.5px;
+  padding:22px 0 40px; margin-top:40px}
+footer .wrap{display:flex; gap:8px; flex-wrap:wrap; justify-content:space-between}
+
+@media (max-width:820px){
+  .layout{grid-template-columns:1fr; gap:0}
+  nav.side{position:static; max-height:none; padding:18px 0; overflow:visible;
+    border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:4px 6px}
+  nav.side .grp{width:100%; margin:10px 0 2px}
+  nav.side .grp:first-child{margin-top:0}
+  nav.side a{border-left:none; padding:4px 10px}
+  nav.side a.active{border-left:none}
+  main{padding-top:24px}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="glyph" aria-hidden="true"></div>
+    <div class="brand"><b>rPlayHub</b><span>Mirror &amp; control your iPhone from the Mac</span></div>
+    <div class="spacer"></div>
+    <div class="ver">Help</div>
+  </div>
+</header>
+
+<div class="wrap">
+<div class="layout">
+
+  <nav class="side" aria-label="Help topics">
+    <div class="grp">Get started</div>
+    <a href="#welcome">What rPlayHub does</a>
+    <a href="#prepare">Before you start</a>
+    <a href="#window">The window</a>
+    <div class="grp">Use the screen</div>
+    <a href="#control">View &amp; control</a>
+    <a href="#capture">Screenshots &amp; recording</a>
+    <div class="grp">Inspect the device</div>
+    <a href="#info">Device information</a>
+    <a href="#apps">Apps</a>
+    <a href="#console">Console</a>
+    <a href="#files">Files &amp; crash reports</a>
+    <a href="#profiles">Profiles</a>
+    <div class="grp">Manage</div>
+    <a href="#power">Power actions</a>
+    <a href="#simulators">Simulators</a>
+    <a href="#trouble">Troubleshooting</a>
+  </nav>
+
+  <main>
+    <div class="hero">
+      <div class="eyebrow">rPlayHub Help</div>
+      <h1>Put your iPhone on your Mac — and drive it from there.</h1>
+      <p class="lede">rPlayHub shows a connected iPhone's live screen in a window, turns your
+        mouse and trackpad into taps and swipes, and gives you the device's apps, logs, files,
+        and diagnostics alongside it.</p>
+    </div>
+
+    <section id="welcome">
+      <h2>What rPlayHub does</h2>
+      <p class="sub">Two things, over one USB or Wi‑Fi connection.</p>
+      <p>rPlayHub is a native macOS app that stands in for Apple's Device Hub. It does two
+        related jobs, and it helps to keep them apart:</p>
+      <ul class="plain">
+        <li><strong>See the screen.</strong> The phone's display arrives as a live video
+          stream and appears in the <strong>View Screen</strong> area, cropped to the real
+          screen with no black padding.</li>
+        <li><strong>Drive the phone.</strong> Clicks become taps and drags become swipes, sent
+          back to the device as it watches. The same window carries a Home control, screenshots,
+          and recording.</li>
+      </ul>
+      <p>Around the screen sit the tools for looking <em>at</em> the device rather than through
+        it: its apps, its live log, its files and crash reports, its configuration profiles, and
+        the identifiers and health numbers Device Hub shows.</p>
+      <div class="callout note">
+        <span class="lbl">How it's built</span>
+        <p>A small background service (the engine) owns the privileged connection to the phone
+          and publishes the video and a control channel locally; the app is a client of it. You
+          approve the service once — see below — and after that it starts on its own.</p>
+      </div>
+    </section>
+
+    <section id="prepare">
+      <h2>Before you start</h2>
+      <p class="sub">The same on‑device setup Device Hub needs. Done once, mostly.</p>
+      <ol class="steps">
+        <li><strong>Pair and trust the phone with this Mac</strong> once over USB — tap
+          <em>Trust</em> on the phone when it asks. This creates the pairing record the
+          connection relies on.</li>
+        <li><strong>Turn on Developer Mode</strong> on the phone
+          (<em>Settings ▸ Privacy &amp; Security ▸ Developer Mode</em>). It needs a restart and
+          an on‑device confirmation. Without it the phone offers none of the services rPlayHub
+          uses.</li>
+        <li><strong>Approve the engine.</strong> The first launch asks you to allow rPlayHub's
+          background service in <em>System Settings ▸ General ▸ Login Items &amp; Extensions</em>.
+          Approve it once.</li>
+        <li><strong>Connect.</strong> Attach the phone by cable, or have it on the same Wi‑Fi
+          network, then pick it in the sidebar.</li>
+      </ol>
+      <div class="callout note">
+        <span class="lbl">After a restart</span>
+        <p>iOS discards its Developer Disk Image every time it reboots. rPlayHub re‑mounts it for
+          you automatically once the phone is <strong>unlocked</strong> — no Xcode and no Device
+          Hub required. If a freshly rebooted phone won't mirror, unlock it and give it a moment.</p>
+      </div>
+      <div class="callout warn">
+        <span class="lbl">Requires iOS 27 or later</span>
+        <p>Live screen viewing needs iOS 27+. On older systems Apple's own Device Hub reports
+          "screen viewing is unsupported" too — the rest of the tools (info, apps, files,
+          console) still work.</p>
+      </div>
+    </section>
+
+    <section id="window">
+      <h2>The window</h2>
+      <p class="sub">Three areas, in the shape of Device Hub.</p>
+      <ul class="plain">
+        <li><strong>Sidebar (left).</strong> Every device this Mac can see, with a search field
+          and an <em>Available</em> section. A filled dot marks the device you're mirroring; the
+          rest are listed so you can switch. iOS version sits right‑aligned on each row.</li>
+        <li><strong>Screen (center).</strong> The live picture. While it's showing, the actions
+          that operate on it live in a strip directly beneath it and on right‑click.</li>
+        <li><strong>Inspector (right).</strong> Tabs describing the selected device.</li>
+      </ul>
+      <div class="tabs" aria-label="Inspector tabs">
+        <span class="t"><b>Info</b> · identifiers &amp; health</span>
+        <span class="t"><b>Apps</b> · installed apps</span>
+        <span class="t"><b>Console</b> · live log</span>
+        <span class="t"><b>Files</b> · media &amp; crashes</span>
+        <span class="t"><b>Profiles</b> · provisioning &amp; config</span>
+        <span class="t"><b>Controls</b> · actions</span>
+      </div>
+      <p>While the screen is embedded, the Controls tab is hidden because the same actions are a
+        right‑click away on the screen itself. Choose <strong>View ▸ Show Controls</strong> to
+        bring the pane back.</p>
+    </section>
+
+    <section id="control">
+      <h2>View &amp; control</h2>
+      <p class="sub">Your Mac's pointer is the phone's finger.</p>
+      <div class="kv">
+        <div class="row"><div class="k">Tap</div><div class="v">Click anywhere on the screen.</div></div>
+        <div class="row"><div class="k">Swipe / drag</div><div class="v">Press and drag; the gesture is sent as it moves.</div></div>
+        <div class="row"><div class="k">Home</div><div class="v">Return to the home screen — the strip button, or right‑click ▸ Press Home.</div></div>
+        <div class="row"><div class="k">Pin on top</div><div class="v">Keep the window floating above other apps.</div></div>
+        <div class="row"><div class="k">Rotate view</div><div class="v">Turn the picture (and the input mapping with it) when you're holding the phone sideways.</div></div>
+        <div class="row"><div class="k">Open in new window</div><div class="v">Detach the screen and its action strip into a window of their own.</div></div>
+      </div>
+      <div class="callout note">
+        <span class="lbl">Why taps land where you click</span>
+        <p>The encoded video is slightly larger than the real screen — the phone pads the frame
+          to a 16‑pixel grid. rPlayHub crops to the true screen so every click maps to the right
+          point instead of drifting toward the corner.</p>
+      </div>
+      <p>Physical‑keyboard typing and the hardware Lock / Volume / Siri buttons are not sent yet.
+        Everything the touchscreen can do is available today.</p>
+    </section>
+
+    <section id="capture">
+      <h2>Screenshots &amp; recording</h2>
+      <p class="sub">Straight from the device, not a grab of the window.</p>
+      <h3>Screenshot</h3>
+      <p>Click the camera in the strip (or right‑click ▸ Screenshot). rPlayHub asks the device
+        for a full‑resolution capture and saves it to your <strong>Desktop</strong> as
+        <code>rPlayHub‑&lt;timestamp&gt;.png</code>, then reveals it in the Finder.</p>
+      <h3>Recording</h3>
+      <p>Click record to start; click again to stop. The clip is written by the engine as raw
+        HEVC under its <code>recordings/</code> folder, and the app reports the path when it
+        finishes. Use <strong>rPlayHub ▸ Reveal Last Recording</strong> to find it.</p>
+      <div class="callout note">
+        <span class="lbl">One IDR per session</span>
+        <p>A recording started mid‑session may begin before a keyframe, so the first moment can
+          look blocky until the picture refreshes. This is normal for this stream.</p>
+      </div>
+    </section>
+
+    <section id="info">
+      <h2>Device information</h2>
+      <p class="sub">The Info tab — what the device says about itself.</p>
+      <p>Name, model, iOS build, ECID, serial number, battery level, and storage. It reads over
+        the same channel Finder and Xcode use, so it keeps answering even while another tool —
+        including Apple's Device Hub — currently holds the device.</p>
+      <div class="callout note">
+        <span class="lbl">Find an identifier fast</span>
+        <p>Right‑click a device in the sidebar to copy its UDID without opening a session.</p>
+      </div>
+    </section>
+
+    <section id="apps">
+      <h2>Apps</h2>
+      <p class="sub">The Apps tab — what's installed, and start / stop.</p>
+      <ul class="plain">
+        <li><strong>List.</strong> User‑installed apps and Apple's own, the same set Device Hub
+          shows. Internal and hidden apps stay out.</li>
+        <li><strong>Launch.</strong> Double‑click an app, or use Launch, to bring it to the
+          foreground.</li>
+        <li><strong>Terminate.</strong> Stop a running app; find its process first if you need
+          the identifier.</li>
+      </ul>
+    </section>
+
+    <section id="console">
+      <h2>Console</h2>
+      <p class="sub">The Console tab — the device's live system log.</p>
+      <p>A running stream of the phone's syslog, with a filter field to narrow it to the process
+        or text you care about. It opens its own connection so a never‑ending stream never blocks
+        a tap or a screenshot.</p>
+    </section>
+
+    <section id="files">
+      <h2>Files &amp; crash reports</h2>
+      <p class="sub">The Files tab — the Media partition and crash logs, over AFC.</p>
+      <ul class="plain">
+        <li><strong>Browse.</strong> Double‑click a folder to enter it.</li>
+        <li><strong>Pull a file.</strong> Double‑click a file to copy it to
+          <code>~/Downloads/rPlayHub</code> and reveal it.</li>
+        <li><strong>Export All.</strong> Copies every crash report to
+          <code>~/Downloads/rPlayHub/crash‑reports</code> — the phone's crash mover is nudged
+          first so fresh reports appear.</li>
+      </ul>
+    </section>
+
+    <section id="profiles">
+      <h2>Profiles</h2>
+      <p class="sub">The Profiles tab — provisioning and configuration profiles.</p>
+      <p>Provisioning profiles (name, app‑ID, team, UUID, expiry, and registered devices) and the
+        configuration profiles installed on the device (identifier, name, organization). This is
+        Device Hub's third inspector tab.</p>
+    </section>
+
+    <section id="power">
+      <h2>Power actions</h2>
+      <p class="sub">Restart, Shut Down, Sleep — each confirms first.</p>
+      <p>Available from the action strip and both right‑click menus. Each asks for confirmation
+        before it acts.</p>
+      <div class="kv">
+        <div class="row"><div class="k">Restart</div><div class="v">Reboots the phone. The connection drops and the app reconnects on its own after about 45 seconds.</div></div>
+        <div class="row"><div class="k">Shut Down</div><div class="v">Powers the phone off; it stays off until you press its side button.</div></div>
+        <div class="row"><div class="k">Sleep</div><div class="v">Turns the display off, as the side button would.</div></div>
+      </div>
+    </section>
+
+    <section id="simulators">
+      <h2>Simulators</h2>
+      <p class="sub">The simulators you actually use, listed alongside physical devices.</p>
+      <p>rPlayHub lists the Simulators installed on this Mac — filtered to the ones you've used,
+        matching Device Hub — and can boot, shut down, and screenshot them. Live mirroring and
+        input are for physical devices only: a simulator isn't a display on your Mac, so there's
+        no stream to show.</p>
+    </section>
+
+    <section id="trouble">
+      <h2>Troubleshooting</h2>
+      <p class="sub">The handful of things that come up first.</p>
+
+      <h3>The title says it's waiting for the engine</h3>
+      <p>The app retries the connection every couple of seconds and shows what it's waiting for
+        in the window title, so start order doesn't matter. If it never connects, confirm the
+        background service was approved in <em>System Settings ▸ General ▸ Login Items &amp;
+        Extensions</em>.</p>
+
+      <h3>The screen is there, but clicks do nothing</h3>
+      <p>Input rides a different channel than the picture. Make sure a physical device is
+        selected (simulators don't take taps) and that the session is live — the action strip
+        appears under the screen only when it is.</p>
+
+      <h3>No picture on a phone that just rebooted</h3>
+      <p>Unlock the phone. The Developer Disk Image can't be mounted while it's locked, and
+        without it there's no video. rPlayHub mounts it automatically once you unlock.</p>
+
+      <h3>A device is greyed out or missing</h3>
+      <p>Reconnect the cable or bring it onto the same Wi‑Fi network, confirm it's paired and
+        trusted, and that Developer Mode is on. Use <strong>rPlayHub ▸ Reconnect</strong> to
+        rescan.</p>
+
+      <div class="callout warn">
+        <span class="lbl">If the picture freezes but everything reads "connected"</span>
+        <p>If the phone leaves Wi‑Fi mid‑session the video can stall. Reconnect the device or
+          switch away and back to it in the sidebar to start a fresh session.</p>
+      </div>
+    </section>
+  </main>
+</div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>rPlayHub — a Device Hub replacement for iPhone mirroring and control.</span>
+    <span>Help ▸ rPlayHub Help</span>
+  </div>
+</footer>
+
+<script>
+// Highlight the current section in the sidebar as you scroll.
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.side a'));
+  var map = {};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)] = a; });
+  var sections = links.map(function(a){ return document.getElementById(a.getAttribute('href').slice(1)); }).filter(Boolean);
+  if(!('IntersectionObserver' in window)) return;
+  var seen = new Set();
+  var obs = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting) seen.add(e.target.id); else seen.delete(e.target.id);
+    });
+    // Topmost visible section wins.
+    for(var i=0;i<sections.length;i++){
+      if(seen.has(sections[i].id)){
+        links.forEach(function(l){ l.classList.remove('active'); });
+        map[sections[i].id].classList.add('active');
+        break;
+      }
+    }
+  },{rootMargin:'-90px 0px -70% 0px', threshold:0});
+  sections.forEach(function(s){ obs.observe(s); });
+})();
+</script>
+</body>
+</html>

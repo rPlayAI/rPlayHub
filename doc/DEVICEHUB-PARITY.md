@@ -35,12 +35,37 @@ directly over the tunnel interface (`DirectStream.swift`; verified by lsof durin
 run), so the engine's `stream_info` counters read zero while mirroring works. Anyone debugging
 "no video" from the API side must know the counters do not cover the app's own path.
 
+## Cross-check against Apple's published Device Hub help (2026-08-26)
+
+Apple's online help (`developer.apple.com/documentation/xcode/device-hub`) is the canonical list
+of what Device Hub claims to do. Mapping every one of its topics to our status:
+
+| Apple help topic | rPlayHub |
+|---|---|
+| Running your app on simulated or physical devices | **out of scope** — Device Hub is an Xcode *run destination*; rPlayHub mirrors and controls any device rather than building+launching your source. The adjacent capability (launch an already-installed app) is ✅ in the Apps tab. |
+| Managing your simulated and physical devices | ✅ sidebar list + select; wireless and cable both work. ❌ *pairing from the app* (an Apple tool still creates the record — see gaps). |
+| Enabling Developer Mode on a device | ✅ documented as a prerequisite; on-device toggle, which Device Hub also cannot flip remotely. |
+| Configuring the environment of a simulated device | ❌ **the one net-new gap this cross-check surfaces.** Device Hub's inspector sets a *simulator's* Appearance, Text Size, VoiceOver, Location, etc.; we list and boot simulators but don't set their environment. Already noted in `ControlPanel.swift`. Low value for the mirror/control goal, macOS-only, never portable. |
+| Interacting with your app in Device Hub | ✅ click = tap, drag = swipe, Home. |
+| Capturing screenshots and videos from devices | ✅ both (screenshot → Desktop, recording → engine `recordings/`). |
+| Locating device identifiers | ✅ Info tab (ECID, serial, UDID) + right-click Copy UDID. |
+| Managing apps on devices | ✅ Apps tab: list, launch, terminate. |
+| Download diagnostic files | ✅ Files tab + Export All crash reports; Info tab for device diagnostics. |
+
+**Conclusion:** every capability Apple's own help advertises is covered, with two known exceptions
+already in the gap list below — *pairing from the app* (biggest lift, blocked on the RemotePairing
+handshake) and *simulator environment configuration* (low value, macOS-only). rPlayHub additionally
+does several things Device Hub's help never mentions: a live syslog Console, configuration/
+provisioning Profiles, file browsing over AFC, and Restart/Shutdown/Sleep. The gap that remains is
+**not features but pairing** — see below.
+
 ## Feature table
 
 | Feature | Device Hub | rPlayHub | Path / service | Blocker |
 |---|---|---|---|---|
 | Device list, search, bind | confirmed | ✅ | usbmuxd list + lockdown names for every device + select_device | none (unbound devices were UDID-titled until 2026-08-23) |
 | Simulators: used ones only | **confirmed** (screenshot) | ✅ 2026-08-23 | simctl + `data/Containers` present | none |
+| Simulator environment (Appearance, Text Size, Location…) | **confirmed** (Apple help) | ❌ | would be `simctl ui` / `simctl location` | low value, macOS-only; surfaced by the 2026-08-26 help cross-check |
 | Inspector tabs Info / Apps / Profiles | **confirmed** (screenshot) | all three ✅ (+ we add Controls, Files, Console) | `misagent` / `MCInstall` for profiles | none (Profiles built 2026-08-23) |
 | Right-click menu items | inferred | ours has 11 items incl. power group | — | not yet compared item by item |
 | Live screen view | confirmed (capture) | ✅ | displayservice | none |
