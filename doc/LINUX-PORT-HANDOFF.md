@@ -116,7 +116,9 @@ ffmpeg's HEVC decoder (trailer parse off the packet tail, bilinear resample of e
 reference at frame start on an active-size change, neutral-gray fill outside the active rect),
 gated behind `RPLAY_RVRA=1` + `-threads 1`. Scored against the VideoToolbox ground truth on the
 601-frame reference: bit-exact until the first downshift, >= 40 dB through every downshift
-episode, worst frame 39 dB at one upshift, visually indistinguishable. That unblocks the
+episode, worst frame 39 dB at one upshift, visually indistinguishable. Confirmed by eye
+2026-08-26: the user played the reference capture in rplay-view (linked against the patched
+ffmpeg) and saw no garbled frames. That unblocks the
 portable client at full quality: rplay-view needs to link the patched libavcodec (it still
 links the system one) and set the RVRA state per stream. The other options in
 `doc/RVRA-AND-PORTABILITY.md` (hide-below-tier, two-tier product) are now fallbacks, and the
