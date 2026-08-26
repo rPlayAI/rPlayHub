@@ -188,7 +188,29 @@ negotiate, not in what the decoder does afterwards — and unlike the bitrate ce
 difference already measured rather than a lever guessed at. If our session could be made to behave
 like Apple's, option 2 stops being a compromise.
 
-**3. Implement RVRA reference resampling** in a custom decoder. Correct, and a research project.
+**3. Implement RVRA reference resampling** in a custom decoder (patch ffmpeg's hevcdec). Correct,
+and the ground-truth harness that makes it tractable exists (2026-08-26):
+
+```sh
+swiftc -O -o build/groundtruth app/tools/groundtruth/main.swift \
+    app/rPlayHub/HEVCStream.swift app/rPlayHub/VideoDecoder.swift app/rPlayHub/AppBuild.swift \
+    -framework AVFoundation -framework VideoToolbox -framework CoreMedia \
+    -framework QuartzCore -framework CoreVideo
+./build/groundtruth reference/captures/apple_video_REFERENCE.h265 gt.y4m gt-index.tsv
+ffmpeg -r 60 -i reference/captures/apple_video_REFERENCE.h265 -fps_mode passthrough \
+    -strict -1 -f yuv4mpegpipe candidate.y4m
+python3 scripts/compare-decodes.py gt.y4m candidate.y4m reference/captures/apple_video_REFERENCE.h265
+```
+
+`groundtruth` runs the app's real HEVCStream+VideoDecoder path (RVRA session, per-frame
+ActiveVideoResolution) over a capture and dumps every picture as full-range y4m; the comparator
+scores any candidate decode per frame with ffmpeg's psnr filter, annotated by RVRA tier. Measured
+baseline for stock ffmpeg against the 601-frame reference: **frames 0-44 bit-exact** (hardware and
+software agree perfectly until the first downshift — the pipeline itself is proven), then ~10-11 dB
+through every downshift episode, partial content-refresh recovery, never exact again. A patch is
+converged when every episode row reads `ok`/`bit-exact`. Two empirical handles for fitting Apple's
+scaler: skip blocks in post-downshift frames expose the scaler's output verbatim (no residual), and
+frames 0-44 being bit-exact means any divergence is attributable to the resampling path alone.
 
 **4. Two-tier product** — VideoToolbox on macOS, option 2 elsewhere.
 
