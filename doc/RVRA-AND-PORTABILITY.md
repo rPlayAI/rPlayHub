@@ -3,6 +3,11 @@
 Written 2026-08-02. This is the single biggest obstacle to running rPlayHub on Linux or Windows,
 and it is not a porting problem. Read this before planning the C port's video path.
 
+**STATUS 2026-08-26: option 3 is implemented and working.** `patches/ffmpeg-rvra.patch` teaches
+ffmpeg's software HEVC decoder RVRA reference resampling; worst frame 39 dB against the
+VideoToolbox ground truth, visually indistinguishable, portable to any platform ffmpeg builds
+on. Details under option 3 below. The analysis that follows is kept as written.
+
 ## The problem in one comparison
 
 The same 601 frames, from the same capture, decoded two ways:
@@ -188,8 +193,45 @@ negotiate, not in what the decoder does afterwards — and unlike the bitrate ce
 difference already measured rather than a lever guessed at. If our session could be made to behave
 like Apple's, option 2 stops being a compromise.
 
-**3. Implement RVRA reference resampling** in a custom decoder (patch ffmpeg's hevcdec). Correct,
-and the ground-truth harness that makes it tractable exists (2026-08-26):
+**3. Implement RVRA reference resampling** in a custom decoder (patch ffmpeg's hevcdec).
+**IMPLEMENTED 2026-08-26 — `patches/ffmpeg-rvra.patch`, built by `scripts/build-ffmpeg-rvra.sh`.**
+The patch teaches ffmpeg 8.1.2's HEVC decoder the three things RVRA needs, gated behind
+`RPLAY_RVRA=1` (and `-threads 1` — the resample mutates DPB frames in place):
+
+1. Parse the active-size trailer off each packet's tail (same tier-match rule as the client).
+2. At frame start, with reference lists built and no CTU decoded, resample every flagged DPB
+   reference's active rect to the incoming frame's active size — each frame remembers the size
+   its content occupies, so chained downshifts scale from where the content actually is.
+3. Fill everything outside the new active rect with 128/128/128 — measured off the ground
+   truth: Apple's decoder shows uniform neutral gray there (fresh scaler buffers), and skip
+   blocks outside the rect copy it, so a reference holding stale full-size content leaks
+   garbage into every downshifted picture. This one fill took the downshifted frames from
+   ~13-17 dB to 40-44 dB.
+
+Kernel: plain **bilinear, center-aligned, no antialiasing** — an end-to-end sweep of
+bilinear/bicubic/lanczos/area (each ± antialias) against the ground truth ranked plain bilinear
+first on every segment; every sharper kernel scored worse, consistent with a simple hardware
+resampler. Result on the 601-frame reference capture (scripts/compare-decodes.py):
+
+```
+ frames       tier      min    mean   verdict
+  0-44     1184x2576   exact  exact   bit-exact
+ 45-46     1088x1920   44.35  44.37   ok
+ 47-55      720x1280   40.49  40.59   ok
+ 56-57     1088x1920   40.32  40.33   ok
+ 58-163    1184x2576   39.07  46.89   degraded   <- worst frame: 58, the upshift
+164-179    1088x1920   42.24  43.18   ok
+180-600    1184x2576   43.67  54.44   ok
+```
+
+Worst frame 39 dB, visually indistinguishable in side-by-side crops (checked frame 58: both
+sharp, no evidence of the backup-buffer restore the AppleAVD strings hint at). The residue is
+sub-visual kernel/precision mismatch that periodic keyframes reset in live use. Remaining
+refinement, if ever needed: fit the exact filter phases from skip blocks in downshift frames
+(zero-residual blocks expose Apple's scaler output verbatim); whole-frame fitting does not work
+because downshifts coincide with motion.
+
+The ground-truth harness this converged against:
 
 ```sh
 swiftc -O -o build/groundtruth app/tools/groundtruth/main.swift \

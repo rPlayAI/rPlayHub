@@ -110,17 +110,18 @@ gop-reproducer.h265 → 117/117) — **but it inherits the RVRA limitation: pict
 from the first downshift until content refresh papers over it.** It is the right harness for
 testing the portable options below, not a shippable viewer.
 
-**The portable options** (detailed in `doc/RVRA-AND-PORTABILITY.md`): turning RVRA off in the
-offer is ruled out (device ignores the token); hiding frames while below full tier is the leading
-candidate but is only viable if our sessions stop downshifting 6-12x more often than Device
-Hub's (why they do is unexplained and is the highest-value open question — the built-but-never-run
-`sudo ./scripts/rvra-bitrate-all.sh` experiment probes the bitrate hypothesis); implementing
-RVRA reference resampling on top of ffmpeg is correct-but-research; a two-tier product
-(VideoToolbox on macOS, degraded elsewhere) is the fallback. Note that hiding below-full-tier
-frames is not enough by itself: after the tier returns to full, the decode is still damaged until
-enough content refreshes, so the hold must extend until the picture is provably clean (e.g.,
-compare against a slow full re-anchor, or request a keyframe via PLI on tier-up — the engine
-already knows how to send PLI).
+**RVRA IS SOLVED IN SOFTWARE (2026-08-26): `patches/ffmpeg-rvra.patch`**, built by
+`scripts/build-ffmpeg-rvra.sh` into `deps/ffmpeg`. The patch adds RVRA reference resampling to
+ffmpeg's HEVC decoder (trailer parse off the packet tail, bilinear resample of every DPB
+reference at frame start on an active-size change, neutral-gray fill outside the active rect),
+gated behind `RPLAY_RVRA=1` + `-threads 1`. Scored against the VideoToolbox ground truth on the
+601-frame reference: bit-exact until the first downshift, >= 40 dB through every downshift
+episode, worst frame 39 dB at one upshift, visually indistinguishable. That unblocks the
+portable client at full quality: rplay-view needs to link the patched libavcodec (it still
+links the system one) and set the RVRA state per stream. The other options in
+`doc/RVRA-AND-PORTABILITY.md` (hide-below-tier, two-tier product) are now fallbacks, and the
+downshift-rate question (`sudo ./scripts/rvra-bitrate-all.sh`, needs the user) is now about
+quality margin rather than viability.
 
 ## Suggested next steps, in order
 
