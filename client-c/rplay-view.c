@@ -8,12 +8,17 @@
  * cached VPS/SPS/PPS re-sent to a joining viewer, and ONE IDR per session, so no access unit may
  * be dropped before decode (frame skipping, if ever needed, must happen after).
  *
- * The one thing a stock decoder cannot do for us is the RVRA active rect: under motion the
- * encoder squeezes the whole screen into the top-left of the same coded frame and appends
- * [w:u16be][h:u16be][00...][session tag] to the slice NAL. ffmpeg decodes such frames without
- * complaint (the trailer sits past rbsp_slice_trailing_bits), so the renderer crops to the rect
- * and scales up, or motion frames would render squeezed into a corner. See
- * doc/RVRA-AND-PORTABILITY.md; the parser is ported from HEVCStream.swift.
+ * KNOWN LIMITATION — RVRA (read doc/RVRA-AND-PORTABILITY.md before "fixing" this): under motion
+ * the encoder downshifts the coded picture into the top-left of the same frame and appends
+ * [w:u16be][h:u16be][00...][session tag] to the slice NAL. This client parses that trailer and
+ * crops, which fixes the geometry — but RVRA also requires REFERENCE RESAMPLING in the decoder
+ * (references coded at the old size rescaled before prediction), which standard HEVC does not
+ * have. ffmpeg therefore decodes downshifted-and-after frames conformantly, silently, and
+ * WRONG: a garbled mosaic from the first downshift until fresh content paints over it. Only
+ * VideoToolbox with the private RVRA properties decodes this stream clean, which is why the
+ * macOS app uses the hardware decoder. This program is the harness for the portable options
+ * (hold-last-clean during downshifts, PLI on tier-up, a resampling decoder), not a shippable
+ * viewer. The trailer parser is ported from HEVCStream.swift.
  *
  * Modes:
  *   rplay-view [-s HOST] [-p PORT]     live view (default 127.0.0.1:9877; codec asked over 9876)
