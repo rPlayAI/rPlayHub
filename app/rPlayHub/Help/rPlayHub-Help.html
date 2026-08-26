@@ -151,6 +151,71 @@ ol.steps li::before{
   border:1px solid var(--line); color:var(--muted)}
 .tabs .t b{color:var(--ink); font-weight:600}
 
+/* annotated window figure — the three panes, with a numbered legend */
+figure.shot{margin:26px 0 6px}
+.win{border:1px solid var(--line); border-radius:12px; overflow:hidden;
+  background:var(--surface); box-shadow:var(--shadow)}
+.win .chrome{display:flex; align-items:center; gap:7px; padding:9px 12px;
+  background:var(--surface-2); border-bottom:1px solid var(--line)}
+.win .dot{width:11px; height:11px; border-radius:50%}
+.dot.r{background:#ff5f57} .dot.y{background:#febc2e} .dot.g{background:#28c840}
+.win .wtitle{margin-left:8px; font-size:12px; color:var(--muted);
+  font-family:"IBM Plex Mono",monospace}
+.panes{display:grid; grid-template-columns:150px minmax(0,1fr) 152px; min-height:308px}
+.pane{position:relative; padding:12px}
+.pane.sidebar{border-right:1px solid var(--line)}
+.pane.inspector{border-left:1px solid var(--line)}
+.pane.center{display:flex; flex-direction:column; align-items:center; gap:12px;
+  background:var(--ground); padding-top:16px}
+.tag{position:absolute; z-index:3; width:20px; height:20px; border-radius:50%;
+  background:var(--accent); color:#fff; font-family:"IBM Plex Mono",monospace; font-size:11px;
+  font-weight:600; display:grid; place-items:center; top:8px; left:8px;
+  box-shadow:0 1px 4px rgba(0,0,0,.28)}
+.mini-search{font-size:10.5px; color:var(--faint); background:var(--surface-2);
+  border:1px solid var(--line); border-radius:6px; padding:5px 8px; margin:18px 0 10px}
+.mini-grp{font-family:"Sora",sans-serif; font-weight:600; font-size:9px; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--faint); margin:8px 0 6px}
+.drow{display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted);
+  padding:5px 6px; border-radius:6px}
+.drow.on{background:var(--surface-2); color:var(--ink)}
+.drow em{margin-left:auto; font-style:normal; font-size:10px; color:var(--faint)}
+.d{width:7px; height:7px; border-radius:50%; border:1.5px solid var(--faint); flex:none}
+.d.on{background:var(--live); border-color:var(--live)}
+.phone{width:130px; border-radius:22px; padding:9px 8px 8px; display:flex; flex-direction:column;
+  background:linear-gradient(165deg,#243250,#0d1626);
+  box-shadow:0 8px 20px rgba(0,0,0,.32), inset 0 0 0 2px rgba(255,255,255,.06)}
+.phone .sb{display:flex; justify-content:space-between; align-items:center; padding:2px 7px 9px}
+.phone .sb b{color:#fff; font-size:9px; font-weight:600; font-family:"IBM Plex Sans",sans-serif}
+.phone .sb i{display:inline-block; width:15px; height:6px; border-radius:2px;
+  background:rgba(255,255,255,.72)}
+.phone .apps{display:grid; grid-template-columns:repeat(4,1fr); gap:10px 9px; padding:0 4px}
+.phone .ic{aspect-ratio:1; border-radius:27%; box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.phone .dockwrap{margin-top:12px; padding:8px 6px; border-radius:17px;
+  background:rgba(255,255,255,.09)}
+.phone .dock{display:grid; grid-template-columns:repeat(4,1fr); gap:9px}
+.strip{display:flex; gap:7px; align-items:center; position:relative; padding:8px 12px 8px 14px;
+  background:var(--surface); border:1px solid var(--line); border-radius:10px}
+.strip .tag{position:static; margin-right:3px; width:18px; height:18px; font-size:10px}
+.strip .b{width:23px; height:23px; border-radius:7px; background:var(--surface-2);
+  border:1px solid var(--line); display:grid; place-items:center; color:var(--muted); font-size:12px}
+.itabs{display:flex; gap:4px; flex-wrap:wrap; margin:18px 0 10px}
+.itabs span{font-size:9.5px; padding:3px 6px; border-radius:5px; background:var(--surface-2);
+  color:var(--muted)}
+.itabs span.on{background:var(--accent); color:#fff}
+.irow{display:flex; justify-content:space-between; gap:8px; font-size:10.5px; color:var(--muted);
+  padding:6px 2px; border-bottom:1px solid var(--line)}
+.irow b{color:var(--ink); font-weight:500}
+figcaption{font-size:13px; color:var(--muted); margin-top:14px; line-height:1.6; max-width:66ch}
+figcaption b.t{color:var(--ink); font-weight:600}
+figcaption .n{display:inline-grid; place-items:center; width:16px; height:16px; border-radius:50%;
+  background:var(--accent); color:#fff; font-family:"IBM Plex Mono",monospace; font-size:10px;
+  font-weight:600; vertical-align:-3px; margin:0 3px 0 6px}
+figcaption .n:first-child{margin-left:0}
+@media (max-width:600px){
+  .panes{grid-template-columns:1fr}
+  .pane.sidebar,.pane.inspector{border-right:none; border-left:none; border-bottom:1px solid var(--line)}
+}
+
 footer{border-top:1px solid var(--line); color:var(--faint); font-size:12.5px;
   padding:22px 0 40px; margin-top:40px}
 footer .wrap{display:flex; gap:8px; flex-wrap:wrap; justify-content:space-between}
@@ -209,6 +274,78 @@ footer .wrap{display:flex; gap:8px; flex-wrap:wrap; justify-content:space-betwee
         mouse and trackpad into taps and swipes, and gives you the device's apps, logs, files,
         and diagnostics alongside it.</p>
     </div>
+
+    <figure class="shot">
+      <div class="win" role="img" aria-label="The rPlayHub window: a device sidebar on the left, the live iPhone screen with an action strip in the center, and the inspector tabs on the right.">
+        <div class="chrome">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="wtitle">iPhone 13 Pro — rPlayHub</span>
+        </div>
+        <div class="panes">
+          <aside class="pane sidebar">
+            <div class="tag">1</div>
+            <div class="mini-search">Search</div>
+            <div class="mini-grp">Available</div>
+            <div class="drow on"><span class="d on"></span>iPhone 13 Pro<em>27.0</em></div>
+            <div class="drow"><span class="d"></span>Christina<em>26.5</em></div>
+            <div class="drow"><span class="d"></span>iPad Pro<em>26.5</em></div>
+          </aside>
+          <div class="pane center">
+            <div class="tag">2</div>
+            <div class="phone">
+              <div class="sb"><b>9:41</b><i></i></div>
+              <div class="apps">
+                <div class="ic" style="background:#3b82f6"></div>
+                <div class="ic" style="background:#34c759"></div>
+                <div class="ic" style="background:#ff3b30"></div>
+                <div class="ic" style="background:#ff9500"></div>
+                <div class="ic" style="background:#8b5cf6"></div>
+                <div class="ic" style="background:#0ea5b7"></div>
+                <div class="ic" style="background:#ff375f"></div>
+                <div class="ic" style="background:#facc15"></div>
+                <div class="ic" style="background:#60a5fa"></div>
+                <div class="ic" style="background:#22c55e"></div>
+                <div class="ic" style="background:#f472b6"></div>
+                <div class="ic" style="background:#fb923c"></div>
+              </div>
+              <div class="dockwrap"><div class="dock">
+                <div class="ic" style="background:#3b82f6"></div>
+                <div class="ic" style="background:#22c55e"></div>
+                <div class="ic" style="background:#25d366"></div>
+                <div class="ic" style="background:#0a84ff"></div>
+              </div></div>
+            </div>
+            <div class="strip">
+              <div class="tag">3</div>
+              <div class="b">⌂</div><div class="b">◳</div><div class="b">●</div>
+              <div class="b">↥</div><div class="b">⟳</div>
+            </div>
+          </div>
+          <aside class="pane inspector">
+            <div class="tag">4</div>
+            <div class="itabs">
+              <span class="on">Info</span><span>Apps</span><span>Console</span>
+              <span>Files</span><span>Profiles</span>
+            </div>
+            <div class="irow"><span>Model</span><b>iPhone 13 Pro</b></div>
+            <div class="irow"><span>iOS</span><b>27.0</b></div>
+            <div class="irow"><span>Battery</span><b>82%</b></div>
+            <div class="irow"><span>Serial</span><b>F2L…9K3</b></div>
+          </aside>
+        </div>
+      </div>
+      <figcaption>
+        <b class="t">The rPlayHub window.</b>
+        <span class="n">1</span>the <b>device sidebar</b> — every device this Mac can see; a filled
+        dot marks the one you're mirroring.
+        <span class="n">2</span>the <b>live screen</b>, where clicks become taps and drags become
+        swipes.
+        <span class="n">3</span>the <b>action strip</b> — Home, Screenshot, Record, and power
+        actions, right where you're looking.
+        <span class="n">4</span>the <b>inspector</b>: Info, Apps, Console, Files, and Profiles for
+        the selected device.
+      </figcaption>
+    </figure>
 
     <section id="welcome">
       <h2>What rPlayHub does</h2>
