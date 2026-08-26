@@ -1,5 +1,6 @@
 #include "media.h"
 #include "rp_rtp_assembler.h"
+#include "usernet.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -37,6 +38,7 @@ struct media_session {
     uint8_t        *rtp_storage;
 
     struct sockaddr_in6 peer;     /* where their packets come from is where ours must go */
+    usernet_addr        upeer;    /* the same, when the socket is lwIP (usernet_owns(m->udp)) */
     int      have_peer;
 
     pthread_t recv_thread, rtcp_thread;
@@ -84,6 +86,14 @@ static uint64_t now_ms(void)
     return (uint64_t)t.tv_sec * 1000 + (uint64_t)(t.tv_nsec / 1000000);
 }
 
+/* Send to wherever the device's packets come from, over whichever stack owns the socket. */
+static long udp_send_peer(media_session *m, const void *buf, size_t len)
+{
+    if (!m->have_peer) return -1;
+    if (usernet_owns(m->udp)) return usernet_sendto(m->udp, buf, len, &m->upeer);
+    return (long)sendto(m->udp, buf, len, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+}
+
 /* ------------------------------------------------------------------ NAL classification */
 
 static int hevc_type(const uint8_t *nal, size_t n) { return n ? (nal[0] >> 1) & 0x3F : -1; }
@@ -122,9 +132,17 @@ static void *recv_loop(void *arg)
     media_session *m = arg;
     uint8_t pkt[65536];
     while (!m->stop) {
-        struct sockaddr_in6 from;
-        socklen_t flen = sizeof from;
-        ssize_t n = recvfrom(m->udp, pkt, sizeof pkt, 0, (struct sockaddr *)&from, &flen);
+        ssize_t n;
+        if (usernet_owns(m->udp)) {
+            usernet_addr from;
+            n = (ssize_t)usernet_recvfrom(m->udp, pkt, sizeof pkt, &from);
+            if (n > 0 && !m->have_peer) { m->upeer = from; m->have_peer = 1; }
+        } else {
+            struct sockaddr_in6 from;
+            socklen_t flen = sizeof from;
+            n = recvfrom(m->udp, pkt, sizeof pkt, 0, (struct sockaddr *)&from, &flen);
+            if (n > 0 && !m->have_peer) { m->peer = from; m->have_peer = 1; }
+        }
         if (n <= 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
                 /* Idle. This is what enforces the 100 ms deadline when no further packet arrives
@@ -134,7 +152,6 @@ static void *recv_loop(void *arg)
             }
             break;
         }
-        if (!m->have_peer) { m->peer = from; m->have_peer = 1; }
         m->packets++;
         m->bytes += (uint64_t)n;
 
@@ -197,8 +214,7 @@ static void *recv_loop(void *arg)
             if (m->rtp.lost == m->lost_at_frame_start && m->rtp.lost == lost_before) {
                 uint8_t ack[32];
                 size_t an = rp_rtcp_build_ltr_ack(&m->rtcp, ts, ack, sizeof ack);
-                if (an && m->have_peer)
-                    sendto(m->udp, ack, an, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+                if (an) udp_send_peer(m, ack, an);
             } else {
                 /* The same test that decides not to acknowledge also decides that what we just
                  * handed the consumer cannot be decoded safely. Only the first half was ever
@@ -238,7 +254,7 @@ static void *rtcp_loop(void *arg)
          * video after twenty seconds without it. */
         if (t - last_rr >= 1000) {
             size_t n = rp_rtcp_build_rr(&m->rtcp, t, buf, sizeof buf);
-            if (n) sendto(m->udp, buf, n, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+            if (n) udp_send_peer(m, buf, n);
             last_rr = t;
         }
         /* Rate-control feedback, on a free-running 50 ms timer.
@@ -249,13 +265,12 @@ static void *rtcp_loop(void *arg)
          * appended to the receiver report. */
         if (rctl_on && t - last_rctl >= 50) {
             size_t n = rp_rtcp_build_rctl(&m->rtcp, t, rctl_target, buf, sizeof buf);
-            ssize_t sent = -1;
-            if (n) sent = sendto(m->udp, buf, n, 0,
-                                 (struct sockaddr *)&m->peer, sizeof m->peer);
+            long sent = -1;
+            if (n) sent = udp_send_peer(m, buf, n);
             static int reported = 0;
             if (!reported) {
                 reported = 1;
-                fprintf(stderr, "  rctl: on=%d target=%u built=%zu sent=%zd%s%s\n",
+                fprintf(stderr, "  rctl: on=%d target=%u built=%zu sent=%ld%s%s\n",
                         rctl_on, rctl_target, n, sent,
                         sent < 0 ? " errno=" : "", sent < 0 ? strerror(errno) : "");
             }
@@ -268,7 +283,7 @@ static void *rtcp_loop(void *arg)
         if (m->keyframe_every_s > 0 &&
             t - last_pli >= (uint64_t)(m->keyframe_every_s * 1000)) {
             size_t n = rp_rtcp_build_pli(&m->rtcp, buf, sizeof buf);
-            if (n) sendto(m->udp, buf, n, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+            if (n) udp_send_peer(m, buf, n);
             last_pli = t;
         }
     }
@@ -311,8 +326,7 @@ static void note_discontinuity(media_session *m)
     m->last_disc_pli_ms = t;
     uint8_t buf[64];
     size_t n = rp_rtcp_build_pli(&m->rtcp, buf, sizeof buf);
-    if (n && m->have_peer)
-        sendto(m->udp, buf, n, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+    if (n) udp_send_peer(m, buf, n);
 }
 
 /* One NAL from the vendored assembler: frame it and hand it on, exactly as nal_cb does. */
@@ -334,12 +348,61 @@ static void ra_frame_cb(void *ctx)
     if (m->ra.lost == m->lost_at_frame_start) {
         uint8_t ack[32];
         size_t an = rp_rtcp_build_ltr_ack(&m->rtcp, m->ra.last_rtp_time, ack, sizeof ack);
-        if (an && m->have_peer)
-            sendto(m->udp, ack, an, 0, (struct sockaddr *)&m->peer, sizeof m->peer);
+        if (an) udp_send_peer(m, ack, an);
     } else {
         note_discontinuity(m);
     }
     m->lost_at_frame_start = m->ra.lost;
+}
+
+/* The kernel-socket receive path: bind an ephemeral port, then fight for buffer and queueing. */
+static int kernel_udp_socket(int *recv_port)
+{
+    int fd = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_in6 bind_addr;
+    memset(&bind_addr, 0, sizeof bind_addr);
+    bind_addr.sin6_family = AF_INET6;
+    if (bind(fd, (struct sockaddr *)&bind_addr, sizeof bind_addr) != 0) { close(fd); return -1; }
+    socklen_t blen = sizeof bind_addr;
+    getsockname(fd, (struct sockaddr *)&bind_addr, &blen);
+    *recv_port = ntohs(bind_addr.sin6_port);
+
+    /* A burst from a full-screen transition is a few hundred packets at once; the default
+     * receive buffer drops them and the loss shows up as permanent corruption.
+     *
+     * Read the size back rather than trusting the request. The kernel clamps this to
+     * kern.ipc.maxsockbuf without failing the call, so a silent clamp to the 786 KB default
+     * looks exactly like success -- and a burst that overflows leaves no trace on this side
+     * beyond a sequence gap that is indistinguishable from loss on the wire. Step down until
+     * one is actually granted. */
+    int rcvbuf = 0;
+    for (int want = 4 * 1024 * 1024; want >= 512 * 1024; want /= 2) {
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &want, sizeof want) != 0) continue;
+        int got = 0; socklen_t glen = sizeof got;
+        if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &got, &glen) == 0 && got >= want / 2) {
+            rcvbuf = got;
+            break;
+        }
+    }
+    if (rcvbuf < 1024 * 1024)
+        fprintf(stderr, "  warning: UDP receive buffer is only %d KB; "
+                        "fast motion will overflow it (raise kern.ipc.maxsockbuf)\n",
+                rcvbuf / 1024);
+    /* Classify the flow as video, the way Apple's own AccessorySDK does for media sockets.
+     * This is what decides which queue the packets sit in when the link is contended -- on
+     * Wi-Fi it selects the WMM access category -- so it costs nothing and is exactly the case
+     * where a burst currently hurts: a fast swipe, not a still screen. */
+#ifdef SO_TRAFFIC_CLASS
+    setsockopt(fd, SOL_SOCKET, SO_TRAFFIC_CLASS, &(int){ SO_TC_VI }, sizeof(int));
+#endif
+#ifdef SO_NET_SERVICE_TYPE
+    setsockopt(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE, &(int){ NET_SERVICE_TYPE_VI }, sizeof(int));
+#endif
+
+    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    return fd;
 }
 
 media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *ctx)
@@ -394,51 +457,20 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
                 (size_t)RP_RTP_REORDER_WINDOW * 1500 + RP_RTP_MAX_NAL, nal_cb, m);
     rp_rtcp_init(&m->rtcp, cfg->ssrc);
 
-    /* Bind first: the port number goes into the offer. */
-    m->udp = socket(AF_INET6, SOCK_DGRAM, 0);
-    if (m->udp < 0) goto fail;
-    struct sockaddr_in6 bind_addr;
-    memset(&bind_addr, 0, sizeof bind_addr);
-    bind_addr.sin6_family = AF_INET6;
-    if (bind(m->udp, (struct sockaddr *)&bind_addr, sizeof bind_addr) != 0) goto fail;
-    socklen_t blen = sizeof bind_addr;
-    getsockname(m->udp, (struct sockaddr *)&bind_addr, &blen);
-    int recv_port = ntohs(bind_addr.sin6_port);
-
-    /* A burst from a full-screen transition is a few hundred packets at once; the default
-     * receive buffer drops them and the loss shows up as permanent corruption.
-     *
-     * Read the size back rather than trusting the request. The kernel clamps this to
-     * kern.ipc.maxsockbuf without failing the call, so a silent clamp to the 786 KB default
-     * looks exactly like success -- and a burst that overflows leaves no trace on this side
-     * beyond a sequence gap that is indistinguishable from loss on the wire. Step down until
-     * one is actually granted. */
-    int rcvbuf = 0;
-    for (int want = 4 * 1024 * 1024; want >= 512 * 1024; want /= 2) {
-        if (setsockopt(m->udp, SOL_SOCKET, SO_RCVBUF, &want, sizeof want) != 0) continue;
-        int got = 0; socklen_t glen = sizeof got;
-        if (getsockopt(m->udp, SOL_SOCKET, SO_RCVBUF, &got, &glen) == 0 && got >= want / 2) {
-            rcvbuf = got;
-            break;
-        }
+    /* Bind first: the port number goes into the offer. In userspace mode the RTP flow rides the
+     * lwIP stack, so video keeps the same no-root property as the control path; the burst
+     * headroom the kernel path buys with SO_RCVBUF is sized in lwip-engine/lwipopts.h instead
+     * (PBUF pool, tcpip mbox, UDP recvmbox), and the traffic-class options do not apply because
+     * the packets travel inside the tunnel's TCP connection, which has its own socket setup. */
+    int recv_port = 0;
+    if (usernet_is_on()) {
+        m->udp = usernet_udp_socket(&recv_port);
+        if (m->udp < 0) goto fail;
+        usernet_set_recv_timeout_ms(m->udp, 1000);
+    } else {
+        m->udp = kernel_udp_socket(&recv_port);
+        if (m->udp < 0) goto fail;
     }
-    if (rcvbuf < 1024 * 1024)
-        fprintf(stderr, "  warning: UDP receive buffer is only %d KB; "
-                        "fast motion will overflow it (raise kern.ipc.maxsockbuf)\n",
-                rcvbuf / 1024);
-    /* Classify the flow as video, the way Apple's own AccessorySDK does for media sockets.
-     * This is what decides which queue the packets sit in when the link is contended -- on
-     * Wi-Fi it selects the WMM access category -- so it costs nothing and is exactly the case
-     * where a burst currently hurts: a fast swipe, not a still screen. */
-#ifdef SO_TRAFFIC_CLASS
-    setsockopt(m->udp, SOL_SOCKET, SO_TRAFFIC_CLASS, &(int){ SO_TC_VI }, sizeof(int));
-#endif
-#ifdef SO_NET_SERVICE_TYPE
-    setsockopt(m->udp, SOL_SOCKET, SO_NET_SERVICE_TYPE, &(int){ NET_SERVICE_TYPE_VI }, sizeof(int));
-#endif
-
-    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
-    setsockopt(m->udp, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 
     if (connect_service(m, cfg->device_addr, cfg->display_port) != 0) goto fail;
 
@@ -566,6 +598,16 @@ fail:
 
 static int connect_service(media_session *m, const char *addr, long port)
 {
+    if (usernet_is_on()) {
+        /* The negotiation channel over the userspace stack. lwIP's connect enforces its own
+         * SYN-retry deadline, so the SYN_SENT hang the kernel path guards against below cannot
+         * pin the caller; the read deadline matches the kernel path's. */
+        m->svc = usernet_connect(addr, (int)port);
+        if (m->svc < 0) return -1;
+        usernet_set_recv_timeout_ms(m->svc, 10000);
+        goto handshake;
+    }
+
     struct sockaddr_in6 sa;
     memset(&sa, 0, sizeof sa);
     sa.sin6_family = AF_INET6;
@@ -602,9 +644,7 @@ static int connect_service(media_session *m, const char *addr, long port)
     }
     fcntl(m->svc, F_SETFL, flags);
 
-    static long (*rd)(void *, void *, size_t);
-    static long (*wr)(void *, const void *, size_t);
-    (void)rd; (void)wr;
+handshake:;
     extern long media_sock_read(void *ctx, void *buf, size_t len);
     extern long media_sock_write(void *ctx, const void *buf, size_t len);
     rp_rxpc_io io = { media_sock_read, media_sock_write, &m->svc };
@@ -612,8 +652,8 @@ static int connect_service(media_session *m, const char *addr, long port)
     return rp_rxpc_handshake(&m->rxpc);
 }
 
-long media_sock_read(void *ctx, void *buf, size_t len)  { return (long)recv(*(int *)ctx, buf, len, 0); }
-long media_sock_write(void *ctx, const void *buf, size_t len) { return (long)send(*(int *)ctx, buf, len, 0); }
+long media_sock_read(void *ctx, void *buf, size_t len)  { return tun_read(*(int *)ctx, buf, len); }
+long media_sock_write(void *ctx, const void *buf, size_t len) { return tun_write(*(int *)ctx, buf, len); }
 
 void media_stop(media_session *m)
 {
@@ -652,8 +692,8 @@ void media_stop(media_session *m)
     m->stop = 1;
     if (m->recv_thread) pthread_join(m->recv_thread, NULL);
     if (m->rtcp_thread) pthread_join(m->rtcp_thread, NULL);
-    if (m->udp >= 0) close(m->udp);
-    if (m->svc >= 0) close(m->svc);
+    if (m->udp >= 0) tun_close(m->udp);
+    if (m->svc >= 0) tun_close(m->svc);
     free(m->rtp_storage);
     free(m->rxpc_reassembly);
     free(m->rxpc_raw);

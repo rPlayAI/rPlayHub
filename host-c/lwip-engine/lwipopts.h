@@ -47,10 +47,18 @@
 #define MEMP_NUM_TCP_PCB            32
 #define MEMP_NUM_TCP_SEG           (8 * TCP_SND_QUEUELEN)
 #define MEMP_NUM_NETCONN            32
-#define PBUF_POOL_SIZE              256
+#define PBUF_POOL_SIZE              1024
 #define PBUF_POOL_BUFSIZE           1600
 #define LWIP_IPV6_REASS            0
 #define IPV6_FRAG_COPYHEADER        1
+
+/* Live video (media.c) runs RTP/RTCP over this stack too. A full-screen transition is a burst of
+ * a few hundred ~1200-byte packets, and with one IDR per session every drop is permanent
+ * corruption. Before the socket there are three places a packet can be dropped -- the PBUF pool
+ * (PBUF_POOL_SIZE above), the tcpip-thread mailbox, and the UDP socket's recvmbox -- so all three
+ * are sized above the burst; this is the userspace equivalent of the 4 MB SO_RCVBUF the kernel
+ * path fights for. The receive loop paces its reorder deadline with a 1 s socket timeout. */
+#define LWIP_SO_RCVTIMEO            1
 
 #define MEM_ALIGNMENT               8
 #define LWIP_STATS                  0
@@ -61,10 +69,10 @@
 /* pthread port needs these thread settings. */
 #define TCPIP_THREAD_STACKSIZE      65536
 #define TCPIP_THREAD_PRIO           1
-#define TCPIP_MBOX_SIZE             64
+#define TCPIP_MBOX_SIZE             1024  /* tcpip_input tryposts here; full = silent drop, so > one video burst */
 #define DEFAULT_THREAD_STACKSIZE    65536
 #define DEFAULT_RAW_RECVMBOX_SIZE   64
-#define DEFAULT_UDP_RECVMBOX_SIZE   64
+#define DEFAULT_UDP_RECVMBOX_SIZE   1024  /* the RTP socket's queue; a burst must fit while recv_loop drains */
 #define DEFAULT_TCP_RECVMBOX_SIZE   64
 #define DEFAULT_ACCEPTMBOX_SIZE     64
 

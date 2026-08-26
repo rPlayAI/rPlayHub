@@ -123,3 +123,44 @@ int usernet_connect(const char *addr, int port)
 long usernet_read(int fd, void *buf, size_t n)  { return lwip_recv(fd, buf, n, 0); }
 long usernet_write(int fd, const void *buf, size_t n) { return lwip_send(fd, buf, n, 0); }
 void usernet_close(int fd) { lwip_close(fd); }
+
+int usernet_udp_socket(int *bound_port)
+{
+    int s = lwip_socket(AF_INET6, SOCK_DGRAM, 0);
+    if (s < 0) return -1;
+    struct sockaddr_in6 sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sin6_family = AF_INET6;
+    socklen_t slen = sizeof sa;
+    if (lwip_bind(s, (struct sockaddr *)&sa, sizeof sa) != 0 ||
+        lwip_getsockname(s, (struct sockaddr *)&sa, &slen) != 0) {
+        lwip_close(s);
+        return -1;
+    }
+    if (bound_port) *bound_port = lwip_ntohs(sa.sin6_port);
+    return s;
+}
+
+long usernet_recvfrom(int fd, void *buf, size_t n, usernet_addr *from)
+{
+    struct sockaddr_storage ss;
+    socklen_t slen = sizeof ss;
+    long r = lwip_recvfrom(fd, buf, n, 0, (struct sockaddr *)&ss, &slen);
+    if (r >= 0 && from) {
+        if ((size_t)slen > sizeof from->raw) slen = sizeof from->raw;
+        memcpy(from->raw, &ss, slen);
+        from->len = (unsigned int)slen;
+    }
+    return r;
+}
+
+long usernet_sendto(int fd, const void *buf, size_t n, const usernet_addr *to)
+{
+    return lwip_sendto(fd, buf, n, 0, (const struct sockaddr *)to->raw, (socklen_t)to->len);
+}
+
+int usernet_set_recv_timeout_ms(int fd, int ms)
+{
+    struct timeval tv = { ms / 1000, (ms % 1000) * 1000 };
+    return lwip_setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+}
