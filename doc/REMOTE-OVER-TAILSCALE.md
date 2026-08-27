@@ -301,3 +301,52 @@ over `ssh -R`, then Tailscale) with any box next to the phone; the phone-only un
 **Architecture B** (the RemotePairing handshake we already specced). Either way, "a USB port
 across the internet" — the project's original objective — is real, on Linux, with no Mac in the
 path. Run the premise test first; it costs five minutes and decides whether B is worth the build.
+
+## Live experiment — Xcode/Device Hub over Tailscale (2026-08-27)
+
+Ran the article's method end-to-end against a real remote iPhone 13 Pro (iOS 27) over Tailscale.
+**Result: Apple's Device Hub discovers the remote phone and the RemotePairing front door connects
+through the proxy — the trusted QUIC tunnel is the one remaining wall.** Concrete findings, so this
+isn't re-learned:
+
+**Setup that works.**
+- Tailscale must be **routed mode** (a real `utun`), not userspace — `socat` needs to route to the
+  phone's `100.x`, and the CoreDevice tunnel is UDP. Rootless userspace mode (`--tun=userspace-networking`)
+  is fine only for the reachability probe via `tailscale nc`.
+- The phone must stay **Wi-Fi-associated AND Tailscale-connected**; iOS drops the tunnel when the
+  Tailscale app backgrounds or the phone sleeps (seen repeatedly — `offline, last seen …, tx N rx 0`).
+  Keep the Tailscale app foreground / phone awake.
+
+**The RemotePairing port is DYNAMIC — not 49152.** The article's `49152` is that author's value; our
+phone advertised **`56418`** (verified `Connection refused` on 49152, `succeeded` on 56418 over the
+tailnet). The port is in the phone's link-local Bonjour `_remotepairing._tcp` record, which does NOT
+cross the tailnet — so it must be read on the phone's own network (`dns-sd -L …`). It also changes
+across sessions/reboots.
+
+**The spoof must mirror the phone's real TXT exactly.** The `identifier` is the **RemotePairing
+identity** (e.g. `BB1F23F8-…`), *different* from the CoreDevice/`devicectl` id (`F96F2729-…`), and
+there is an `authTag` plus `ver` (26 here, not the article's 24). With the wrong identifier `remoted`
+reports `CurrentlyAssertableStates = ()` (no path); with the exact record it advances to actually
+dialing. The SRV host must resolve to this Mac — use a clean unique `*.local` (not the phone's real
+hostname, which conflicts; not the Mac's own name, which `dns-sd -P` then breaks). Verify with
+`ping host.local`, NOT `dns-sd -Gv4` (that only shows the AAAA and misreports).
+
+**How far it gets.** With the exact record + resolving host + `socat` relay on 56418:
+- `devicectl list devices` flips the phone from `unavailable` → **`available (paired)`**.
+- **Device Hub shows the remote iPhone** (briefly).
+- netstat confirms the front door is fully proxied: `remoted → Mac:56418 (ESTABLISHED)` and
+  `socat → phone:56418 (ESTABLISHED)` over the tailnet.
+
+**Where it stalls.** `devicectl` live ops fail with `RemotePairingError 4 / tunnel connection
+failed`, and Device Hub drops the device after it appears. The RemotePairing handshake succeeds on
+the TCP front door but the **trusted tunnel (QUIC over UDP)** does not come up through the relay.
+Two suspected causes, unresolved: (1) `socat UDP-LISTEN,fork` does not carry QUIC cleanly, and
+(2) the tunnel moves to a **dynamic UDP port** the phone negotiates (the article blanket-relayed
+55000–55300 for its phone; ours would be a different range and wasn't covered). Solving this means
+a QUIC-aware UDP relay and/or discovering the tunnel port — the genuinely hard remaining work, and
+the same tunnel machinery our own Architecture B (`REMOTEPAIRING-PROTOCOL.md`) would implement
+natively.
+
+**Bottom line:** the article's approach is validated for our devices through discovery and the
+front-door connection — a remote iPhone made visible to Apple's tools over the internet — with the
+QUIC trusted tunnel as the one unsolved layer.
