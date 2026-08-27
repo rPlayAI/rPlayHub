@@ -1,116 +1,102 @@
 #!/bin/bash
 #
-# remote-xcode-proxy.sh — make a REMOTE iPhone visible to Apple's own tools (Xcode, Device Hub,
-# xcrun devicectl) on this Mac, by spoofing its Bonjour records locally and relaying the bytes to
-# the phone over a unicast link (Tailscale, a VPS, plain LAN — anything that gives a route).
+# remote-xcode-proxy.sh — make a REMOTE iPhone visible to Apple's tools (Xcode / Device Hub /
+# devicectl) on this Mac, by spoofing its CoreDevice Bonjour records locally and relaying the
+# bytes to the phone over a unicast link (Tailscale, a VPS, plain LAN — anything routable).
 #
-# This is Architecture C from doc/REMOTE-SUPPORT.md / doc/REMOTE-OVER-TAILSCALE.md, and it is the
-# method from kvnpt's "remote iOS over tailnet" article. It drives APPLE'S CoreDevice stack, NOT
-# rplay-hub — so it needs none of our (unbuilt) relay transport. The trick, in one sentence:
-# iOS 17+ `remotepairingd` only connects to a phone it discovered via link-local Bonjour on the
-# interface that announced it, so we advertise the phone's records pointing at THIS Mac's en0 IP,
-# and a dumb socat relay carries en0 -> the phone across the tunnel. TLS/pairing stay end-to-end
-# between remotepairingd and the real phone; the relay never inspects anything.
+# This is the article's method (kvnpt, "remote iOS over tailnet"), as actually run and verified
+# on 2026-08-27 against a real iPhone 13 Pro over Tailscale. See doc/REMOTE-OVER-TAILSCALE.md.
 #
-#   ./remote-xcode-proxy.sh capture                 # one-time: phone on USB/same-LAN, grab its Bonjour record
-#   ./remote-xcode-proxy.sh run <iphone-ip>         # ongoing: spoof + relay to <iphone-ip> (e.g. its tailnet 100.x)
+#   WHAT WORKS: discovery + the RemotePairing front door. The phone flips to `available (paired)`
+#   and appears in Xcode 26 Devices / Device Hub.
+#   WHAT DOES NOT: the trusted tunnel. Any real op fails with RemotePairingError 4 /
+#   ControlChannelConnectionError — the CoreDevice tunnel is QUIC to a loopback/link-local
+#   endpoint that a dumb socat relay cannot bridge (proven: tcpdump shows no UDP to the phone).
+#   Completing it needs a native tunnel endpoint (Architecture B, doc/REMOTEPAIRING-PROTOCOL.md),
+#   not this proxy. This script is a proof-of-concept / diagnostic, not a shipping path.
 #
-# STATUS: spike, following the article; NOT yet validated end-to-end here. Treat a first run as an
-# experiment, not a feature. See "Prerequisites" and "Caveats" below.
+# ---------------------------------------------------------------------------------------------
+# Values are PER-SESSION and DYNAMIC — read them off the phone's own network each time (mDNS is
+# link-local; it does not cross the tunnel), then pass them in. On a machine on the phone's LAN:
 #
-# Prerequisites (all of Apple's remote-device requirements — we do not remove any):
-#   * socat + dns-sd (dns-sd is built in; `brew install socat`).
-#   * The phone is PAIRED with this Mac (one-time USB trust) and its Developer Disk Image is staged
-#     (sticky until reboot; rplay-hub's scripts/activate-after-reboot.sh can re-stage it).
-#   * The phone is on REAL Wi-Fi (not cellular-only) — Apple gates developer services on Wi-Fi
-#     association; a VPN utun alone does not satisfy it.
-#   * A route to the phone's IP exists (Tailscale on both ends, a VPS, or same LAN).
-#   * Developer Mode is on.
+#     dns-sd -B _remotepairing._tcp local.                 # note the instance (== identifier)
+#     dns-sd -L "<identifier>" _remotepairing._tcp local.  # -> SRV port + TXT (authTag, ver)
+#     # optional, for the mobdev2 record (helps discovery; its port is usually NOT remote-reachable):
+#     dns-sd -L "<instance>" _apple-mobdev2._tcp local.
+#
+# Then (with the phone reachable at its tailnet/VPS IP, Wi-Fi-associated, Developer Mode on):
+#
+#     PHONE_IP=100.x.y.z \
+#     RP_PORT=56418 RP_ID=BB1F23F8-... RP_AUTHTAG=Oj75pvyy RP_VER=26 \
+#     ./scripts/remote-xcode-proxy.sh run
+#
+# Optional _apple-mobdev2 spoof (adds the `-supportsRP-N` discovery record; no live relay if its
+# port is refused over the link, which is the usual case — it is LAN-scoped):
+#
+#     MOB_INSTANCE='ce:ad:..-supportsRP-26' MOB_PORT=32498 MOB_ID=9BA871D2-... \
+#     MOB_AUTHTAG=wymkoCULa9k= MOB_AUTHTAG1=Vg5kqoKCveU= \
+#     ... ./scripts/remote-xcode-proxy.sh run
+#
+# Requires: socat (`brew install socat`), dns-sd (built in), a routed link to PHONE_IP (Tailscale
+# in ROUTED mode — userspace mode cannot carry the UDP the tunnel needs; verify `nc -vz PHONE_IP
+# RP_PORT` succeeds first).
 #
 set -euo pipefail
 
-PORT="${RPLAY_RSD_PORT:-49152}"          # RemotePairing / CoreDevice front door
-RANGE_LO="${RPLAY_TUNNEL_LO:-55000}"     # per-session dynamic tunnel ports the phone allocates
-RANGE_HI="${RPLAY_TUNNEL_HI:-55300}"     # (article observed ~55110-55115; commenters saw wider — widen if needed)
-STATE_DIR="${RPLAY_PROXY_STATE:-$HOME/.rplay-xcode-proxy}"
-mkdir -p "$STATE_DIR"
+RELAY_HOST="${RELAY_HOST:-rphubrelay.local}"      # a clean *.local that resolves to this Mac
+MAC_IP="${MAC_IP:-$(ipconfig getifaddr en1 2>/dev/null || ipconfig getifaddr en0 2>/dev/null || true)}"
 
-need() { command -v "$1" >/dev/null 2>&1 || { echo "missing: $1" >&2; exit 1; }; }
+usage() { sed -n '2,45p' "$0"; exit 2; }
 
-cmd_capture() {
-  need dns-sd
-  echo "Discovering the phone's _remotepairing._tcp record (Ctrl-C when you see it resolve)..."
-  echo "  Phone must be on USB or the same LAN as this Mac for this one-time capture."
-  echo
-  echo "1) Browsing — note the instance name that appears:"
-  echo "     dns-sd -B _remotepairing._tcp local."
-  echo "2) Then resolve it to get host, port, and the TXT (UUID + authTag):"
-  echo "     dns-sd -L \"<instance-name>\" _remotepairing._tcp local."
-  echo
-  echo "Save the instance name, the UUID, and the authTag into $STATE_DIR/record.env like:"
-  cat <<'EOF'
-     INSTANCE="My-iPhone"
-     UUID="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
-     AUTHTAG="....."
-EOF
-  echo
-  echo "Launching the browse now:"
-  exec dns-sd -B _remotepairing._tcp local.
-}
+need() { command -v "$1" >/dev/null 2>&1 || { echo "missing: $1 (brew install socat)" >&2; exit 1; }; }
 
-cmd_run() {
-  need dns-sd
-  need socat
-  local iphone_ip="${1:-}"
-  [ -n "$iphone_ip" ] || { echo "usage: $0 run <iphone-ip>" >&2; exit 2; }
+run() {
+  need socat; need dns-sd
+  : "${PHONE_IP:?set PHONE_IP=<phone tailnet/VPS IP>}"
+  : "${RP_PORT:?set RP_PORT=<RemotePairing SRV port, e.g. 56418>}"
+  : "${RP_ID:?set RP_ID=<identifier from the _remotepairing TXT>}"
+  : "${RP_AUTHTAG:?set RP_AUTHTAG=<authTag from the _remotepairing TXT>}"
+  RP_VER="${RP_VER:-26}"; RP_MINVER="${RP_MINVER:-8}"
+  [ -n "$MAC_IP" ] || { echo "could not determine this Mac's IP; set MAC_IP=..." >&2; exit 1; }
 
-  local mac_ip="${RPLAY_MAC_IP:-$(ipconfig getifaddr en0 2>/dev/null || true)}"
-  [ -n "$mac_ip" ] || { echo "could not determine this Mac's en0 IP; set RPLAY_MAC_IP=..." >&2; exit 1; }
-
-  # Load the captured record (INSTANCE / UUID / AUTHTAG). The pairing is certificate-based, so the
-  # TXT is mostly for discovery; still, spoof it faithfully.
-  local INSTANCE="${INSTANCE:-My-iPhone}" UUID="${UUID:-}" AUTHTAG="${AUTHTAG:-}"
-  [ -f "$STATE_DIR/record.env" ] && . "$STATE_DIR/record.env"
-  local host="${INSTANCE}.local"
-
-  echo "Spoofing Bonjour for '$INSTANCE' -> $host -> $mac_ip, relaying to $iphone_ip"
-  echo "  front door tcp/udp $PORT, tunnel range $RANGE_LO-$RANGE_HI"
+  echo "relay host $RELAY_HOST -> $MAC_IP ; forwarding to phone $PHONE_IP"
+  echo "checking the RemotePairing port is live over the link..."
+  nc -vz -G 6 "$PHONE_IP" "$RP_PORT" 2>&1 | tail -1
 
   local pids=()
   cleanup() { echo; echo "tearing down proxy..."; kill "${pids[@]}" 2>/dev/null || true; }
   trap cleanup EXIT INT TERM
 
-  # 1) Spoof the three records remoted/remotepairingd look for, all pointing at THIS Mac's en0.
-  #    dns-sd -P: Name Type Domain Port Host IPaddr [TXT key=val ...]
-  local txt=()
-  [ -n "$UUID" ]    && txt+=("UUID=$UUID")
-  [ -n "$AUTHTAG" ] && txt+=("authTag=$AUTHTAG")
-  dns-sd -P "$INSTANCE" _remotepairing._tcp local. "$PORT" "$host" "$mac_ip" "${txt[@]}" & pids+=($!)
-  dns-sd -P "$INSTANCE" _remoted._tcp        local. "$PORT" "$host" "$mac_ip"               & pids+=($!)
-  dns-sd -P "$INSTANCE" _apple-mobdev2._tcp  local. "$PORT" "$host" "$mac_ip"               & pids+=($!)
+  # --- _remotepairing._tcp: the front door (spoof + TCP/UDP relay) ---
+  dns-sd -P "$RP_ID" _remotepairing._tcp local. "$RP_PORT" "$RELAY_HOST" "$MAC_IP" \
+    authTag="$RP_AUTHTAG" flags=0 identifier="$RP_ID" minVer="$RP_MINVER" ver="$RP_VER" \
+    >/tmp/rxp_rp.log 2>&1 & pids+=($!)
+  socat TCP-LISTEN:"$RP_PORT",bind=0.0.0.0,reuseaddr,fork TCP:"$PHONE_IP":"$RP_PORT" \
+    >/tmp/rxp_rp_tcp.log 2>&1 & pids+=($!)
+  socat UDP-LISTEN:"$RP_PORT",bind=0.0.0.0,reuseaddr,fork UDP:"$PHONE_IP":"$RP_PORT" \
+    >/tmp/rxp_rp_udp.log 2>&1 & pids+=($!)
 
-  # 2) Relay the front door (TCP and UDP) to the phone.
-  socat TCP-LISTEN:"$PORT",bind="$mac_ip",reuseaddr,fork TCP:"$iphone_ip":"$PORT" & pids+=($!)
-  socat UDP-LISTEN:"$PORT",bind="$mac_ip",reuseaddr,fork UDP:"$iphone_ip":"$PORT" & pids+=($!)
+  # --- _apple-mobdev2._tcp: optional discovery record (usually LAN-scoped -> relay is a no-op) ---
+  if [ -n "${MOB_INSTANCE:-}" ] && [ -n "${MOB_PORT:-}" ] && [ -n "${MOB_ID:-}" ]; then
+    local txt=(identifier="$MOB_ID")
+    [ -n "${MOB_AUTHTAG:-}" ]  && txt+=(authTag="$MOB_AUTHTAG")
+    [ -n "${MOB_AUTHTAG1:-}" ] && txt+=("authTag#1=$MOB_AUTHTAG1")
+    dns-sd -P "$MOB_INSTANCE" _apple-mobdev2._tcp local. "$MOB_PORT" "$RELAY_HOST" "$MAC_IP" \
+      "${txt[@]}" >/tmp/rxp_mob.log 2>&1 & pids+=($!)
+    socat TCP-LISTEN:"$MOB_PORT",bind=0.0.0.0,reuseaddr,fork TCP:"$PHONE_IP":"$MOB_PORT" \
+      >/tmp/rxp_mob_tcp.log 2>&1 & pids+=($!)
+    socat UDP-LISTEN:"$MOB_PORT",bind=0.0.0.0,reuseaddr,fork UDP:"$PHONE_IP":"$MOB_PORT" \
+      >/tmp/rxp_mob_udp.log 2>&1 & pids+=($!)
+    echo "  + _apple-mobdev2 spoof on $MOB_PORT"
+  fi
 
-  # 3) Relay the dynamic per-session tunnel ports. This is a lot of listeners; narrow the range
-  #    (RPLAY_TUNNEL_LO/HI) once you observe which ports your phone actually picks (stream_info /
-  #    the article's notes) to avoid spawning hundreds of socats.
-  local p
-  for ((p=RANGE_LO; p<=RANGE_HI; p++)); do
-    socat TCP-LISTEN:"$p",bind="$mac_ip",reuseaddr,fork TCP:"$iphone_ip":"$p" & pids+=($!)
-    socat UDP-LISTEN:"$p",bind="$mac_ip",reuseaddr,fork UDP:"$iphone_ip":"$p" & pids+=($!)
-  done
-
-  echo "proxy up (${#pids[@]} helpers). Now, in another terminal:"
-  echo "    xcrun devicectl list devices          # the phone should appear"
-  echo "    xcrun devicectl device install app --device <udid> <App.app>"
-  echo "Ctrl-C here to tear everything down."
+  echo "proxy up (${#pids[@]} helpers). In Xcode: Window > Devices and Simulators — the phone"
+  echo "should appear as 'available (paired)'. Real ops will still hit the QUIC-tunnel wall."
+  echo "Ctrl-C to tear down."
   wait
 }
 
 case "${1:-}" in
-  capture) shift; cmd_capture "$@";;
-  run)     shift; cmd_run "$@";;
-  *) echo "usage: $0 {capture | run <iphone-ip>}"; exit 2;;
+  run) shift; run "$@";;
+  *)   usage;;
 esac
