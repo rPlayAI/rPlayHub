@@ -364,3 +364,16 @@ socat approach yields **discovery + front-door only** for this stack; completing
 either a QUIC/loopback-aware relay that understands CoreDevice's endpoint negotiation, or — the
 right answer — establishing the tunnel natively (**Architecture B**, `REMOTEPAIRING-PROTOCOL.md`),
 which is the project's own path and avoids Apple's daemons entirely.
+
+### The "missing service" hypothesis, ruled out (2026-08-27)
+
+Checked whether we were under-spoofing (the article mentions `_remotepairing._tcp`, `_remoted._tcp`,
+`_apple-mobdev2._tcp`). The phone advertises `_apple-mobdev2._tcp` too (instance
+`…-supportsRP-26`, port 32498, its own identifier/authTags) — but **its port is `refused` over the
+tailnet while `_remotepairing`'s 56418 `succeeds`**. So `_apple-mobdev2` (the lockdown/usbmux Wi-Fi
+service) is **LAN-scoped — not exposed on the VPN interface** — and it is the wrong layer anyway
+(lockdown, not the CoreDevice tunnel). Spoofing it *regressed* the device from `available (paired)`
+back to `unavailable`; removing it restored `available (paired)`. Conclusion: `_remotepairing._tcp`
+alone is the correct, sufficient, and *only* remotely-reachable service — there is no missing
+Bonjour record to add. The wall is unambiguously the QUIC trusted tunnel (loopback endpoint,
+no UDP to the phone), not discovery.
