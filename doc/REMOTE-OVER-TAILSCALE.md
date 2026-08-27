@@ -350,3 +350,17 @@ natively.
 **Bottom line:** the article's approach is validated for our devices through discovery and the
 front-door connection — a remote iPhone made visible to Apple's tools over the internet — with the
 QUIC trusted tunnel as the one unsolved layer.
+
+### Why the tunnel can't be socat-relayed (2026-08-27, definitive)
+
+`sudo tcpdump -n -i any 'udp and host <phone-tailnet-ip>'` during an Xcode/Device Hub connect
+captured **zero packets**. So `remoted` sends **no UDP to the phone** while establishing the
+trusted tunnel — it is not a "missed dynamic port" problem. The TCP RemotePairing front door
+proxies fine (device appears in Xcode 26 Devices / Device Hub), but the QUIC tunnel is dialed
+along a path that never targets the phone's IP — consistent with the RemotePairing handshake
+handing `remoted` a **loopback/link-local endpoint** (the phone's own record advertises `::1`,
+`127.0.0.1`, `fe80::1%lo0`). A transparent byte relay cannot bridge that. Verdict: the article's
+socat approach yields **discovery + front-door only** for this stack; completing the tunnel needs
+either a QUIC/loopback-aware relay that understands CoreDevice's endpoint negotiation, or — the
+right answer — establishing the tunnel natively (**Architecture B**, `REMOTEPAIRING-PROTOCOL.md`),
+which is the project's own path and avoids Apple's daemons entirely.
