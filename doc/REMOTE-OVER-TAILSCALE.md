@@ -164,11 +164,34 @@ discovery. Worst-to-best:
    the prerequisite for the unification proxy.
 4. **The unification proxy** — one engine serving rPlayHub *and* Xcode from the remote tunnel.
 
-## Testing it (Tailscale premise test — do this first; needs no rPlayHub code)
+## What is already proven, and what actually remains
 
-The whole thesis rests on one unverified fact for *your* devices: does the iPhone expose its
-CoreDevice front door over the tailnet when it is on Wi-Fi? Test that directly, before building
-anything.
+**CoreDevice-over-IP on the LAN is already verified** — rPlayHub mirrors and controls the phone
+over home Wi-Fi, confirmed many times. So "does iOS expose its developer services over IP when
+Wi-Fi-associated" is answered *yes*; no probe needed for that. But note *how* today's Wi-Fi path
+works, because it is exactly what does not generalize to the internet: **after a one-time USB
+pairing handshake, usbmuxd exposes the phone over Wi-Fi** — usbmuxd on the Mac discovers the
+already-paired device via link-local mDNS (`_apple-mobdev2._tcp`) and carries the connection
+(`REMOTE-SUPPORT.md` — "the wifi path rides Apple's usbmuxd, Mac-tethered, intermittent Network
+entry"). Two properties of that path are the whole reason remote needs more: the discovery is
+**LAN-scoped** (mDNS does not cross routers or the internet), and it is **Mac-tethered** (it needs
+Apple's usbmuxd running on the same LAN as the phone). It also still requires that **prior USB
+handshake** to exist.
+
+So the CoreDevice *protocol* over IP is not what's unproven — the only thing remote adds is a
+**transport that carries it across networks**. Two unverified pieces remain, and they are the only
+reasons to test anything:
+
+1. **Can the phone be reached directly on `:49152` (not via usbmuxd) across a unicast VPN?** This
+   is the Architecture-B question — a *direct* RemotePairing connect, which the LAN/usbmux path
+   never exercises. This is what the Tailscale premise probe below actually checks.
+2. **Does a relay carry the working usbmux/Wi-Fi tunnel across the internet unchanged?** This is
+   the Architecture-A question, answered by the agent spike, not by a probe.
+
+## Tailscale premise probe (checks piece 1 only; needs no rPlayHub code)
+
+Does the phone answer a *direct* connection to its CoreDevice door over the tailnet — the one
+thing LAN mirroring via usbmuxd doesn't prove?
 
 1. **Host (this Mac):** install Tailscale — `brew install tailscale` for the CLI, or the Mac app —
    then `sudo tailscale up` and authenticate to your tailnet.
