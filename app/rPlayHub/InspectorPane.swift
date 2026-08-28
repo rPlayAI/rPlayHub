@@ -40,6 +40,13 @@ final class InspectorPane: NSView {
     private let textTabs = NSSegmentedControl()
 
     private static let infoIndex = 2   // iconTabs segment showing the text-tab row
+    /// Which of the 3 icon segments is active, kept even while the pane is hidden so a re-show
+    /// (clicking any icon) restores the last tab rather than always resetting to Info.
+    private var activeIcon = infoIndex
+    /// What iconTabs' 3 segments were actually showing as selected after our last pass --
+    /// diffed against on the next click to find which one the user just clicked, since
+    /// .selectAny toggles only the clicked segment and leaves the others as we last set them.
+    private var lastIconSelected = [false, false, false]
 
     /// The device whose details the Info tab should show.
     var udid: String? {
@@ -76,7 +83,13 @@ final class InspectorPane: NSView {
             iconTabs.setWidth(0, forSegment: i)     // 0 = size to fit
         }
         iconTabs.segmentStyle = .texturedRounded
-        iconTabs.selectedSegment = Self.infoIndex
+        // .selectAny (not the default .selectOne) so a click on the ALREADY-selected segment
+        // still fires the action -- that re-click is what toggles the panel closed, exactly
+        // like the real Device Hub. Exclusivity among the 3 is enforced by hand in
+        // iconTabChanged() below.
+        iconTabs.trackingMode = .selectAny
+        iconTabs.setSelected(true, forSegment: Self.infoIndex)
+        lastIconSelected[Self.infoIndex] = true
         iconTabs.target = self
         iconTabs.action = #selector(iconTabChanged)
         iconTabs.translatesAutoresizingMaskIntoConstraints = false
@@ -128,7 +141,37 @@ final class InspectorPane: NSView {
         applySelection()
     }
 
+    /// Shows or hides this pane, keeping the icon row's selection in sync -- used by the Device
+    /// menu's Show/Hide Controls command, which toggles the same visibility a re-click of the
+    /// active icon does.
+    func setHidden(_ hidden: Bool) {
+        isHidden = hidden
+        for i in 0..<iconTabs.segmentCount {
+            let selected = !isHidden && i == activeIcon
+            iconTabs.setSelected(selected, forSegment: i)
+            lastIconSelected[i] = selected
+        }
+        applySelection()
+    }
+
+    /// Re-clicking the already-active icon collapses this pane instead of just reselecting it --
+    /// Device Hub's Settings/Report/Info icons are also the show/hide toggle for the whole
+    /// panel, with no separate dedicated button for it.
     @objc private func iconTabChanged() {
+        guard let clicked = (0..<iconTabs.segmentCount).first(where: {
+            iconTabs.isSelected(forSegment: $0) != lastIconSelected[$0]
+        }) else { return }
+        if clicked == activeIcon && !isHidden {
+            isHidden = true
+        } else {
+            activeIcon = clicked
+            isHidden = false
+        }
+        for i in 0..<iconTabs.segmentCount {
+            let selected = !isHidden && i == activeIcon
+            iconTabs.setSelected(selected, forSegment: i)
+            lastIconSelected[i] = selected
+        }
         applySelection()
     }
 
@@ -137,10 +180,10 @@ final class InspectorPane: NSView {
     }
 
     private func applySelection() {
-        let onInfo = iconTabs.selectedSegment == Self.infoIndex
+        let onInfo = !isHidden && activeIcon == Self.infoIndex
         textTabs.isHidden = !onInfo
-        settingsStub.isHidden = iconTabs.selectedSegment != 0
-        reportStub.isHidden = iconTabs.selectedSegment != 1
+        settingsStub.isHidden = isHidden || activeIcon != 0
+        reportStub.isHidden = isHidden || activeIcon != 1
         let sub = textTabs.selectedSegment
         for (i, v) in subPanes.enumerated() { v.isHidden = !onInfo || i != sub }
         guard onInfo else { return }

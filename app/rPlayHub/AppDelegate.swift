@@ -517,7 +517,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleControls(_ sender: NSMenuItem) {
-        inspector.isHidden.toggle()
+        inspector.setHidden(!inspector.isHidden)
         sender.title = inspector.isHidden ? "Show Controls" : "Hide Controls"
     }
 
