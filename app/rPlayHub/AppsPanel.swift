@@ -144,6 +144,7 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         placeholder.textColor = .secondaryLabelColor
         placeholder.alignment = .center
         placeholder.isHidden = true
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
 
         categoryPopup.target = self
         categoryPopup.action = #selector(applyFilter)
@@ -188,7 +189,7 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         // The inspector holds its 260-point width at priority 700; anything in here that resists
         // compression at the default 750 would win and grow the pane across the window, pushing
         // the screen out. Everything yields instead and truncates or scrolls.
-        for v in [self, stack, buttons, status, scroll, filterRow, filterField, categoryPopup]
+        for v in [self, stack, buttons, status, scroll, filterRow, filterField, categoryPopup, placeholder]
                  + buttons.arrangedSubviews {
             v.setContentCompressionResistancePriority(.init(100), for: .horizontal)
             v.setContentHuggingPriority(.init(100), for: .horizontal)
