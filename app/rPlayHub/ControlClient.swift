@@ -6,6 +6,7 @@
 //  coredevice.* service channel is a single XPC socket that cannot safely interleave.
 //
 
+import AppKit
 import Foundation
 
 struct ControlError: Error, CustomStringConvertible {
@@ -162,6 +163,25 @@ final class ControlClient {
     /// Device Hub's Apps `-`.
     func uninstallApp(bundleID: String, completion: @escaping (Result<[String: Any], Error>) -> Void) {
         send("uninstall_app", ["bundle_id": bundleID], completion: completion)
+    }
+
+    /// The Apps-tab row icon, via springboardservices -- confirmed against the live device to be
+    /// full-resolution, correctly oriented PNG data, not the rotated/padded raw format older iOS
+    /// versions have needed unrotating.
+    func getAppIcon(bundleID: String, completion: @escaping (Result<NSImage, Error>) -> Void) {
+        send("get_app_icon", ["bundle_id": bundleID]) { result in
+            switch result {
+            case .failure(let e): completion(.failure(e))
+            case .success(let r):
+                guard let b64 = r["png_b64"] as? String, let data = Data(base64Encoded: b64),
+                      let image = NSImage(data: data) else {
+                    completion(.failure(NSError(domain: "ControlClient", code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "bad icon data"])))
+                    return
+                }
+                completion(.success(image))
+            }
+        }
     }
 
     // MARK: - profiles (misagent, MCInstall)

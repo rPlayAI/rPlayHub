@@ -369,6 +369,28 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
 
     func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
 
+    /// Fetched on demand as rows are realized, not eagerly for the whole list (~300+ icons would
+    /// be slow and mostly wasted on rows never scrolled into view). Keyed by bundle id so
+    /// re-filtering/scrolling never re-fetches one already seen.
+    private var iconCache: [String: NSImage] = [:]
+    private var iconRequested: Set<String> = []
+
+    private func icon(for bundleID: String, in cell: AppCell) {
+        if let cached = iconCache[bundleID] { cell.icon.image = cached; return }
+        cell.icon.image = nil
+        guard let control, !iconRequested.contains(bundleID) else { return }
+        iconRequested.insert(bundleID)
+        control.getAppIcon(bundleID: bundleID) { [weak self] result in
+            guard let self, case .success(let image) = result else { return }
+            self.iconCache[bundleID] = image
+            // The row may have scrolled/reused by the time this returns; only apply it if this
+            // exact cell is still showing that bundle id.
+            if cell.identifier?.rawValue == "cell", cell.bundleID == bundleID {
+                cell.icon.image = image
+            }
+        }
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         // `filtered` is computed fresh each access, so it can legitimately be shorter here than
         // it was when the table last asked numberOfRows(in:) -- a refresh() completion can
@@ -383,31 +405,45 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         let cell = tableView.makeView(withIdentifier: id, owner: nil) as? AppCell ?? AppCell(id)
         cell.name.stringValue = app.name
         cell.detail.stringValue = app.version.isEmpty ? app.bundleID : "\(app.bundleID) · \(app.version)"
+        cell.bundleID = app.bundleID
+        icon(for: app.bundleID, in: cell)
         return cell
     }
 
-    /// Two lines per row, as Device Hub lays its apps out. The fields are properties rather
-    /// than looked up through `subviews`: they sit inside a stack view, and a lookup that
+    /// An icon, two lines of text, as Device Hub lays its apps out. The fields are properties
+    /// rather than looked up through `subviews`: they sit inside a stack view, and a lookup that
     /// missed them crashed the first live run.
     private final class AppCell: NSTableCellView {
+        /// Which app this cell is currently showing -- set on every reuse, checked by the icon
+        /// fetch's completion so a since-recycled cell doesn't get a stale row's icon.
+        var bundleID: String?
+        let icon = NSImageView()
         let name = NSTextField(labelWithString: "")
         let detail = NSTextField(labelWithString: "")
 
         init(_ id: NSUserInterfaceItemIdentifier) {
             super.init(frame: .zero)
             identifier = id
+            icon.imageScaling = .scaleProportionallyUpOrDown
+            icon.translatesAutoresizingMaskIntoConstraints = false
             name.font = .systemFont(ofSize: 12, weight: .medium)
             name.lineBreakMode = .byTruncatingTail
             detail.font = .systemFont(ofSize: 10)
             detail.textColor = .secondaryLabelColor
             detail.lineBreakMode = .byTruncatingMiddle
-            let stack = NSStackView(views: [name, detail])
-            stack.orientation = .vertical
-            stack.alignment = .leading
-            stack.spacing = 1
+            let text = NSStackView(views: [name, detail])
+            text.orientation = .vertical
+            text.alignment = .leading
+            text.spacing = 1
+            let stack = NSStackView(views: [icon, text])
+            stack.orientation = .horizontal
+            stack.alignment = .centerY
+            stack.spacing = 6
             stack.translatesAutoresizingMaskIntoConstraints = false
             addSubview(stack)
             NSLayoutConstraint.activate([
+                icon.widthAnchor.constraint(equalToConstant: 26),
+                icon.heightAnchor.constraint(equalToConstant: 26),
                 stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
                 stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
                 stack.centerYAnchor.constraint(equalTo: centerYAnchor),
