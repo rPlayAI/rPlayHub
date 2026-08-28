@@ -76,15 +76,13 @@ display. It's also **fully verifiable with captures, no iPhone needed**. Do this
 ```bash
 make -C client-c            # links deps/ffmpeg automatically when built (else warns + uses system ffmpeg)
 ```
-Verify against the committed reference capture (`reference/captures/`). Note that only
-`gop-reproducer.h265` is committed — `reference/` is gitignored (screen recordings of a real
-phone are deliberately kept out of git), and `apple_video_REFERENCE.h265` (601 frames) lives
-only on the Mac; copy that one file over if you want the full check (copying an untracked
-capture is fine — the never-rsync rule is about the source tree).
+Verify against the committed reference captures (`reference/captures/` is gitignored as a
+directory, but `gop-reproducer.h265` and `apple_video_REFERENCE.h265` are force-added and travel
+with the repo; CI checks both):
 ```bash
-# RVRA-correct decode: 117/117 frames, RVRA engaged, zero decoder errors
-RPLAY_RVRA=1 ./client-c/rplay-view --check -f reference/captures/gop-reproducer.h265
-# expect: "... decoded 117, decode errors 0 ..." and "RVRA reference resampling enabled"
+# RVRA-correct decode: 601/601 frames, RVRA engaged, zero decoder errors
+RPLAY_RVRA=1 ./client-c/rplay-view --check -f reference/captures/apple_video_REFERENCE.h265
+# expect: "... decoded 601, decode errors 0 ..." and "RVRA reference resampling enabled"
 ```
 The pixel-correctness of RVRA was proven on macOS against a VideoToolbox ground truth
 (`scripts/compare-decodes.py`, worst frame 39 dB). ffmpeg's decoder is deterministic C, so the

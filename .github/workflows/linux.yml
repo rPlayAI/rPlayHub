@@ -20,11 +20,15 @@ jobs:
           key: ffmpeg-rvra-${{ hashFiles('patches/ffmpeg-rvra.patch', 'scripts/build-ffmpeg-rvra.sh') }}
       - run: ./scripts/build-ffmpeg-rvra.sh
       - run: make -C client-c
-      - name: decode the committed reference capture (RVRA on, must be clean)
+      - name: decode the committed reference captures (RVRA on, must be clean)
         run: |
           RPLAY_RVRA=1 ./client-c/rplay-view --check -f reference/captures/gop-reproducer.h265 2>&1 | tee check.out
           grep -q "RVRA reference resampling enabled" check.out
           grep -q "decoded 117" check.out
+          grep -q "decode errors 0" check.out
+          RPLAY_RVRA=1 ./client-c/rplay-view --check -f reference/captures/apple_video_REFERENCE.h265 2>&1 | tee check.out
+          grep -q "RVRA reference resampling enabled" check.out
+          grep -q "decoded 601" check.out
           grep -q "decode errors 0" check.out
 
   engine:
