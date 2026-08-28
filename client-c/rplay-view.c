@@ -329,13 +329,18 @@ static void show_frame(AVFrame *f, int active_w, int active_h)
     if (src.w > f->width) src.w = f->width;
     if (src.h > f->height) src.h = f->height;
 
+    /* The destination keeps the CODED frame's aspect, not the active rect's. The downshift tiers
+     * (1088x1920, 720x1280) are 16:9-ish while the screen is ~0.46, because RVRA resamples the
+     * whole picture with independent x/y factors -- a downshifted frame is an anamorphic squeeze
+     * of the full screen. Stretching the crop back to the coded aspect restores proportions, and
+     * a tier change alters only sharpness, never the window geometry. */
     int ww, wh;
     SDL_GetRendererOutputSize(d->ren, &ww, &wh);
     SDL_Rect dst;
-    if ((int64_t)ww * src.h > (int64_t)wh * src.w) {   /* window wider than the picture: pillarbox */
-        dst.w = wh * src.w / src.h; dst.h = wh; dst.x = (ww - dst.w) / 2; dst.y = 0;
+    if ((int64_t)ww * f->height > (int64_t)wh * f->width) {   /* window wider than the picture: pillarbox */
+        dst.w = wh * f->width / f->height; dst.h = wh; dst.x = (ww - dst.w) / 2; dst.y = 0;
     } else {
-        dst.w = ww; dst.h = ww * src.h / src.w; dst.x = 0; dst.y = (wh - dst.h) / 2;
+        dst.w = ww; dst.h = ww * f->height / f->width; dst.x = 0; dst.y = (wh - dst.h) / 2;
     }
     SDL_SetRenderDrawColor(d->ren, 0, 0, 0, 255);
     SDL_RenderClear(d->ren);
