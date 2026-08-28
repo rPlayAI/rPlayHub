@@ -40,11 +40,24 @@ void usernet_enable(int on);
 int  usernet_is_on(void);
 
 /* Unified tunnel I/O: use these everywhere a tunnel connection is opened/read/written, and the
- * kernel-vs-lwIP choice is made centrally. tun_connect blocks with a connect timeout. */
+ * kernel-vs-lwIP choice is made centrally. tun_connect blocks with a connect timeout.
+ *
+ * When HAVE_USERNET is compiled in (the engine), these come from tunio.c and dispatch kernel-vs-
+ * lwIP by fd. When it is NOT (e.g. the macOS app builds media.c but neither tunio.c nor usernet.c),
+ * there is no lwIP, so tunnel I/O is plain kernel sockets -- provided inline here so media.c's
+ * tun_* calls need no #ifdef and the app links with no extra object. */
+#ifdef HAVE_USERNET
 int  tun_connect(const char *addr, int port, int timeout_s);
 long tun_read(int fd, void *buf, size_t n);
 long tun_write(int fd, const void *buf, size_t n);
 void tun_close(int fd);
+#else
+#include <sys/socket.h>
+#include <unistd.h>
+static inline long tun_read(int fd, void *buf, size_t n)        { return (long)recv(fd, buf, n, 0); }
+static inline long tun_write(int fd, const void *buf, size_t n) { return (long)send(fd, buf, n, 0); }
+static inline void tun_close(int fd)                            { close(fd); }
+#endif
 
 /* lwIP fds are offset above kernel fds; a fd >= this is a usernet (lwIP) socket. */
 #define USERNET_FD_BASE 768

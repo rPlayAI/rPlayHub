@@ -338,7 +338,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appItem = NSMenuItem()
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About rPlayHub", action: nil, keyEquivalent: "")
+        appMenu.addItem(withTitle: "About rPlayHub",
+                        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                        keyEquivalent: "")
         appMenu.addItem(.separator())
         recordItem = appMenu.addItem(withTitle: "Start Recording",
                                      action: #selector(toggleRecording), keyEquivalent: "r")
@@ -357,12 +359,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
+        // Standard Edit menu. Without it, Cut/Copy/Paste and Select All don't work in any text
+        // field (the search box, filters) — the actions route to the first responder.
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: Selector(("cut:")), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: Selector(("copy:")), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: Selector(("paste:")), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Delete", action: Selector(("delete:")), keyEquivalent: "")
+        editMenu.addItem(withTitle: "Select All", action: Selector(("selectAll:")), keyEquivalent: "a")
+        editItem.submenu = editMenu
+
         let viewItem = NSMenuItem()
         mainMenu.addItem(viewItem)
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(withTitle: "Show Controls", action: #selector(toggleControls),
                          keyEquivalent: "i")
         viewItem.submenu = viewMenu
+
+        // Device menu — the actions Device Hub groups for the selected device.
+        let deviceItem = NSMenuItem()
+        mainMenu.addItem(deviceItem)
+        let deviceMenu = NSMenu(title: "Device")
+        deviceMenu.addItem(withTitle: "Take Screenshot",
+                           action: #selector(menuScreenshot), keyEquivalent: "s").target = self
+        deviceMenu.addItem(withTitle: "Home",
+                           action: #selector(menuHome), keyEquivalent: "H").target = self
+        deviceMenu.addItem(.separator())
+        deviceMenu.addItem(withTitle: "Restart…",
+                           action: #selector(menuRestart), keyEquivalent: "").target = self
+        deviceMenu.addItem(withTitle: "Shut Down…",
+                           action: #selector(menuShutdown), keyEquivalent: "").target = self
+        deviceMenu.addItem(withTitle: "Sleep",
+                           action: #selector(menuSleep), keyEquivalent: "").target = self
+        deviceItem.submenu = deviceMenu
 
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
@@ -403,6 +437,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSDK() {
         if let url = URL(string: Self.sdkURL) { NSWorkspace.shared.open(url) }
     }
+
+    // Device-menu actions, routed to the same handlers the control strip / right-click use.
+    @objc private func menuScreenshot() { perform(.screenshot, on: nil) }
+    @objc private func menuHome()       { perform(.home, on: nil) }
+    @objc private func menuRestart()    { powerAction("restart") }
+    @objc private func menuShutdown()   { powerAction("shutdown") }
+    @objc private func menuSleep()      { powerAction("sleep") }
 
     // MARK: - engine connection
 
