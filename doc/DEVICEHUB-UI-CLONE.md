@@ -49,10 +49,20 @@ panel — the same 3 icons double as that toggle. ✅ Done on macOS (`InspectorP
 ## Canvas — Device Hub  ← the "View Screen" difference
 
 Device Hub shows a **static device mockup** with the device name + OS below and a **"View Screen"**
-button; the live screen only appears **on click**. **rPlayHub streams live video immediately** with
-a control strip beneath. To match: canvas opens with a device image (a `take_screenshot` still is
-the natural source) + a "View Screen" button; live mirror starts on click. (Design decision:
-whether to keep auto-live is a product call — Device Hub is click-to-view.)
+button; the live screen only appears **on click**. To match: canvas opens with a device image (a
+`take_screenshot` still is the natural source) + a "View Screen" button; live mirror starts on
+click.
+
+✅ **macOS, done (2026-08-28), true click-to-connect**: `AppDelegate` no longer starts USB capture
+or the RTP/proxy video path inside `connect()` unconditionally — that only runs once
+`wantsVideo` is true, set by clicking `MirrorView`'s new View Screen button (`onViewScreen`) or
+already true from a prior click when a background reconnect re-runs `connect()`. Until clicked,
+the canvas shows the device name + OS and the button, over whatever still picture the existing
+idle-screenshot mechanism (`refreshStillIfIdle`, unchanged) already fetches. Selecting a different
+device resets `wantsVideo` to false. Build-verified via `xcodebuild`; falls back cleanly with no
+engine attached. **Still needs a live pass against the real device** (click → does video actually
+start) once the daemon is back up — not yet confirmed end-to-end.
+**Not yet done on Linux** (`rplay-view`/`rplay-gui` stream immediately, same as macOS did before).
 
 ## Inspector — Device Hub  ← the tab-structure difference (the main ask)
 
