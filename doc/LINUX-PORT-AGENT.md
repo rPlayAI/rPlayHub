@@ -4,6 +4,11 @@ You are an agent (e.g. Claude Code) starting fresh on a **Linux** machine to por
 is your setup + first-tasks guide. Read `doc/LINUX-PORT-HANDOFF.md` next for the deeper state, and
 `doc/RVRA-AND-PORTABILITY.md` before touching the video path.
 
+**Head start:** the portable client is already implemented — `client-c/rplay-view.c` is a working
+**SDL2 + ffmpeg** viewer with no macOS dependencies. Most of the "Linux client" is a recompile of
+existing code (§3), not new work. The engine is likewise already portable; Linux is mostly Makefile
+friction (§4).
+
 ## The one rule: git is the single source of truth
 
 This project is developed on macOS **and** Linux (and later Windows) from **one GitHub repo**.
@@ -50,10 +55,15 @@ apt install -y libsdl2-dev
 apt install -y libimobiledevice-dev libplist-dev libusbmuxd-dev libssl-dev usbmuxd
 ```
 
-## 3. Build the CLIENT first — it needs no iPhone
+## 3. Build the CLIENT first — it already exists; you're recompiling it
 
-The portable client (`client-c/rplay-view`) is the novel, risky piece (RVRA software decode) and
-is **fully verifiable with captures, no device**. Do this before the engine.
+**The SDL2 + ffmpeg client is already written: `client-c/rplay-view.c`.** It's a single file —
+POSIX sockets, `libavcodec` software decode, SDL2 render — with no macOS-specific code, authored
+and validated on the Mac against the reference captures. On Linux this is a **recompile, not a
+rewrite**: `apt install libsdl2-dev`, build the patched ffmpeg (§2), `make`. Treat `rplay-view.c`
+as the reference implementation for the whole portable video path — it already does Annex-B split,
+access-unit assembly, keyframe gating, the RVRA active-rect crop, single-thread decode, and SDL
+display. It's also **fully verifiable with captures, no iPhone needed**. Do this before the engine.
 
 ```bash
 make -C client-c            # links deps/ffmpeg automatically when built (else warns + uses system ffmpeg)
