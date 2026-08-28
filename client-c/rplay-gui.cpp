@@ -421,25 +421,16 @@ static void tab_info()
  * in this app -- every local path elsewhere (recordings, crash export) is a typed field too. */
 static char g_install_app_path[512];
 
+/* 0 All, 1 App Clips, 2 Default, 3 Developer -- read by the table loop below, written by the
+ * Filter row at the bottom of the tab (Device Hub pins Filter + the category dropdown at the
+ * very bottom of Apps, below the list and the +/- row, not above the list). */
+static int g_apps_cat;
+static const char *g_apps_cat_names[] = { "All Apps", "App Clips", "Default", "Developer" };
+
 static void tab_apps()
 {
     if (ImGui::Button("Refresh") || (!g_apps_pending && g_apps.empty() && g_apps_err.empty()))
         refresh_apps();
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(220);
-    ImGui::InputTextWithHint("##filter", "Filter", g_apps_filter, sizeof g_apps_filter);
-    ImGui::SameLine();
-    /* Category dropdown, laid out like Device Hub: All Apps, a separator, then the kinds. */
-    static int cat = 0;   /* 0 All, 1 App Clips, 2 Default, 3 Developer */
-    static const char *cat_names[] = { "All Apps", "App Clips", "Default", "Developer" };
-    ImGui::SetNextItemWidth(9 * ImGui::GetFontSize());
-    if (ImGui::BeginCombo("##cat", cat_names[cat])) {
-        if (ImGui::Selectable(cat_names[0], cat == 0)) cat = 0;
-        ImGui::Separator();
-        for (int i = 1; i < 4; i++)
-            if (ImGui::Selectable(cat_names[i], cat == i)) cat = i;
-        ImGui::EndCombo();
-    }
     if (g_apps_pending) { ImGui::SameLine(); ImGui::TextDisabled("loading..."); }
     ImGui::SameLine();
     ImGui::TextDisabled("%d apps", (int)g_apps.size());
@@ -459,6 +450,11 @@ static void tab_apps()
         });
     }
 
+    int cat = g_apps_cat;
+    /* List fills the tab except for one line reserved at the bottom for Filter + the category
+     * dropdown, same trick tab_console uses for its own bottom filter bar. */
+    float footer = ImGui::GetFrameHeightWithSpacing();
+    ImGui::BeginChild("appslist", ImVec2(0, -footer), ImGuiChildFlags_None);
     if (ImGui::BeginTable("apps", 4,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
                           ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
@@ -513,6 +509,22 @@ static void tab_apps()
             ImGui::PopID();
         }
         ImGui::EndTable();
+    }
+    ImGui::EndChild();
+
+    /* Bottom filter row: Filter field + category dropdown, full width, where Device Hub places
+     * them. */
+    ImGui::SetNextItemWidth(-13 * ImGui::GetFontSize());
+    ImGui::InputTextWithHint("##filter", "Filter", g_apps_filter, sizeof g_apps_filter);
+    ImGui::SameLine();
+    /* Category dropdown, laid out like Device Hub: All Apps, a separator, then the kinds. */
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::BeginCombo("##cat", g_apps_cat_names[g_apps_cat])) {
+        if (ImGui::Selectable(g_apps_cat_names[0], g_apps_cat == 0)) g_apps_cat = 0;
+        ImGui::Separator();
+        for (int i = 1; i < 4; i++)
+            if (ImGui::Selectable(g_apps_cat_names[i], g_apps_cat == i)) g_apps_cat = i;
+        ImGui::EndCombo();
     }
 }
 

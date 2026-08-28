@@ -119,7 +119,8 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         uninstallButton.action = #selector(uninstall)
         uninstallButton.isEnabled = false
 
-        // Top filter row: search field + category popup, laid out like Device Hub's Apps tab.
+        // Filter row: search field + category popup. Device Hub pins this at the very bottom of
+        // the Apps tab, below the list and the +/- row, not above the list.
         filterField.placeholderString = "Filter"
         filterField.controlSize = .small
         filterField.delegate = self                       // controlTextDidChange -> live filter
@@ -145,7 +146,7 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         filterRow.orientation = .horizontal
         filterRow.spacing = 6
         filterField.setContentHuggingPriority(.init(1), for: .horizontal)   // field grows, popup fixed
-        let stack = NSStackView(views: [filterRow, scroll, buttons, status])
+        let stack = NSStackView(views: [scroll, buttons, status, filterRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
