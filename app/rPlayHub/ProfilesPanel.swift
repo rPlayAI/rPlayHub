@@ -7,12 +7,18 @@
 //
 
 import AppKit
+import UniformTypeIdentifiers
 
 final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
+    private enum Kind { case provisioning, configuration }
+
     private struct Row {
         let title: String
         let detail: String
         let isHeader: Bool
+        /// nil for header/"None" rows -- nothing to select or remove.
+        let kind: Kind?
+        let id: String?
     }
 
     var control: ControlClient? {
@@ -32,6 +38,8 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let table = NSTableView()
     private let status = NSTextField(labelWithString: "")
     private let refreshButton = NSButton()
+    private let installButton = NSButton()
+    private let removeButton = NSButton()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -51,7 +59,6 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.dataSource = self
         table.delegate = self
         table.usesAlternatingRowBackgroundColors = true
-        table.selectionHighlightStyle = .none
 
         let scroll = NSScrollView()
         scroll.documentView = table
@@ -66,12 +73,26 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         refreshButton.target = self
         refreshButton.action = #selector(refresh)
 
+        // Device Hub's Profiles `+`/`-`: install a provisioning/configuration profile, remove
+        // the selected one.
+        installButton.title = "+"
+        installButton.bezelStyle = .rounded
+        installButton.controlSize = .small
+        installButton.target = self
+        installButton.action = #selector(install)
+        removeButton.title = "–"
+        removeButton.bezelStyle = .rounded
+        removeButton.controlSize = .small
+        removeButton.target = self
+        removeButton.action = #selector(remove)
+        removeButton.isEnabled = false
+
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byWordWrapping
         status.maximumNumberOfLines = 3
 
-        let buttons = NSStackView(views: [NSView(), refreshButton])
+        let buttons = NSStackView(views: [installButton, removeButton, NSView(), refreshButton])
         buttons.orientation = .horizontal
         let stack = NSStackView(views: [scroll, buttons, status])
         stack.orientation = .vertical
@@ -90,7 +111,7 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             status.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
         // Same reason as the other panels: the inspector's width is held at priority 700.
-        for v in [self, stack, buttons, status, scroll, refreshButton] as [NSView] {
+        for v in [self, stack, buttons, status, scroll, refreshButton, installButton, removeButton] as [NSView] {
             v.setContentCompressionResistancePriority(.init(100), for: .horizontal)
             v.setContentHuggingPriority(.init(100), for: .horizontal)
         }
@@ -106,7 +127,7 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         guard !loading else { return }
         loading = true
         status.stringValue = "Listing profiles…"
-        control.send("list_profiles") { [weak self] result in
+        control.listProfiles { [weak self] result in
             guard let self else { return }
             self.loading = false
             switch result {
@@ -114,8 +135,8 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
                 let prov = r["provisioning"] as? [[String: Any]] ?? []
                 let conf = r["configuration"] as? [[String: Any]] ?? []
                 var rows: [Row] = []
-                rows.append(Row(title: "Provisioning Profiles", detail: "", isHeader: true))
-                if prov.isEmpty { rows.append(Row(title: "None", detail: "", isHeader: false)) }
+                rows.append(Row(title: "Provisioning Profiles", detail: "", isHeader: true, kind: nil, id: nil))
+                if prov.isEmpty { rows.append(Row(title: "None", detail: "", isHeader: false, kind: nil, id: nil)) }
                 for p in prov {
                     let name = p["name"] as? String ?? p["uuid"] as? String ?? "?"
                     var parts: [String] = []
@@ -124,16 +145,18 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
                         parts.append((d < Date() ? "expired " : "expires ") + Self.short.string(from: d))
                     }
                     if let n = p["devices"] as? Int, n > 0 { parts.append("\(n) devices") }
-                    rows.append(Row(title: name, detail: parts.joined(separator: " · "), isHeader: false))
+                    rows.append(Row(title: name, detail: parts.joined(separator: " · "), isHeader: false,
+                                     kind: .provisioning, id: p["uuid"] as? String))
                 }
-                rows.append(Row(title: "Configuration Profiles", detail: "", isHeader: true))
-                if conf.isEmpty { rows.append(Row(title: "None", detail: "", isHeader: false)) }
+                rows.append(Row(title: "Configuration Profiles", detail: "", isHeader: true, kind: nil, id: nil))
+                if conf.isEmpty { rows.append(Row(title: "None", detail: "", isHeader: false, kind: nil, id: nil)) }
                 for c in conf {
                     let name = c["name"] as? String ?? c["identifier"] as? String ?? "?"
                     var parts: [String] = []
                     if let o = c["organization"] as? String, !o.isEmpty { parts.append(o) }
                     if let i = c["identifier"] as? String { parts.append(i) }
-                    rows.append(Row(title: name, detail: parts.joined(separator: " · "), isHeader: false))
+                    rows.append(Row(title: name, detail: parts.joined(separator: " · "), isHeader: false,
+                                     kind: .configuration, id: c["identifier"] as? String))
                 }
                 self.rows = rows
                 self.loaded = true
@@ -143,6 +166,60 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             case .failure(let e):
                 self.status.stringValue = "Could not list profiles: \(e)"
             }
+        }
+    }
+
+    /// Opens a file picker for a `.mobileprovision`/`.mobileconfig` and installs it via
+    /// misagent/MCInstall (the engine dispatches on extension). Device Hub's Profiles `+`.
+    @objc private func install() {
+        guard let control else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = ["mobileprovision", "mobileconfig"]
+            .compactMap { UTType(filenameExtension: $0) }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        status.stringValue = "Installing \(url.lastPathComponent)…"
+        control.installProfile(path: url.path) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.status.stringValue = "Installed \(url.lastPathComponent)."
+                self.refresh()
+            case .failure(let e):
+                self.status.stringValue = "Install failed: \(e)"
+            }
+        }
+    }
+
+    private var selectedRow: Row? {
+        let r = table.selectedRow
+        return r >= 0 && r < rows.count ? rows[r] : nil
+    }
+
+    /// Removes the selected profile, after confirming. Device Hub's Profiles `-`.
+    @objc private func remove() {
+        guard let control, let row = selectedRow, let kind = row.kind, let id = row.id else { return }
+        let alert = NSAlert()
+        alert.messageText = "Remove \"\(row.title)\"?"
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        status.stringValue = "Removing \(row.title)…"
+        let completion: (Result<[String: Any], Error>) -> Void = { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.status.stringValue = "Removed \(row.title)."
+                self.refresh()
+            case .failure(let e):
+                self.status.stringValue = "Remove failed: \(e)"
+            }
+        }
+        switch kind {
+        case .provisioning:  control.removeProvisioningProfile(uuid: id, completion: completion)
+        case .configuration: control.removeConfigurationProfile(identifier: id, completion: completion)
         }
     }
 
@@ -163,6 +240,13 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool { rows[row].isHeader }
+
+    /// Only rows with a removable id (a real profile, not a header or "None" placeholder).
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows[row].id != nil }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        removeButton.isEnabled = selectedRow != nil
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let r = rows[row]

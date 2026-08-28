@@ -153,6 +153,39 @@ final class ControlClient {
         send("terminate_app", ["pid": pid], completion: completion)
     }
 
+    /// `path` is a local `.ipa` (on this machine, not the device); the engine stages it into
+    /// /PublicStaging over AFC and installs it via installation_proxy. Device Hub's Apps `+`.
+    func installApp(path: String, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send("install_app", ["path": path], completion: completion)
+    }
+
+    /// Device Hub's Apps `-`.
+    func uninstallApp(bundleID: String, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send("uninstall_app", ["bundle_id": bundleID], completion: completion)
+    }
+
+    // MARK: - profiles (misagent, MCInstall)
+
+    func listProfiles(completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send("list_profiles", completion: completion)
+    }
+
+    /// `path` is a local `.mobileprovision` or `.mobileconfig`, dispatched by extension on the
+    /// engine side. Device Hub's Profiles `+`.
+    func installProfile(path: String, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send("install_profile", ["path": path], completion: completion)
+    }
+
+    /// Device Hub's Profiles `-`. Provisioning profiles remove by `uuid`, configuration profiles
+    /// by `identifier` -- the two id fields `list_profiles` already returns.
+    func removeProvisioningProfile(uuid: String, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send("remove_profile", ["type": "provisioning", "uuid": uuid], completion: completion)
+    }
+
+    func removeConfigurationProfile(identifier: String, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        send("remove_profile", ["type": "configuration", "identifier": identifier], completion: completion)
+    }
+
     // MARK: - raw results and streams
 
     /// Like `send`, but hands back whatever `result` is -- the app list is a JSON array, which

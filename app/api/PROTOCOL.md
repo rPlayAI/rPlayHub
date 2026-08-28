@@ -114,9 +114,33 @@ Params `{"bundle_id"}`. Brings the app to the foreground, terminating a running 
 ### `terminate_app` → `{}`
 Params `{"pid", "signal": 9}`. Find the pid with `list_processes`.
 
+### `install_app` → `{"status": "Complete"}`
+Params `{"path"}`: a local `.ipa` file (on the machine running the engine, not the device). Staged
+into the device's `/PublicStaging` over AFC (the same Media-rooted service `list_dir`/`read_file`
+use), then installed via `installation_proxy`'s classic `Install` command. Streams `{Status: ...}`
+events internally like `list_apps`' Browse; only the final status is returned. Device Hub's Apps-tab
+`+`.
+
+### `uninstall_app` → `{"status": "Complete"}`
+Params `{"bundle_id"}`. `installation_proxy`'s `Uninstall` command. Device Hub's Apps-tab `-`.
+
 ### `list_profiles` → `{"provisioning": [...], "configuration": [...]}`
 Provisioning profiles from `misagent` (`name`, `app_id_name`, `team`, `uuid`, `expires`, `devices`),
 configuration profiles from `MCInstall` (`identifier`, `name`, `organization`).
+
+### `install_profile` → `{"status": "..."}`
+Params `{"path"}`: a local `.mobileprovision` or `.mobileconfig` file, dispatched by extension. A
+`.mobileprovision` is sent to `misagent` as its raw CMS-signed bytes (`MessageType: Install`); a
+`.mobileconfig` is sent to `MCInstall` as its raw plist bytes (`RequestType: InstallProfile`, key
+`Payload`). Neither is parsed or re-signed, only forwarded. Device Hub's Profiles-tab `+`.
+
+### `remove_profile` → `{"status": "..."}`
+Params `{"type": "provisioning", "uuid": "..."}` (misagent `Remove`, keyed by the UUID
+`list_profiles` returns) or `{"type": "configuration", "identifier": "..."}` (MCInstall
+`RemoveProfile`, keyed by the identifier `list_profiles` returns). Device Hub's Profiles-tab `-`.
+
+`install_profile`/`remove_profile` are request/reply, not streaming: success is a misagent `Status`
+of `0` or an MCInstall `Status` of `Acknowledged`/`Success`; anything else is an error.
 
 ### `device_info` → `{"default": {...}, "com.apple.mobile.battery": {...}, "com.apple.disk_usage": {...}, "unavailable": {...}}`
 Optional `{"udid"}` (any attached device; default the bound one). Lockdown GetValue over a

@@ -8,6 +8,7 @@
 //
 
 import AppKit
+import UniformTypeIdentifiers
 
 final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     struct App {
@@ -40,6 +41,8 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
     private let launchButton = NSButton()
     private let killButton = NSButton()
     private let refreshButton = NSButton()
+    private let installButton = NSButton()
+    private let uninstallButton = NSButton()
     private let filterField = NSSearchField()
     private let categoryPopup = NSPopUpButton()
 
@@ -103,6 +106,19 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         launchButton.isEnabled = false
         killButton.isEnabled = false
 
+        // Device Hub's Apps `+`/`-`: install an .ipa, uninstall the selection.
+        installButton.title = "+"
+        installButton.bezelStyle = .rounded
+        installButton.controlSize = .small
+        installButton.target = self
+        installButton.action = #selector(install)
+        uninstallButton.title = "–"
+        uninstallButton.bezelStyle = .rounded
+        uninstallButton.controlSize = .small
+        uninstallButton.target = self
+        uninstallButton.action = #selector(uninstall)
+        uninstallButton.isEnabled = false
+
         // Top filter row: search field + category popup, laid out like Device Hub's Apps tab.
         filterField.placeholderString = "Filter"
         filterField.controlSize = .small
@@ -121,7 +137,8 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         status.lineBreakMode = .byWordWrapping
         status.maximumNumberOfLines = 3
 
-        let buttons = NSStackView(views: [launchButton, killButton, NSView(), refreshButton])
+        let buttons = NSStackView(views: [installButton, uninstallButton, launchButton, killButton,
+                                          NSView(), refreshButton])
         buttons.orientation = .horizontal
         buttons.spacing = 6
         let filterRow = NSStackView(views: [filterField, categoryPopup])
@@ -198,6 +215,52 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
 
     @objc private func applyFilter() { table.reloadData() }
     func controlTextDidChange(_ obj: Notification) { table.reloadData() }
+
+    /// Opens a file picker for an `.ipa`, stages it into /PublicStaging over AFC and installs it
+    /// via installation_proxy. Device Hub's Apps `+`.
+    @objc private func install() {
+        guard let control else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "ipa")].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        status.stringValue = "Installing \(url.lastPathComponent)…"
+        control.installApp(path: url.path) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.status.stringValue = "Installed \(url.lastPathComponent)."
+                self.refresh()
+            case .failure(let e):
+                self.status.stringValue = "Install failed: \(e)"
+            }
+        }
+    }
+
+    /// Uninstalls the selected app, after confirming -- this removes the app and its data from
+    /// the device. Device Hub's Apps `-`.
+    @objc private func uninstall() {
+        guard let control, let app = selected else { return }
+        let alert = NSAlert()
+        alert.messageText = "Uninstall \"\(app.name)\"?"
+        alert.informativeText = "This removes the app and its data from the device."
+        alert.addButton(withTitle: "Uninstall")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        status.stringValue = "Uninstalling \(app.name)…"
+        control.uninstallApp(bundleID: app.bundleID) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.status.stringValue = "Uninstalled \(app.name)."
+                self.refresh()
+            case .failure(let e):
+                self.status.stringValue = "Uninstall failed: \(e)"
+            }
+        }
+    }
 
     @objc private func launch() {
         guard let control, let app = selected else { return }
@@ -298,5 +361,6 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         let has = selected != nil
         launchButton.isEnabled = has
         killButton.isEnabled = has
+        uninstallButton.isEnabled = has
     }
 }

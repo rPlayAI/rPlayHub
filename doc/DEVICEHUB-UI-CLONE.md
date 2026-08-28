@@ -62,17 +62,29 @@ Info/Apps/Profiles), or keep them as additional sub-tabs.
   regression from the Linux `media.c` rewrite (usernet.h kernel fallbacks for `tun_*`).
 - macOS **Apps tab**: Filter field + category dropdown.
 - Linux `rplay-gui`: console filter → bottom bar; Apps Filter + category dropdown.
+- **Engine API for `+`/`-`** (`host-c/api_server.c`, documented in `app/api/PROTOCOL.md`):
+  `install_app` stages a local `.ipa` into `/PublicStaging` over AFC (new write-side AFC:
+  `AFC_OP_MAKE_DIR`/`AFC_OP_FILE_WRITE`) and installs it via `installation_proxy`'s classic
+  `Install`; `uninstall_app` is `installation_proxy`'s `Uninstall`; `install_profile` forwards a
+  local `.mobileprovision`/`.mobileconfig` to misagent/MCInstall by extension; `remove_profile`
+  takes `{type, uuid}` or `{type, identifier}`. Engine builds clean (`cd host-c && make`).
+  Wired on **both** front-ends: macOS `AppsPanel`/`ProfilesPanel` (`+` opens an `NSOpenPanel`,
+  `-` confirms via `NSAlert`) — built and screenshot-verified via `xcodebuild`; Linux
+  `rplay-gui.cpp` `tab_apps`/`tab_profiles` (`+` is a typed local path field, matching every other
+  local-path field in that app; `-` confirms via an ImGui popup modal) — **not yet build-verified**,
+  the Mac hits the known `deps/ffmpeg/version` vs. C++ `<version>` header collision on this file
+  too; needs a Linux-side `make rplay-gui` check.
+  Not yet exercised against the live device (would actually install/remove something real) —
+  do that deliberately, not as a side effect of a build check.
 
 ## Remaining, in rough priority
 
-1. **Engine API for `+`/`-`**: `install_app`/`uninstall_app`, `install_profile`/`remove_profile`
-   (backend; unblocks the buttons on both front-ends).
-2. **Inspector restructure**: 3 icon tabs (Settings/Report/Info) + text sub-tab row — both apps.
-3. **Settings panel**: the device appearance/accessibility controls (needs engine methods to read/set
+1. **Inspector restructure**: 3 icon tabs (Settings/Report/Info) + text sub-tab row — both apps.
+2. **Settings panel**: the device appearance/accessibility controls (needs engine methods to read/set
    them — a new capability).
-4. **Canvas View Screen button** + static screenshot preview.
-5. **Sidebar Unavailable section**; **toolbar** `+`/list/keyboard/grid/`»`.
-6. App-type field in `list_apps` (for the App Clips category).
+3. **Canvas View Screen button** + static screenshot preview.
+4. **Sidebar Unavailable section**; **toolbar** `+`/list/keyboard/grid/`»`.
+5. App-type field in `list_apps` (for the App Clips category).
 
 ## Kickoff for the next session
 

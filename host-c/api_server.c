@@ -91,6 +91,24 @@ static double json_fraction(const char *json, const char *key, double fallback)
     return atof(p + 1);
 }
 
+/* Escapes a string for embedding as PCDATA in the classic plists sent over the shim channels --
+ * bundle ids, paths and profile identifiers are our own JSON fields, but a stray '&' or '<' would
+ * otherwise corrupt the XML the device parses. */
+static void xml_escape(const char *in, char *out, size_t cap)
+{
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p && o + 6 < cap; p++) {
+        switch (*p) {
+        case '&': memcpy(out + o, "&amp;", 5);  o += 5; break;
+        case '<': memcpy(out + o, "&lt;", 4);   o += 4; break;
+        case '>': memcpy(out + o, "&gt;", 4);   o += 4; break;
+        case '"': memcpy(out + o, "&quot;", 6); o += 6; break;
+        default:  out[o++] = (char)*p;
+        }
+    }
+    out[o] = 0;
+}
+
 static void send_line(int fd, const char *fmt, ...)
 {
     char buf[8192];
@@ -1110,6 +1128,176 @@ static void method_list_profiles(int fd, long id)
     free(b.p);
 }
 
+/* ------------------------------------------------------------------ install/remove profile (misagent, MCInstall)
+ *
+ * Device Hub's Profiles-tab `+`/`-`, the counterpart to install/uninstall above. A provisioning
+ * profile (.mobileprovision) goes to misagent as its raw CMS-signed bytes; a configuration profile
+ * (.mobileconfig) goes to MCInstall as its raw plist bytes -- neither needs us to parse or re-sign
+ * the payload, only forward it. Which service gets it is decided by file extension, since that is
+ * exactly what distinguishes the two kinds on disk. Removal takes the id the corresponding half of
+ * list_profiles already returns: the provisioning profile's `uuid`, or the configuration profile's
+ * `identifier`.
+ */
+static uint8_t *read_local_file(const char *path, size_t *out_n, const char **err)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) { *err = "could not open the local file"; return NULL; }
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    if (fsize <= 0 || fsize > (64 << 20)) { fclose(f); *err = "file is empty or over 64 MB"; return NULL; }
+    fseek(f, 0, SEEK_SET);
+    uint8_t *data = malloc((size_t)fsize);
+    if (!data || fread(data, 1, (size_t)fsize, f) != (size_t)fsize) {
+        free(data); fclose(f); *err = "could not read the local file"; return NULL;
+    }
+    fclose(f);
+    *out_n = (size_t)fsize;
+    return data;
+}
+
+/* misagent/MCInstall are request/reply, not streaming like installation_proxy -- one plist out,
+ * one back. Success is a Status of 0 (misagent's numeric convention) or "Acknowledged"/"Success"
+ * (MCInstall's); anything else, including no Status at all, is surfaced as an error. */
+static void relay_plist_run(int fd, long id, long port, const uint8_t *xml, size_t xml_len, const char *what)
+{
+    const api_session *sess = g_session;
+    if (!port) { reply_error(fd, id, "unavailable", "the device did not offer that service"); return; }
+    int s = relay_open(sess, port, 15);
+    if (s < 0) { reply_error(fd, id, "unavailable", "cannot reach the service through the tunnel"); return; }
+    const char *err = relay_checkin(s);
+    if (err) { close(s); reply_error(fd, id, "internal_error", err); return; }
+    if (relay_send(s, (const char *)xml, xml_len) != 0) {
+        close(s);
+        reply_error(fd, id, "internal_error", "could not send request");
+        return;
+    }
+    size_t n = 0;
+    uint8_t *raw = relay_recv_alloc(s, &n);
+    close(s);
+    if (!raw) { reply_error(fd, id, "device_error", "no reply from the device"); return; }
+    plist_t pl = NULL;
+    plist_from_memory((const char *)raw, (uint32_t)n, &pl, NULL);
+    free(raw);
+    if (!pl || plist_get_node_type(pl) != PLIST_DICT) {
+        if (pl) plist_free(pl);
+        reply_error(fd, id, "device_error", "malformed reply");
+        return;
+    }
+
+    plist_t status = plist_dict_get_item(pl, "Status");
+    int ok = 0;
+    char status_str[64] = "";
+    if (status) {
+        plist_type t = plist_get_node_type(status);
+        if (t == PLIST_STRING) {
+            char *sv = NULL; plist_get_string_val(status, &sv);
+            if (sv) { snprintf(status_str, sizeof status_str, "%s", sv); ok = !strcmp(sv, "Acknowledged") || !strcmp(sv, "Success"); }
+            free(sv);
+        } else if (t == PLIST_UINT || t == PLIST_BOOLEAN) {
+            uint64_t sv = 0; plist_get_uint_val(status, &sv);
+            snprintf(status_str, sizeof status_str, "%llu", (unsigned long long)sv);
+            ok = sv == 0;
+        }
+    }
+    strbuf b = {0};
+    if (ok) {
+        sb_printf(&b, "{\"id\":%ld,\"ok\":true,\"result\":{\"status\":", id);
+        sb_json_string(&b, status_str[0] ? status_str : "ok");
+        sb_puts(&b, "}}\n");
+    } else {
+        char msg[128];
+        snprintf(msg, sizeof msg, "%s failed%s%s", what, status_str[0] ? ": " : "", status_str);
+        sb_printf(&b, "{\"id\":%ld,\"ok\":false,\"error\":{\"code\":\"device_error\",\"message\":", id);
+        sb_json_string(&b, msg);
+        sb_puts(&b, "}}\n");
+    }
+    if (b.p && !b.oom) send_all(fd, b.p, b.len);
+    free(b.p);
+    plist_free(pl);
+}
+
+static void method_install_profile(int fd, long id, const char *line)
+{
+    const api_session *sess = g_session;
+    char path[1024] = "";
+    json_string_field(line, "path", path, sizeof path);
+    if (!path[0]) { reply_error(fd, id, "bad_request", "path is required (a local .mobileprovision or .mobileconfig file)"); return; }
+
+    const char *ext = strrchr(path, '.');
+    int provisioning = ext && !strcasecmp(ext, ".mobileprovision");
+    int configuration = ext && !strcasecmp(ext, ".mobileconfig");
+    if (!provisioning && !configuration) {
+        reply_error(fd, id, "bad_request", "path must end in .mobileprovision or .mobileconfig");
+        return;
+    }
+
+    size_t n = 0; const char *err = NULL;
+    uint8_t *data = read_local_file(path, &n, &err);
+    if (!data) { reply_error(fd, id, "bad_request", err); return; }
+
+    size_t b64cap = ((n + 2) / 3) * 4 + 1;
+    char *b64 = malloc(b64cap);
+    size_t bn = b64 ? b64_encode(data, n, b64, b64cap) : 0;
+    free(data);
+    if (!bn && n) { free(b64); reply_error(fd, id, "internal_error", "could not encode the profile"); return; }
+
+    strbuf b = {0};
+    sb_puts(&b, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n");
+    if (provisioning) sb_puts(&b, "\t<key>MessageType</key>\n\t<string>Install</string>\n\t<key>Profile</key>\n\t<data>");
+    else              sb_puts(&b, "\t<key>RequestType</key>\n\t<string>InstallProfile</string>\n\t<key>Payload</key>\n\t<data>");
+    if (bn) sb_put(&b, b64, bn);
+    free(b64);
+    sb_puts(&b, "</data>\n</dict>\n</plist>\n");
+    if (b.oom || !b.p) { free(b.p); reply_error(fd, id, "internal_error", "out of memory building the request"); return; }
+
+    relay_plist_run(fd, id, provisioning ? sess->misagent_port : sess->mcinstall_port,
+                     (const uint8_t *)b.p, b.len, "install");
+    free(b.p);
+}
+
+static void method_remove_profile(int fd, long id, const char *line)
+{
+    const api_session *sess = g_session;
+    char type[16] = "";
+    json_string_field(line, "type", type, sizeof type);
+    int provisioning = !strcmp(type, "provisioning");
+    int configuration = !strcmp(type, "configuration");
+    if (!provisioning && !configuration) {
+        reply_error(fd, id, "bad_request", "type must be provisioning or configuration");
+        return;
+    }
+
+    strbuf b = {0};
+    if (provisioning) {
+        char uuid[64] = "", uuid_esc[128];
+        if (json_string_field(line, "uuid", uuid, sizeof uuid) != 0 || !uuid[0]) {
+            reply_error(fd, id, "bad_request", "uuid is required for a provisioning profile");
+            return;
+        }
+        xml_escape(uuid, uuid_esc, sizeof uuid_esc);
+        sb_printf(&b,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n"
+            "\t<key>MessageType</key>\n\t<string>Remove</string>\n"
+            "\t<key>ProfileID</key>\n\t<string>%s</string>\n</dict>\n</plist>\n", uuid_esc);
+    } else {
+        char ident[256] = "", ident_esc[300];
+        if (json_string_field(line, "identifier", ident, sizeof ident) != 0 || !ident[0]) {
+            reply_error(fd, id, "bad_request", "identifier is required for a configuration profile");
+            return;
+        }
+        xml_escape(ident, ident_esc, sizeof ident_esc);
+        sb_printf(&b,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n"
+            "\t<key>RequestType</key>\n\t<string>RemoveProfile</string>\n"
+            "\t<key>ProfileIdentifier</key>\n\t<string>%s</string>\n</dict>\n</plist>\n", ident_esc);
+    }
+    if (b.oom || !b.p) { free(b.p); reply_error(fd, id, "internal_error", "out of memory building the request"); return; }
+
+    relay_plist_run(fd, id, provisioning ? sess->misagent_port : sess->mcinstall_port,
+                     (const uint8_t *)b.p, b.len, "remove");
+    free(b.p);
+}
+
 /* ------------------------------------------------------------------ files (AFC)
  *
  * Apple File Conduit, spoken by afc.shim.remote (the Media partition) and by
@@ -1120,11 +1308,14 @@ static void method_list_profiles(int fd, long id)
 #define AFC_OP_STATUS        0x01
 #define AFC_OP_READ_DIR      0x03
 #define AFC_OP_DATA          0x02
+#define AFC_OP_MAKE_DIR      0x09
 #define AFC_OP_GET_FILE_INFO 0x0A
 #define AFC_OP_FILE_OPEN     0x0D
 #define AFC_OP_FILE_OPEN_RES 0x0E
 #define AFC_OP_FILE_READ     0x0F
+#define AFC_OP_FILE_WRITE    0x10
 #define AFC_OP_FILE_CLOSE    0x14
+#define AFC_FOPEN_WRONLY     3  /* truncate + create -- what a fresh app upload needs */
 
 typedef struct { int fd; uint64_t seq; } afc_conn;
 
@@ -1263,6 +1454,188 @@ static uint8_t *afc_read_file(afc_conn *c, const char *path, size_t *out_n)
     if (!ok) { free(out); return NULL; }
     *out_n = got;
     return out;
+}
+
+/* Creates a directory; ok if it already exists (status 8 -- reused for the PublicStaging install
+ * dir, which after the first install always exists already). */
+static int afc_make_dir(afc_conn *c, const char *path)
+{
+    size_t plen = strlen(path) + 1;
+    if (afc_send(c, AFC_OP_MAKE_DIR, (const uint8_t *)path, plen) != 0) return -1;
+    uint8_t *body = NULL; size_t n = 0; uint64_t st = 0;
+    long op = afc_recv(c, &body, &n, &st);
+    free(body);
+    return op == AFC_OP_STATUS ? (int)st : -1;
+}
+
+/* Writes a whole file in <=1 MB chunks -- afc_read_file's read side uses the same cap. Used to
+ * stage an .ipa into /PublicStaging before installation_proxy's Install command. */
+static int afc_write_file(afc_conn *c, const char *path, const uint8_t *data, size_t n)
+{
+    size_t plen = strlen(path) + 1;
+    uint8_t *req = malloc(8 + plen);
+    if (!req) return -1;
+    put_u64le(req, AFC_FOPEN_WRONLY);
+    memcpy(req + 8, path, plen);
+    int rc = afc_send(c, AFC_OP_FILE_OPEN, req, 8 + plen);
+    free(req);
+    if (rc != 0) return -1;
+    uint8_t *body = NULL; size_t bn = 0; uint64_t st = 0;
+    if (afc_recv(c, &body, &bn, &st) != AFC_OP_FILE_OPEN_RES || bn < 8) { free(body); return -1; }
+    uint64_t handle = get_u64le(body);
+    free(body);
+
+    int ok = 1;
+    size_t off = 0;
+    while (ok && off < n) {
+        size_t chunk = n - off < (1u << 20) ? n - off : (1u << 20);
+        uint8_t *pkt = malloc(8 + chunk);
+        if (!pkt) { ok = 0; break; }
+        put_u64le(pkt, handle);
+        memcpy(pkt + 8, data + off, chunk);
+        rc = afc_send(c, AFC_OP_FILE_WRITE, pkt, 8 + chunk);
+        free(pkt);
+        if (rc != 0) { ok = 0; break; }
+        if (afc_recv(c, &body, &bn, &st) != AFC_OP_STATUS || st != 0) { free(body); ok = 0; break; }
+        free(body);
+        off += chunk;
+    }
+    uint8_t cl[8];
+    put_u64le(cl, handle);
+    if (afc_send(c, AFC_OP_FILE_CLOSE, cl, 8) == 0) { afc_recv(c, &body, &bn, &st); free(body); }
+    return ok ? 0 : -1;
+}
+
+/* ------------------------------------------------------------------ install/uninstall (installation_proxy, AFC)
+ *
+ * Device Hub's Apps-tab `+`/`-`. Install stages the package into /PublicStaging over AFC (the same
+ * Media-rooted afc_port list_dir/read_file use -- PublicStaging lives at its root) and then sends
+ * installation_proxy's classic Install command; uninstall needs no staging, just the bundle id.
+ * Both stream {Status: ...} events exactly like Browse (method_list_apps above); the run ends on a
+ * Status of Complete or an Error dict.
+ */
+static int instproxy_run(int fd, long id, const char *xml, size_t xml_len, const char *what)
+{
+    const api_session *sess = g_session;
+    if (!sess->instproxy_port) {
+        reply_error(fd, id, "unavailable", "the device did not offer installation_proxy");
+        return -1;
+    }
+    int s = relay_open(sess, sess->instproxy_port, 30);
+    if (s < 0) { reply_error(fd, id, "unavailable", "cannot reach installation_proxy through the tunnel"); return -1; }
+    const char *err = relay_checkin(s);
+    if (err) { close(s); reply_error(fd, id, "internal_error", err); return -1; }
+    if (relay_send(s, xml, xml_len) != 0) {
+        close(s);
+        reply_error(fd, id, "internal_error", "could not send request");
+        return -1;
+    }
+
+    int done = 0, failed = 0;
+    char last_status[128] = {0}, err_desc[256] = {0};
+    while (!done && !failed) {
+        size_t n = 0;
+        uint8_t *raw = relay_recv_alloc(s, &n);
+        if (!raw) { failed = 1; break; }
+        plist_t pl = NULL;
+        plist_from_memory((const char *)raw, (uint32_t)n, &pl, NULL);
+        free(raw);
+        if (!pl || plist_get_node_type(pl) != PLIST_DICT) { failed = 1; if (pl) plist_free(pl); break; }
+        plist_t error = plist_dict_get_item(pl, "Error");
+        if (error) {
+            failed = 1;
+            char *ev = NULL; plist_get_string_val(error, &ev);
+            plist_t desc = plist_dict_get_item(pl, "ErrorDescription");
+            char *dv = NULL; if (desc) plist_get_string_val(desc, &dv);
+            snprintf(err_desc, sizeof err_desc, "%s failed: %s", what, dv ? dv : (ev ? ev : "unknown error"));
+            free(ev); free(dv);
+        }
+        plist_t status = plist_dict_get_item(pl, "Status");
+        if (status) {
+            char *sv = NULL; plist_get_string_val(status, &sv);
+            if (sv) { snprintf(last_status, sizeof last_status, "%s", sv); if (!strcmp(sv, "Complete")) done = 1; }
+            free(sv);
+        }
+        plist_free(pl);
+    }
+    close(s);
+    strbuf b = {0};
+    if (failed) {
+        sb_printf(&b, "{\"id\":%ld,\"ok\":false,\"error\":{\"code\":\"device_error\",\"message\":", id);
+        sb_json_string(&b, err_desc[0] ? err_desc : "installation_proxy did not complete");
+        sb_puts(&b, "}}\n");
+    } else {
+        sb_printf(&b, "{\"id\":%ld,\"ok\":true,\"result\":{\"status\":", id);
+        sb_json_string(&b, last_status[0] ? last_status : "Complete");
+        sb_puts(&b, "}}\n");
+    }
+    if (b.p && !b.oom) send_all(fd, b.p, b.len);
+    free(b.p);
+    return failed ? -1 : 0;
+}
+
+static void method_install_app(int fd, long id, const char *line)
+{
+    const api_session *sess = g_session;
+    char path[1024] = "";
+    json_string_field(line, "path", path, sizeof path);
+    if (!path[0]) { reply_error(fd, id, "bad_request", "path is required (a local .ipa file)"); return; }
+    if (!sess->afc_port) { reply_error(fd, id, "unavailable", "the device did not offer afc"); return; }
+
+    FILE *f = fopen(path, "rb");
+    if (!f) { reply_error(fd, id, "bad_request", "could not open the local file"); return; }
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    if (fsize <= 0 || fsize > (512 << 20)) { fclose(f); reply_error(fd, id, "bad_request", "file is empty or over 512 MB"); return; }
+    fseek(f, 0, SEEK_SET);
+    uint8_t *data = malloc((size_t)fsize);
+    if (!data || fread(data, 1, (size_t)fsize, f) != (size_t)fsize) {
+        free(data); fclose(f);
+        reply_error(fd, id, "internal_error", "could not read the local file");
+        return;
+    }
+    fclose(f);
+
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    char staged[1200];
+    snprintf(staged, sizeof staged, "PublicStaging/%s", base);
+
+    afc_conn c; const char *err;
+    if (afc_open(&c, sess, sess->afc_port, &err) != 0) { free(data); reply_error(fd, id, "unavailable", err); return; }
+    afc_make_dir(&c, "PublicStaging");  /* ignore -- exists after the first install */
+    int wrc = afc_write_file(&c, staged, data, (size_t)fsize);
+    close(c.fd);
+    free(data);
+    if (wrc != 0) { reply_error(fd, id, "device_error", "could not stage the app over AFC"); return; }
+
+    char staged_esc[1300];
+    xml_escape(staged, staged_esc, sizeof staged_esc);
+    char xml[1400];
+    int n = snprintf(xml, sizeof xml,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n"
+        "\t<key>Command</key>\n\t<string>Install</string>\n"
+        "\t<key>PackagePath</key>\n\t<string>%s</string>\n</dict>\n</plist>\n", staged_esc);
+    if (n <= 0 || (size_t)n >= sizeof xml) { reply_error(fd, id, "internal_error", "package path too long"); return; }
+    instproxy_run(fd, id, xml, (size_t)n, "install");
+}
+
+static void method_uninstall_app(int fd, long id, const char *line)
+{
+    char bid[256] = {0};
+    if (json_string_field(line, "bundle_id", bid, sizeof bid) != 0 || !bid[0]) {
+        reply_error(fd, id, "bad_request", "bundle_id is required");
+        return;
+    }
+    char bid_esc[300];
+    xml_escape(bid, bid_esc, sizeof bid_esc);
+    char xml[512];
+    int n = snprintf(xml, sizeof xml,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n"
+        "\t<key>Command</key>\n\t<string>Uninstall</string>\n"
+        "\t<key>ApplicationIdentifier</key>\n\t<string>%s</string>\n</dict>\n</plist>\n", bid_esc);
+    if (n <= 0 || (size_t)n >= sizeof xml) { reply_error(fd, id, "bad_request", "bundle_id too long"); return; }
+    instproxy_run(fd, id, xml, (size_t)n, "uninstall");
 }
 
 static long afc_port_for(const char *service, const api_session *sess)
@@ -1821,8 +2194,12 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "list_processes"))   { method_list_processes(fd, id); return; }
     if (!strcmp(method, "launch_app"))       { method_launch_app(fd, id, line); return; }
     if (!strcmp(method, "terminate_app"))    { method_terminate_app(fd, id, line); return; }
+    if (!strcmp(method, "install_app"))      { method_install_app(fd, id, line); return; }
+    if (!strcmp(method, "uninstall_app"))    { method_uninstall_app(fd, id, line); return; }
     if (!strcmp(method, "syslog"))           { method_syslog(fd, id); return; }
     if (!strcmp(method, "list_profiles"))    { method_list_profiles(fd, id); return; }
+    if (!strcmp(method, "install_profile"))  { method_install_profile(fd, id, line); return; }
+    if (!strcmp(method, "remove_profile"))   { method_remove_profile(fd, id, line); return; }
     if (!strcmp(method, "list_dir"))         { method_list_dir(fd, id, line); return; }
     if (!strcmp(method, "read_file"))        { method_read_file(fd, id, line); return; }
     if (!strcmp(method, "export_crashes"))   { method_export_crashes(fd, id, line); return; }

@@ -416,6 +416,11 @@ static void tab_info()
     }
 }
 
+/* Device Hub's Apps `+`: a local .ipa path (this machine, not the device) staged into
+ * /PublicStaging over AFC and installed via installation_proxy. ImGui has no native file picker
+ * in this app -- every local path elsewhere (recordings, crash export) is a typed field too. */
+static char g_install_app_path[512];
+
 static void tab_apps()
 {
     if (ImGui::Button("Refresh") || (!g_apps_pending && g_apps.empty() && g_apps_err.empty()))
@@ -440,6 +445,20 @@ static void tab_apps()
     ImGui::TextDisabled("%d apps", (int)g_apps.size());
     if (!g_apps_err.empty()) ImGui::TextColored(ImVec4(1, .4f, .4f, 1), "%s", g_apps_err.c_str());
 
+    ImGui::SetNextItemWidth(-4 * ImGui::GetFontSize());
+    ImGui::InputTextWithHint("##install_app_path", "Path to a local .ipa to install",
+                             g_install_app_path, sizeof g_install_app_path);
+    ImGui::SameLine();
+    if (ImGui::Button("+##install_app") && g_install_app_path[0]) {
+        std::string path = g_install_app_path;
+        set_status("installing " + path + "...");
+        g_api.request("install_app", {{"path", path}}, [path](bool ok, json r) {
+            set_status(ok ? "installed " + path
+                          : "install failed: " + (r.is_string() ? r.get<std::string>() : ""));
+            if (ok) refresh_apps();
+        });
+    }
+
     if (ImGui::BeginTable("apps", 4,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
                           ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
@@ -447,7 +466,7 @@ static void tab_apps()
         ImGui::TableSetupColumn("Name");
         ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 5 * ImGui::GetFontSize());
         ImGui::TableSetupColumn("Bundle");
-        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, 5 * ImGui::GetFontSize());
+        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, 8 * ImGui::GetFontSize());
         ImGui::TableHeadersRow();
         for (auto &a : g_apps) {
             std::string name = a.value("name", "");
@@ -473,6 +492,23 @@ static void tab_apps()
                     set_status(ok ? "launched " + name
                                   : "launch failed: " + (r.is_string() ? r.get<std::string>() : ""));
                 });
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("-")) ImGui::OpenPopup("uninstall?");
+            if (ImGui::BeginPopupModal("uninstall?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text("Uninstall \"%s\"?", name.c_str());
+                ImGui::TextDisabled("This removes the app and its data from the device.");
+                if (ImGui::Button("Uninstall")) {
+                    g_api.request("uninstall_app", {{"bundle_id", bundle}}, [name](bool ok, json r) {
+                        set_status(ok ? "uninstalled " + name
+                                      : "uninstall failed: " + (r.is_string() ? r.get<std::string>() : ""));
+                        if (ok) refresh_apps();
+                    });
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
             }
             ImGui::PopID();
         }
@@ -593,41 +629,99 @@ static void tab_files()
     }
 }
 
+/* Device Hub's Profiles `+`: a local .mobileprovision/.mobileconfig path, dispatched by
+ * extension on the engine side (misagent vs. MCInstall). */
+static char g_install_profile_path[512];
+
+static void refresh_profiles()
+{
+    g_profiles_pending = true;
+    g_api.request("list_profiles", nullptr, [](bool ok, json r) {
+        g_profiles_pending = false;
+        if (ok) g_profiles = std::move(r);
+    });
+}
+
+/* Confirms, then removes a provisioning (by uuid) or configuration (by identifier) profile. */
+static void remove_profile_button(const char *label, const char *name, const char *type, const char *id)
+{
+    ImGui::PushID(id);
+    if (ImGui::SmallButton(label)) ImGui::OpenPopup("remove profile?");
+    if (ImGui::BeginPopupModal("remove profile?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Remove \"%s\"?", name);
+        if (ImGui::Button("Remove")) {
+            json params = {{"type", type}};
+            params[!strcmp(type, "provisioning") ? "uuid" : "identifier"] = id;
+            std::string nm = name;
+            g_api.request("remove_profile", params, [nm](bool ok, json r) {
+                set_status(ok ? "removed " + nm
+                              : "remove failed: " + (r.is_string() ? r.get<std::string>() : ""));
+                if (ok) refresh_profiles();
+            });
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
+}
+
 static void tab_profiles()
 {
-    if (ImGui::Button("Refresh") || (!g_profiles_pending && g_profiles.is_null())) {
-        g_profiles_pending = true;
-        g_api.request("list_profiles", nullptr, [](bool ok, json r) {
-            g_profiles_pending = false;
-            if (ok) g_profiles = std::move(r);
+    if (ImGui::Button("Refresh") || (!g_profiles_pending && g_profiles.is_null()))
+        refresh_profiles();
+    if (g_profiles_pending) { ImGui::SameLine(); ImGui::TextDisabled("loading..."); }
+
+    ImGui::SetNextItemWidth(-4 * ImGui::GetFontSize());
+    ImGui::InputTextWithHint("##install_profile_path", "Path to a local .mobileprovision or .mobileconfig",
+                             g_install_profile_path, sizeof g_install_profile_path);
+    ImGui::SameLine();
+    if (ImGui::Button("+##install_profile") && g_install_profile_path[0]) {
+        std::string path = g_install_profile_path;
+        set_status("installing " + path + "...");
+        g_api.request("install_profile", {{"path", path}}, [path](bool ok, json r) {
+            set_status(ok ? "installed " + path
+                          : "install failed: " + (r.is_string() ? r.get<std::string>() : ""));
+            if (ok) refresh_profiles();
         });
     }
-    if (g_profiles_pending) { ImGui::SameLine(); ImGui::TextDisabled("loading..."); }
+
     if (!g_profiles.is_object()) return;
 
     ImGui::SeparatorText("Provisioning");
-    if (ImGui::BeginTable("prov", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+    if (ImGui::BeginTable("prov", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Name");
         ImGui::TableSetupColumn("Team");
         ImGui::TableSetupColumn("Expires");
+        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, 3 * ImGui::GetFontSize());
         ImGui::TableHeadersRow();
         for (auto &p : g_profiles.value("provisioning", json::array())) {
+            std::string name = p.value("name", "");
+            std::string uuid = p.value("uuid", "");
             ImGui::TableNextRow();
-            ImGui::TableNextColumn(); ImGui::TextUnformatted(p.value("name", "").c_str());
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(name.c_str());
             ImGui::TableNextColumn(); ImGui::TextUnformatted(p.value("team", "").c_str());
             ImGui::TableNextColumn(); ImGui::TextUnformatted(jstr(p.value("expires", json())).c_str());
+            ImGui::TableNextColumn();
+            if (!uuid.empty()) remove_profile_button("-", name.c_str(), "provisioning", uuid.c_str());
         }
         ImGui::EndTable();
     }
     ImGui::SeparatorText("Configuration");
-    if (ImGui::BeginTable("conf", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+    if (ImGui::BeginTable("conf", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Name");
         ImGui::TableSetupColumn("Organization");
+        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, 3 * ImGui::GetFontSize());
         ImGui::TableHeadersRow();
         for (auto &p : g_profiles.value("configuration", json::array())) {
+            std::string name = p.value("name", "");
+            std::string identifier = p.value("identifier", "");
             ImGui::TableNextRow();
-            ImGui::TableNextColumn(); ImGui::TextUnformatted(p.value("name", "").c_str());
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(name.c_str());
             ImGui::TableNextColumn(); ImGui::TextUnformatted(p.value("organization", "").c_str());
+            ImGui::TableNextColumn();
+            if (!identifier.empty()) remove_profile_button("-", name.c_str(), "configuration", identifier.c_str());
         }
         ImGui::EndTable();
     }
