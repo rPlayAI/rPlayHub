@@ -2,12 +2,17 @@
 //  InspectorPane.swift
 //  The right-hand pane and its tabs.
 //
-//  Device Hub's inspector has two levels: a top-right row of 3 ICON tabs (Settings, Report,
-//  Info), and under Info, a row of TEXT-named tabs (Info, Apps, Profiles). This has those three
-//  plus Controls, Files and Console, which Device Hub has no equivalent for -- folded in as
-//  extra text sub-tabs alongside Info/Apps/Profiles rather than as their own icon tabs, so the
-//  top row stays a faithful 3 icons. Settings and Report need engine methods we don't have yet
-//  (device appearance/accessibility, a diagnostics report) and are stubbed until then.
+//  Device Hub's inspector has two levels: a row of 3 ICON tabs (Settings, Report, Info) sitting
+//  IN THE WINDOW'S TITLE BAR at the trailing edge -- same row as the traffic lights, not inside
+//  the content area -- and under Info, a row of TEXT-named tabs (Info, Apps, Profiles). This has
+//  those three plus Controls, Files and Console, which Device Hub has no equivalent for --
+//  folded in as extra text sub-tabs alongside Info/Apps/Profiles rather than as their own icon
+//  tabs, so the top row stays a faithful 3 icons. Settings and Report need engine methods we
+//  don't have yet (device appearance/accessibility, a diagnostics report) and are stubbed until
+//  then.
+//
+//  `iconTabs` is built here (it drives this pane's selection) but AppDelegate lifts it into a
+//  toolbar item instead of adding it as a subview -- see buildToolbar() there.
 //
 //  It exists so AppDelegate keeps talking to one object: it forwards the control surface it
 //  already used, and owns the tab switching itself.
@@ -28,8 +33,9 @@ final class InspectorPane: NSView {
     private let reportStub = ComingSoonPanel(title: "Report",
         detail: "A diagnostics report view, matching Device Hub's Report tab.")
 
-    /// Top-right icon row: Settings, Report, Info.
-    private let iconTabs = NSSegmentedControl()
+    /// Settings, Report, Info -- lives in the window's title bar, not in this view. Exposed so
+    /// AppDelegate can put it in a toolbar item.
+    let iconTabs = NSSegmentedControl()
     /// Second row, under Info only: the text-named tabs.
     private let textTabs = NSSegmentedControl()
 
@@ -92,17 +98,15 @@ final class InspectorPane: NSView {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
-        addSubview(iconTabs)
         addSubview(textTabs)
 
-        // Device Hub keeps the icon row at the inspector's top-right, not centered.
+        // iconTabs is NOT a subview here -- AppDelegate hosts it in the title bar toolbar
+        // instead, so textTabs anchors directly to this pane's own top.
         NSLayoutConstraint.activate([
-            iconTabs.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            iconTabs.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            textTabs.topAnchor.constraint(equalTo: iconTabs.bottomAnchor, constant: 8),
+            textTabs.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             // Six folded-in sub-tabs are wider than Device Hub's real three, so this row is
             // pinned to the inspector's full width (not just centered) and left to compress --
-            // unlike the icon row above, which always fits.
+            // unlike the icon row, which always fits.
             textTabs.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             textTabs.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
         ])
@@ -113,10 +117,10 @@ final class InspectorPane: NSView {
                 v.bottomAnchor.constraint(equalTo: bottomAnchor),
             ])
         }
-        // The two stubs sit directly under the icon row (no text sub-tabs); the sub-panes sit
-        // under the text row.
+        // The two stubs sit directly under this pane's top (no text sub-tabs); the sub-panes
+        // sit under the text row.
         for v in [settingsStub, reportStub] {
-            NSLayoutConstraint.activate([v.topAnchor.constraint(equalTo: iconTabs.bottomAnchor, constant: 8)])
+            NSLayoutConstraint.activate([v.topAnchor.constraint(equalTo: topAnchor, constant: 8)])
         }
         for v in subPanes {
             NSLayoutConstraint.activate([v.topAnchor.constraint(equalTo: textTabs.bottomAnchor, constant: 4)])

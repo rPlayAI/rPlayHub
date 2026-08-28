@@ -1202,25 +1202,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate: NSToolbarDelegate {
     private static let sidebarItem = NSToolbarItem.Identifier("toggleSidebar")
+    /// Settings/Report/Info -- Device Hub keeps these in the title bar itself, at the trailing
+    /// edge, same row as the traffic lights; not inside the inspector's content area.
+    private static let inspectorTabsItem = NSToolbarItem.Identifier("inspectorTabs")
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.sidebarItem, .flexibleSpace]
+        [Self.sidebarItem, .flexibleSpace, Self.inspectorTabsItem]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.sidebarItem, .flexibleSpace]
+        [Self.sidebarItem, .flexibleSpace, Self.inspectorTabsItem]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        guard id == Self.sidebarItem else { return nil }
-        let item = NSToolbarItem(itemIdentifier: id)
-        item.label = "Sidebar"
-        item.toolTip = "Hide Sidebar"
-        item.image = NSImage(systemSymbolName: "sidebar.left",
-                             accessibilityDescription: "Hide Sidebar")
-        item.target = self
-        item.action = #selector(toggleSidebar)
-        return item
+        if id == Self.sidebarItem {
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Sidebar"
+            item.toolTip = "Hide Sidebar"
+            item.image = NSImage(systemSymbolName: "sidebar.left",
+                                 accessibilityDescription: "Hide Sidebar")
+            item.target = self
+            item.action = #selector(toggleSidebar)
+            return item
+        }
+        if id == Self.inspectorTabsItem {
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Inspector"
+            item.view = inspector.iconTabs
+            return item
+        }
+        return nil
     }
 }
