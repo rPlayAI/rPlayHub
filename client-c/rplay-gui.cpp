@@ -1095,13 +1095,35 @@ int main(int argc, char **argv)
         ImGui::EndChild();
         ImGui::SameLine();
         ImGui::BeginChild("inspector", ImVec2(0, 0), ImGuiChildFlags_Borders);
-        if (ImGui::BeginTabBar("tabs")) {
-            if (ImGui::BeginTabItem("Info"))        { tab_info();        ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Apps"))        { tab_apps();        ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Console"))     { tab_console();     ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Files"))       { tab_files();       ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Profiles"))    { tab_profiles();    ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Diagnostics")) { tab_diagnostics(); ImGui::EndTabItem(); }
+        /* Device Hub's two levels: a top row of icon tabs (Settings/Report/Info) and, under
+         * Info, a second row of text tabs (Info/Apps/Profiles plus our folded-in
+         * Files/Console/Diagnostics, which Device Hub has no equivalent for). This app has no
+         * icon font anywhere, so the top row is text too rather than faking icons. Settings and
+         * Report are stubs pending the engine methods they'd need (device appearance/
+         * accessibility controls, a diagnostics report) -- same as the macOS ComingSoonPanel. */
+        if (ImGui::BeginTabBar("toplevel")) {
+            if (ImGui::BeginTabItem("Settings")) {
+                ImGui::TextWrapped("Device appearance and accessibility controls (Appearance, "
+                                   "Text Size, Reduce Motion, ...) need new engine methods to "
+                                   "read/set them.");
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Report")) {
+                ImGui::TextWrapped("A diagnostics report view, matching Device Hub's Report tab.");
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Info")) {
+                if (ImGui::BeginTabBar("sublevel")) {
+                    if (ImGui::BeginTabItem("Info"))        { tab_info();        ImGui::EndTabItem(); }
+                    if (ImGui::BeginTabItem("Apps"))        { tab_apps();        ImGui::EndTabItem(); }
+                    if (ImGui::BeginTabItem("Profiles"))    { tab_profiles();    ImGui::EndTabItem(); }
+                    if (ImGui::BeginTabItem("Files"))       { tab_files();       ImGui::EndTabItem(); }
+                    if (ImGui::BeginTabItem("Console"))     { tab_console();     ImGui::EndTabItem(); }
+                    if (ImGui::BeginTabItem("Diagnostics")) { tab_diagnostics(); ImGui::EndTabItem(); }
+                    ImGui::EndTabBar();
+                }
+                ImGui::EndTabItem();
+            }
             ImGui::EndTabBar();
         }
         ImGui::EndChild();
