@@ -104,7 +104,7 @@ final class InspectorPane: NSView {
         textTabs.selectedSegment = 0
         textTabs.target = self
         textTabs.action = #selector(subTabChanged)
-        textTabs.font = .systemFont(ofSize: 10)
+        textTabs.font = .systemFont(ofSize: 12)
         textTabs.translatesAutoresizingMaskIntoConstraints = false
 
         for v in allPanes {

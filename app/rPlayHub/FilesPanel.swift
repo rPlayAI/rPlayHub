@@ -66,10 +66,17 @@ final class FilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.delegate = self
         table.doubleAction = #selector(open)
         table.target = self
-        table.usesAlternatingRowBackgroundColors = true
+        // Consistent with Apps/Profiles: Device Hub's lists are flat, not alternating, all
+        // sharing one background color with the tab header row above them.
+        table.usesAlternatingRowBackgroundColors = false
+        table.style = .plain
+        table.backgroundColor = .clear
+        table.gridStyleMask = .solidHorizontalGridLineMask
+        table.gridColor = .separatorColor
 
         let scroll = NSScrollView()
         scroll.documentView = table
+        scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
 

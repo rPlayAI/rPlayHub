@@ -56,15 +56,28 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.addTableColumn(col)
         table.headerView = nil
         table.rowHeight = 34
+        // .automatic (the default) draws inset row-shaped background guides across the whole
+        // visible scroll area, independent of actual row count -- exactly the "row shadows" an
+        // empty list showed instead of Device Hub's plain empty background.
+        table.style = .plain
         table.dataSource = self
         table.delegate = self
-        table.usesAlternatingRowBackgroundColors = true
+        // Device Hub's rows are flat, not alternating -- and alternating backgrounds fill the
+        // WHOLE visible scroll area in stripes, independent of actual row count, which is what
+        // showed as leftover "row shadows" when a list was empty.
+        table.usesAlternatingRowBackgroundColors = false
+        // Same background as the Info/Apps/Profiles tab header row above it, not plain white --
+        // confirmed all of Device Hub's lists (Apps, Profiles, Files) share this one color.
+        // Transparent, so it shows whatever the inspector's own view already shows there rather
+        // than guessing at a specific system color.
+        table.backgroundColor = .clear
         // The thin grey line between rows Device Hub's list has.
         table.gridStyleMask = .solidHorizontalGridLineMask
         table.gridColor = .separatorColor
 
         let scroll = NSScrollView()
         scroll.documentView = table
+        scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
