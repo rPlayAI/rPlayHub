@@ -88,6 +88,7 @@ typedef struct {
     long        crashcopy_port;       /* crashreportcopymobile.shim.remote: AFC over crash reports */
     long        crashmover_port;      /* crashreportmover.shim.remote: poke before listing */
     long        mounter_port;         /* mobile_image_mounter.shim.remote: DDI self-activation */
+    long        sbservices_port;      /* springboardservices.shim.remote: per-app icon PNGs */
     const char *ddi_dir;             /* where the bundled DDI lives, or NULL to search defaults */
 
     /* Needed to negotiate the media stream: the offer carries our address, and the SSRC in it

@@ -1658,6 +1658,80 @@ static void method_uninstall_app(int fd, long id, const char *line)
     instproxy_run(fd, id, xml, (size_t)n, "uninstall");
 }
 
+/* ------------------------------------------------------------------ app icons (springboardservices)
+ *
+ * Device Hub's Apps-tab row icons. Neither appservice nor installation_proxy hands out icon
+ * artwork; springboardservices' classic getIconPNGData does, keyed by bundle identifier -- the
+ * same service Xcode/iTunes have used for this since the earliest jailbreak-tool era. Request/
+ * reply, not streaming, like misagent/MCInstall above.
+ */
+static void method_get_app_icon(int fd, long id, const char *line)
+{
+    const api_session *sess = g_session;
+    char bid[256] = {0};
+    if (json_string_field(line, "bundle_id", bid, sizeof bid) != 0 || !bid[0]) {
+        reply_error(fd, id, "bad_request", "bundle_id is required");
+        return;
+    }
+    if (!sess->sbservices_port) {
+        reply_error(fd, id, "unavailable", "the device did not offer springboardservices");
+        return;
+    }
+    int s = relay_open(sess, sess->sbservices_port, 15);
+    if (s < 0) { reply_error(fd, id, "unavailable", "cannot reach springboardservices through the tunnel"); return; }
+    const char *err = relay_checkin(s);
+    if (err) { close(s); reply_error(fd, id, "internal_error", err); return; }
+
+    char bid_esc[300];
+    xml_escape(bid, bid_esc, sizeof bid_esc);
+    char xml[400];
+    int n = snprintf(xml, sizeof xml,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n"
+        "\t<key>command</key>\n\t<string>getIconPNGData</string>\n"
+        "\t<key>bundleId</key>\n\t<string>%s</string>\n</dict>\n</plist>\n", bid_esc);
+    if (n <= 0 || (size_t)n >= sizeof xml || relay_send(s, xml, (size_t)n) != 0) {
+        close(s);
+        reply_error(fd, id, "internal_error", "could not send getIconPNGData");
+        return;
+    }
+    size_t raw_n = 0;
+    uint8_t *raw = relay_recv_alloc(s, &raw_n);
+    close(s);
+    if (!raw) { reply_error(fd, id, "device_error", "no reply from the device"); return; }
+    plist_t pl = NULL;
+    plist_from_memory((const char *)raw, (uint32_t)raw_n, &pl, NULL);
+    free(raw);
+    if (!pl || plist_get_node_type(pl) != PLIST_DICT) {
+        if (pl) plist_free(pl);
+        reply_error(fd, id, "device_error", "malformed reply");
+        return;
+    }
+    plist_t png = plist_dict_get_item(pl, "pngData");
+    if (!png || plist_get_node_type(png) != PLIST_DATA) {
+        plist_free(pl);
+        reply_error(fd, id, "device_error", "no pngData in the reply (bad bundle id?)");
+        return;
+    }
+    uint64_t png_len = 0;
+    const char *png_bytes = plist_get_data_ptr(png, &png_len);
+    size_t b64cap = ((size_t)png_len + 2) / 3 * 4 + 1;
+    char *b64 = malloc(b64cap);
+    size_t bn = (b64 && png_bytes) ? b64_encode((const uint8_t *)png_bytes, (size_t)png_len, b64, b64cap) : 0;
+    if (!bn && png_len) {
+        free(b64);
+        plist_free(pl);
+        reply_error(fd, id, "internal_error", "could not encode the icon");
+        return;
+    }
+    char head[128];
+    int hn = snprintf(head, sizeof head, "{\"id\":%ld,\"ok\":true,\"result\":{\"png_b64\":\"", id);
+    send_all(fd, head, (size_t)hn);
+    if (bn) send_all(fd, b64, bn);
+    send_all(fd, "\"}}\n", 4);
+    free(b64);
+    plist_free(pl);
+}
+
 static long afc_port_for(const char *service, const api_session *sess)
 {
     if (!strcmp(service, "crash")) return sess->crashcopy_port;
@@ -2216,6 +2290,7 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "terminate_app"))    { method_terminate_app(fd, id, line); return; }
     if (!strcmp(method, "install_app"))      { method_install_app(fd, id, line); return; }
     if (!strcmp(method, "uninstall_app"))    { method_uninstall_app(fd, id, line); return; }
+    if (!strcmp(method, "get_app_icon"))     { method_get_app_icon(fd, id, line); return; }
     if (!strcmp(method, "syslog"))           { method_syslog(fd, id); return; }
     if (!strcmp(method, "list_profiles"))    { method_list_profiles(fd, id); return; }
     if (!strcmp(method, "install_profile"))  { method_install_profile(fd, id, line); return; }

@@ -113,6 +113,14 @@ not `isFirstParty`, is Device Hub's actual "Developer" filter: confirmed against
 whose Developer bucket held only 3 sideloaded test builds under one signer, not every third-party
 app the way "not Apple's own" would. `isAppClip` is `IsAppClip` verbatim, for the App Clips filter.
 
+### `get_app_icon` → `{"png_b64"}`
+Params `{"bundle_id"}`. `springboardservices`' classic `getIconPNGData` — neither `list_apps` nor
+`installation_proxy` hands out icon artwork; this is the service Xcode/iTunes have used for it
+since the earliest jailbreak-tool era. Request/reply, not streaming, like `install_profile` below.
+Not folded into `list_apps` itself: fetching all ~300+ icons eagerly on every refresh would be
+slow and bloat that response for icons never scrolled into view; call this per app, on demand,
+with a client-side cache.
+
 ### `list_processes` → `{"processTokens": [{"processIdentifier", "executableURL": {"relative"}}]}`
 ### `launch_app` → `{"processToken": {"processIdentifier", "executableURL", ...}}`
 Params `{"bundle_id"}`. Brings the app to the foreground, terminating a running instance first.

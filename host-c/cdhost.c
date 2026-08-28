@@ -401,6 +401,7 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
         "com.apple.crashreportcopymobile.shim.remote",
         "com.apple.crashreportmover.shim.remote",
         "com.apple.mobile.mobile_image_mounter.shim.remote",
+        "com.apple.springboardservices.shim.remote",
     };
     for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
         rp_xpc_obj svc, portv;
@@ -426,7 +427,8 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
                 else if (i == 9) out->afc_port = resolved;
                 else if (i == 10) out->crashcopy_port = resolved;
                 else if (i == 11) out->crashmover_port = resolved;
-                else out->mounter_port = resolved;
+                else if (i == 12) out->mounter_port = resolved;
+                else out->sbservices_port = resolved;
             }
         } else {
             printf("    %-46s MISSING\n", want[i]);
