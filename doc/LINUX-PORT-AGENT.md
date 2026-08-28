@@ -86,6 +86,29 @@ Windowed smoke test (needs a display / X or Wayland):
 ./client-c/rplay-view -f reference/captures/gop-reproducer.h265 -r 60
 ```
 
+## 3b. GUI: the mirror view ports; the app chrome does not
+
+Be clear about scope: **`rplay-view.c` is only the mirror window** (live video + click→tap /
+drag→swipe). It is *not* the macOS app's full interface. The macOS app (`app/rPlayHub/`,
+Swift/AppKit) adds a device **sidebar** and an **inspector with tab views** — Info, Apps, Console,
+Files, Profiles — plus a control strip and power actions. **All of that is AppKit: macOS-only, and
+it does not port.** A Linux build will not have those tab views for free.
+
+But none of it is business logic. Every panel is just a front-end over the engine's **JSON API on
+`127.0.0.1:9876`** (`app/api/PROTOCOL.md`): `list_apps` / `launch_app`, `syslog`, `list_dir` /
+`read_file`, `device_info`, `list_profiles`, `device_action`, `take_screenshot`, etc. The macOS
+GUI is one client of that API; the Python SDK (`rplayhub-sdk`) is another. So on Linux the "app" is
+a **design choice, not a translation of the Swift**:
+
+- **Minimal (recommended first):** ship `rplay-view` (mirror + input) and reach device management
+  through the JSON API / the SDK / a small CLI. Fastest, and it exercises the whole engine.
+- **Full GUI later:** build a native front-end in a Linux toolkit — Qt, GTK, Dear ImGui, or a local
+  web UI — that re-implements the sidebar + inspector tabs against the **same** 9876 API. This is
+  new UI code in whatever toolkit you pick; the tab views are redrawn, not ported. Because the API
+  already returns everything the tabs display, any toolkit works and none of the wire logic changes.
+
+Get the mirror + engine + API working first; decide the GUI framework after, as its own task.
+
 ## 4. Build the ENGINE
 
 `host-c/cdhost` is portable (libimobiledevice/libplist everywhere, lwIP userspace net, no
