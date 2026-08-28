@@ -1,0 +1,47 @@
+# Linux CI — keeps the port honest: the RVRA-patched ffmpeg must build, the client must decode
+# the committed reference capture clean, and the engine must compile against the modern
+# libimobiledevice stack. Both deps builds are cached, so a warm run is minutes, not tens.
+name: linux
+on:
+  push:
+    branches: [rendering-resolution-switch, main]
+  pull_request:
+
+jobs:
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config nasm libsdl2-dev
+      - name: cache RVRA ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: deps/ffmpeg
+          key: ffmpeg-rvra-${{ hashFiles('patches/ffmpeg-rvra.patch', 'scripts/build-ffmpeg-rvra.sh') }}
+      - run: ./scripts/build-ffmpeg-rvra.sh
+      - run: make -C client-c
+      - name: decode the committed reference capture (RVRA on, must be clean)
+        run: |
+          RPLAY_RVRA=1 ./client-c/rplay-view --check -f reference/captures/gop-reproducer.h265 2>&1 | tee check.out
+          grep -q "RVRA reference resampling enabled" check.out
+          grep -q "decoded 117" check.out
+          grep -q "decode errors 0" check.out
+
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config autoconf automake libtool
+          libssl-dev libcurl4-openssl-dev zlib1g-dev
+      - run: git clone --branch STABLE-2_2_1_RELEASE https://github.com/lwip-tcpip/lwip.git deps/lwip
+      - name: cache libimobiledevice stack
+        uses: actions/cache@v4
+        with:
+          path: deps/imd
+          key: imd-${{ hashFiles('scripts/build-imd-stack.sh') }}
+      - run: '[ -f deps/imd/lib/libimobiledevice-1.0.so ] || ./scripts/build-imd-stack.sh'
+      - run: make -C host-c IMD_PREFIX=$GITHUB_WORKSPACE/deps/imd
+      - name: smoke-run (no device, no usbmuxd — must start and say so, not crash)
+        run: |
+          timeout 10 ./host-c/cdhost | tee run.out
+          grep -q "usbmux" run.out

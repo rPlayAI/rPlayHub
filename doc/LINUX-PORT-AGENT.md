@@ -51,8 +51,16 @@ System packages:
 # client (rplay-view): SDL2 (+ system ffmpeg only for the no-RVRA fallback)
 apt install -y libsdl2-dev
 
-# engine (cdhost): the libimobiledevice stack + TLS, and usbmuxd to reach a USB phone
-apt install -y libimobiledevice-dev libplist-dev libusbmuxd-dev libssl-dev usbmuxd
+# engine (cdhost): TLS + build tools for the libimobiledevice stack, and usbmuxd for a USB phone
+apt install -y libssl-dev zlib1g-dev libcurl4-openssl-dev autoconf automake libtool usbmuxd
+```
+
+**Do NOT use the distro's libimobiledevice packages for the engine** — the code needs the modern
+stack (libplist >= 2.3 for the 4-arg `plist_from_memory`; libimobiledevice 1.4 also pulls in
+libimobiledevice-glue and libtatsu), and Ubuntu 22.04 ships libplist 2.2 / libimobiledevice 1.3.
+Build it from pinned source tags instead (the same versions homebrew ships on the Mac side):
+```bash
+./scripts/build-imd-stack.sh          # installs to deps/imd; gitignored, per-host like ffmpeg
 ```
 
 ## 3. Build the CLIENT first — it already exists; you're recompiling it
@@ -68,11 +76,15 @@ display. It's also **fully verifiable with captures, no iPhone needed**. Do this
 ```bash
 make -C client-c            # links deps/ffmpeg automatically when built (else warns + uses system ffmpeg)
 ```
-Verify against the committed reference captures (`reference/captures/`):
+Verify against the committed reference capture (`reference/captures/`). Note that only
+`gop-reproducer.h265` is committed — `reference/` is gitignored (screen recordings of a real
+phone are deliberately kept out of git), and `apple_video_REFERENCE.h265` (601 frames) lives
+only on the Mac; copy that one file over if you want the full check (copying an untracked
+capture is fine — the never-rsync rule is about the source tree).
 ```bash
-# RVRA-correct decode: 601/601 frames, RVRA engaged, zero decoder errors
-RPLAY_RVRA=1 ./client-c/rplay-view --check -f reference/captures/apple_video_REFERENCE.h265
-# expect: "... decoded 601 ... 0 decode errors ..." and "RVRA reference resampling enabled"
+# RVRA-correct decode: 117/117 frames, RVRA engaged, zero decoder errors
+RPLAY_RVRA=1 ./client-c/rplay-view --check -f reference/captures/gop-reproducer.h265
+# expect: "... decoded 117, decode errors 0 ..." and "RVRA reference resampling enabled"
 ```
 The pixel-correctness of RVRA was proven on macOS against a VideoToolbox ground truth
 (`scripts/compare-decodes.py`, worst frame 39 dB). ffmpeg's decoder is deterministic C, so the
@@ -112,17 +124,16 @@ Get the mirror + engine + API working first; decide the GUI framework after, as 
 ## 4. Build the ENGINE
 
 `host-c/cdhost` is portable (libimobiledevice/libplist everywhere, lwIP userspace net, no
-CoreFoundation). Expect **Makefile friction, not architectural problems** — the `host-c/Makefile`
-is macOS-tuned:
-- `IMD_PREFIX` defaults to `/opt/homebrew`; on Linux set `IMD_PREFIX=/usr` (or wherever apt put
-  the libs). The non-STATIC path already links `-limobiledevice-1.0 -lplist-2.0` dynamically.
+CoreFoundation) and **builds on Linux as of 2026-08-27**:
+- On Linux the Makefile defaults `OPENSSL=/usr` and bakes an rpath for a non-`/usr` `IMD_PREFIX`,
+  so the binary runs without `LD_LIBRARY_PATH`. Point `IMD_PREFIX` at the from-source stack (§2).
 - The `STATIC=1` path uses homebrew `.a` archives and macOS `ld` flags (`-dead_strip`, `-Wl,-S`);
   it is macOS-only. Build the **dynamic** target on Linux.
-- A few socket options are already `#ifdef`'d for Darwin (`SO_NOSIGPIPE`, `SO_TRAFFIC_CLASS`,
-  `SO_NET_SERVICE_TYPE`); add Linux guards if the compiler complains.
+- The kernel-utun tunnel path is `#ifdef __APPLE__` — on Linux the engine requires
+  `RPLAY_USERSPACE_NET=1` (lwIP) and says so if started without it.
 
 ```bash
-make -C host-c IMD_PREFIX=/usr           # dynamic build
+make -C host-c IMD_PREFIX=$PWD/deps/imd  # dynamic build against scripts/build-imd-stack.sh
 ```
 Testing the engine needs `usbmuxd` running and **a phone plugged into this Linux box** (or the
 remote path). The client needs neither. `RPLAY_USERSPACE_NET=1` runs the engine non-root over lwIP.
@@ -141,8 +152,9 @@ ffmpeg — rebuild `deps/ffmpeg` from the patch. Full story: `doc/RVRA-AND-PORTA
 1. Clone + fetch deps (§1–2).
 2. Build + verify the **client** against the captures (§3) — proves the hardest part (RVRA decode)
    works on Linux with no device.
-3. Add Linux CI (a GitHub Actions job that does §2–3 on `ubuntu-latest`) so the port can't silently
-   regress. This is the highest-value non-device task.
+3. Linux CI exists: `.github/workflows/linux.yml` builds the RVRA ffmpeg + client and checks the
+   capture decode, and builds the engine against the from-source stack, on every push. Keep it
+   green so the port can't silently regress.
 4. Build the **engine** dynamically (§4); fix Makefile/`#ifdef` friction; commit the fixes.
 5. Only then, with a phone on the Linux box + usbmuxd, exercise the live path.
 
