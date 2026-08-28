@@ -455,9 +455,11 @@ static void tab_apps()
      * dropdown, same trick tab_console uses for its own bottom filter bar. */
     float footer = ImGui::GetFrameHeightWithSpacing();
     ImGui::BeginChild("appslist", ImVec2(0, -footer), ImGuiChildFlags_None);
+    int shown = 0;
     if (ImGui::BeginTable("apps", 4,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
-                          ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
+                          ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp |
+                          ImGuiTableFlags_BordersInnerH)) {  /* the hairline Device Hub draws between rows */
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Name");
         ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 5 * ImGui::GetFontSize());
@@ -481,6 +483,7 @@ static void tab_apps()
             if (cat == 1 && !clip) continue; /* App Clips */
             if (cat == 2 && !fp) continue;   /* Default    = first-party */
             if (cat == 3 && !dev) continue;  /* Developer  = get-task-allow */
+            shown++;
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted(name.c_str());
             ImGui::TableNextColumn(); ImGui::TextUnformatted(a.value("version", "").c_str());
@@ -513,6 +516,20 @@ static void tab_apps()
             ImGui::PopID();
         }
         ImGui::EndTable();
+    }
+    if (shown == 0 && !g_apps.empty()) {
+        /* Device Hub's own empty state ("No App Clips" etc.), confirmed against the live app --
+         * rather than a silently blank list when a category filter matches nothing. */
+        static const char *cat_label[] = { "Apps", "App Clips", "Apps", "Apps" };
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + avail.y * 0.4f);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        const char *label = cat_label[g_apps_cat];
+        char text[32]; snprintf(text, sizeof text, "No %s", label);
+        float w = ImGui::CalcTextSize(text).x;
+        ImGui::SetCursorPosX((avail.x - w) * 0.5f);
+        ImGui::TextUnformatted(text);
+        ImGui::PopStyleColor();
     }
     ImGui::EndChild();
 

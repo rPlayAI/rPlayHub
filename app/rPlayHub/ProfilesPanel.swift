@@ -59,6 +59,9 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.dataSource = self
         table.delegate = self
         table.usesAlternatingRowBackgroundColors = true
+        // The thin grey line between rows Device Hub's list has.
+        table.gridStyleMask = .solidHorizontalGridLineMask
+        table.gridColor = .separatorColor
 
         let scroll = NSScrollView()
         scroll.documentView = table

@@ -32,7 +32,7 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
             // switch), so the old list is wrong, not stale. Refetch now if the tab is showing;
             // otherwise on its next reveal.
             apps = []
-            table.reloadData()
+            reloadTable()
             loaded = false
             status.stringValue = control == nil ? "Not connected to the engine." : ""
             if control != nil, !isHidden { refresh() }
@@ -51,6 +51,9 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
     private let uninstallButton = NSButton()
     private let filterField = NSSearchField()
     private let categoryPopup = NSPopUpButton()
+    /// "No App Clips" etc. -- what Device Hub shows in place of an empty list, confirmed against
+    /// the live app (its App Clips category, empty on this device, reads exactly this way).
+    private let placeholder = NSTextField(labelWithString: "")
 
     /// Apps passing the current filter text + category, in the order the table shows them.
     private var filtered: [App] {
@@ -89,6 +92,9 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         table.doubleAction = #selector(launch)
         table.target = self
         table.usesAlternatingRowBackgroundColors = true
+        // The thin grey line between rows Device Hub's list has.
+        table.gridStyleMask = .solidHorizontalGridLineMask
+        table.gridColor = .separatorColor
 
         let scroll = NSScrollView()
         scroll.documentView = table
@@ -134,6 +140,11 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         categoryPopup.addItem(withTitle: "App Clips")
         categoryPopup.addItem(withTitle: "Default")
         categoryPopup.addItem(withTitle: "Developer")
+        placeholder.font = .systemFont(ofSize: 12)
+        placeholder.textColor = .secondaryLabelColor
+        placeholder.alignment = .center
+        placeholder.isHidden = true
+
         categoryPopup.target = self
         categoryPopup.action = #selector(applyFilter)
 
@@ -150,13 +161,17 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         filterRow.orientation = .horizontal
         filterRow.spacing = 6
         filterField.setContentHuggingPriority(.init(1), for: .horizontal)   // field grows, popup fixed
-        let stack = NSStackView(views: [scroll, buttons, status, filterRow])
+        // The hairline Device Hub draws above its bottom Filter row.
+        let divider = NSBox()
+        divider.boxType = .separator
+        let stack = NSStackView(views: [scroll, buttons, status, divider, filterRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 10, right: 10)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+        addSubview(placeholder)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -166,6 +181,9 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
             filterRow.widthAnchor.constraint(equalTo: scroll.widthAnchor),
             buttons.widthAnchor.constraint(equalTo: scroll.widthAnchor),
             status.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            divider.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            placeholder.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
+            placeholder.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
         ])
         // The inspector holds its 260-point width at priority 700; anything in here that resists
         // compression at the default 750 would win and grow the pane across the window, pushing
@@ -204,7 +222,7 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
                 }.sorted { ($0.isFirstParty ? 1 : 0, $0.name.lowercased())
                          < ($1.isFirstParty ? 1 : 0, $1.name.lowercased()) }
                 self.loaded = true
-                self.table.reloadData()
+                self.reloadTable()
                 let third = self.apps.filter { !$0.isFirstParty }.count
                 self.status.stringValue = "\(self.apps.count) apps (\(third) installed by you). "
                     + "Double-click to launch."
@@ -220,8 +238,21 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         return r >= 0 && r < f.count ? f[r] : nil
     }
 
-    @objc private func applyFilter() { table.reloadData() }
-    func controlTextDidChange(_ obj: Notification) { table.reloadData() }
+    @objc private func applyFilter() { reloadTable() }
+    func controlTextDidChange(_ obj: Notification) { reloadTable() }
+
+    /// Reloads the list and shows Device Hub's "No {category}" placeholder when the filter
+    /// leaves nothing to show -- confirmed against the live app, whose App Clips category (empty
+    /// on the test device) reads exactly this way rather than a blank list.
+    private func reloadTable() {
+        table.reloadData()
+        let f = filtered
+        placeholder.isHidden = !f.isEmpty
+        guard f.isEmpty else { return }
+        let category = categoryPopup.indexOfSelectedItem >= 0
+            ? categoryPopup.itemTitle(at: categoryPopup.indexOfSelectedItem) : "Apps"
+        placeholder.stringValue = "No \(category == "All Apps" ? "Apps" : category)"
+    }
 
     /// Opens a file picker for an `.ipa`, stages it into /PublicStaging over AFC and installs it
     /// via installation_proxy. Device Hub's Apps `+`.
