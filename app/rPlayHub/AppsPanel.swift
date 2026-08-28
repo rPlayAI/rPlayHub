@@ -63,8 +63,8 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
                 return false
             }
             switch categoryPopup.indexOfSelectedItem {
-            case 2:  return a.isFirstParty       // Default    (Apple's own)
-            case 3:  return a.isAppClip          // App Clips
+            case 2:  return a.isAppClip          // App Clips
+            case 3:  return a.isFirstParty       // Default    (Apple's own)
             case 4:  return a.isDeveloper        // Developer  (get-task-allow, not just 3rd-party)
             default: return true                 // 0 = All Apps (index 1 is the separator)
             }
