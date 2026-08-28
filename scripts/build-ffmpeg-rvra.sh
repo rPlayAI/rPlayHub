@@ -21,7 +21,8 @@ TARBALL="deps/ffmpeg-$VERSION.tar.xz"
 if [[ ! -d deps/ffmpeg ]]; then
     if [[ ! -f "$TARBALL" ]]; then
         echo "fetching ffmpeg $VERSION"
-        curl -sL -o "$TARBALL" "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
+        mkdir -p deps    # gitignored; a fresh clone has no deps/ at all
+        curl -fsL -o "$TARBALL" "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
     fi
     tar xf "$TARBALL" -C deps
     mv "deps/ffmpeg-$VERSION" deps/ffmpeg
