@@ -11,9 +11,32 @@ are marked.
 
 ## Toolbar (top of window) — Device Hub
 
-Left→right: `+` (add device), a list icon, the sidebar-toggle, the device title
-(`iPhone13 / iOS 27.0`), a keyboard icon + a grid icon (paired, greyed when N/A), and a `»`
-expander at the far right. **rPlayHub has only a title + sidebar toggle — the rest are missing.**
+The ENTIRE toolbar, including the 3 Settings/Report/Info icons, lives in the window's title bar
+row itself — same height as the traffic lights, one continuous `NSToolbar`, not a separate row
+below the title. Confirmed left→right from a full-width title-bar screenshot (`screencapture`
++ `osascript`/System Events driving the live app):
+
+`[traffic lights]` `+` (add device) `≡` (list icon) `▢▏` (sidebar-toggle) — then the device
+title (`iPhone13` / `iOS 27.0`, two lines, left-aligned right after the sidebar toggle, sitting
+where the canvas begins — **not centered across the window** like a standard macOS title) —
+then a keyboard icon + a grid/frame icon (paired, greyed when N/A) — then a gap — then `»`
+(overflow expander) — then a gap — then, at the very trailing edge: the 3 icon tabs
+(Settings/Report/Info).
+
+**rPlayHub has**: sidebar-toggle + the 3 icon tabs, both correctly living in the title bar
+(`AppDelegate.buildToolbar`/`NSToolbarDelegate`, `InspectorPane.iconTabs` hosted in an
+`NSToolbarItem`). **Still missing**: `+`, the list icon, the keyboard/grid icon pair, the `»`
+expander, and positioning the device title left-aligned at the canvas start instead of centered.
+
+### Icon tabs also toggle the inspector shut — not a separate button
+
+Confirmed against the real Device Hub (clicked its Info icon twice): re-clicking whichever of
+Settings/Report/Info is already active **collapses the entire inspector pane** (canvas expands
+to fill the space, no icon shows highlighted while collapsed); clicking any icon while collapsed
+reopens it with that tab active. There is no dedicated separate show/hide button for the right
+panel — the same 3 icons double as that toggle. ✅ Done on macOS (`InspectorPane.iconTabChanged`,
+`.selectAny` tracking + hand-rolled exclusivity, `setHidden()` keeping the existing Device-menu
+"Show/Hide Controls" command in sync). **Not yet done on Linux.**
 
 ## Sidebar — Device Hub
 
@@ -78,12 +101,14 @@ Info/Apps/Profiles), or keep them as additional sub-tabs.
   do that deliberately, not as a side effect of a build check.
 - **macOS inspector restructure**: `InspectorPane.swift` now matches Device Hub's real two-level
   shape, confirmed live against the actual app (`screencapture` + `osascript`/System Events
-  driving it) — a top-right row of exactly 3 icon tabs (Settings/Report/Info, `.texturedRounded`,
-  trailing-pinned not centered), and under Info a second row of TEXT tabs: Info/Apps/Profiles
-  (Device Hub's real three) plus our folded-in Files/Console/Controls (Device Hub has no
-  equivalents for those three — product decision, see below). Settings and Report are
-  `ComingSoonPanel` stubs pending the engine methods item 2 below needs. Built and
-  screenshot-verified via `xcodebuild`.
+  driving it) — 3 icon tabs (Settings/Report/Info) living in the **window's title bar itself**
+  (moved there after an initial pass wrongly put them top-right of the content area — see the
+  Toolbar section above), and under Info a second row of TEXT tabs: Info/Apps/Profiles (Device
+  Hub's real three) plus our folded-in Files/Console/Controls (Device Hub has no equivalents for
+  those three — product decision, see below). Settings and Report are `ComingSoonPanel` stubs
+  pending the engine methods item 2 below needs. Re-clicking the active icon tab also collapses
+  the whole inspector (see Toolbar section — this is Device Hub's actual behavior, verified
+  against the live app). Built and screenshot-verified via `xcodebuild`.
   **Linux still has the OLD flat single-row-of-6 text tabs** (`rplay-gui.cpp`'s `BeginTabBar`
   with Info/Apps/Console/Files/Profiles/Diagnostics) — this app has no icon font anywhere, so
   its "3 icon tabs" row would need to fake icons somehow or just be 3 more text tabs; needs a
@@ -100,12 +125,18 @@ full width and shrinking the segment font, rather than by cutting any panel.
 
 ## Remaining, in rough priority
 
-1. **Linux inspector restructure** to match the macOS one above (needs the icon-tab design call).
+1. **Linux inspector restructure** to match the macOS one above (needs the icon-tab design call),
+   including the click-active-icon-to-collapse behavior.
 2. **Settings panel**: the device appearance/accessibility controls (needs engine methods to read/set
    them — a new capability).
 3. **Canvas View Screen button** + static screenshot preview.
-4. **Sidebar Unavailable section**; **toolbar** `+`/list/keyboard/grid/`»`.
+4. **Sidebar Unavailable section**; remaining toolbar items: `+`, list icon, keyboard/grid pair,
+   `»` expander, device title repositioned left-aligned at the canvas start (not centered) — see
+   the Toolbar section above for the exact catalogued order.
 5. App-type field in `list_apps` (for the App Clips category).
+6. Icon choices for Settings/Report/Info (currently `slider.horizontal.3`/`doc.text`/`info.circle`
+   SF Symbol guesses) — a designer will supply the real ones later; don't spend effort extracting
+   Device Hub's compiled `Assets.car` for this.
 
 ## Kickoff for the next session
 
