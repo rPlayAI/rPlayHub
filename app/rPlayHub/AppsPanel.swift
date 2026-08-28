@@ -369,7 +369,15 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
     func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let app = filtered[row]
+        // `filtered` is computed fresh each access, so it can legitimately be shorter here than
+        // it was when the table last asked numberOfRows(in:) -- a refresh() completion can
+        // reassign `apps` in between, and the row count NSTableView (or Accessibility walking
+        // it, which is what actually crashed this: System Events querying the whole window
+        // asked for a row a fraction of a second after a reload shrank the list) is working from
+        // goes stale. Bounds-check rather than force-subscript into a shorter array.
+        let f = filtered
+        guard row >= 0, row < f.count else { return nil }
+        let app = f[row]
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = tableView.makeView(withIdentifier: id, owner: nil) as? AppCell ?? AppCell(id)
         cell.name.stringValue = app.name

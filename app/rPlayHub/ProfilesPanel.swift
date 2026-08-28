@@ -249,20 +249,29 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
+    // `rows` can be reassigned to something shorter by a refresh() completion between when the
+    // table (or Accessibility walking it) last cached a row count and a call for a since-invalid
+    // index -- what actually crashed AppsPanel's equivalent (System Events querying the whole
+    // window a fraction of a second after a reload shrank the list). Bounds-checked throughout.
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        rows[row].isHeader ? 22 : 34
+        row >= 0 && row < rows.count && rows[row].isHeader ? 22 : 34
     }
 
-    func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool { rows[row].isHeader }
+    func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
+        row >= 0 && row < rows.count && rows[row].isHeader
+    }
 
     /// Only rows with a removable id (a real profile, not a header or "None" placeholder).
-    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows[row].id != nil }
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        row >= 0 && row < rows.count && rows[row].id != nil
+    }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         removeButton.isEnabled = selectedRow != nil
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard row >= 0, row < rows.count else { return nil }
         let r = rows[row]
         let id = NSUserInterfaceItemIdentifier(r.isHeader ? "header" : "cell")
         let cell = tableView.makeView(withIdentifier: id, owner: nil) as? Cell ?? Cell(id, header: r.isHeader)

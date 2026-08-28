@@ -240,6 +240,10 @@ final class FilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { entries.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        // See AppsPanel's identical guard: `entries` can be reassigned to something shorter by a
+        // refresh() completion between when the table (or Accessibility walking it) last cached
+        // a row count and this call for a since-invalid index.
+        guard row >= 0, row < entries.count else { return nil }
         let e = entries[row]
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = tableView.makeView(withIdentifier: id, owner: nil) as? Cell ?? Cell(id)
