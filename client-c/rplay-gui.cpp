@@ -422,7 +422,19 @@ static void tab_apps()
         refresh_apps();
     ImGui::SameLine();
     ImGui::SetNextItemWidth(220);
-    ImGui::InputTextWithHint("##filter", "filter", g_apps_filter, sizeof g_apps_filter);
+    ImGui::InputTextWithHint("##filter", "Filter", g_apps_filter, sizeof g_apps_filter);
+    ImGui::SameLine();
+    /* Category dropdown, laid out like Device Hub: All Apps, a separator, then the kinds. */
+    static int cat = 0;   /* 0 All, 1 App Clips, 2 Default, 3 Developer */
+    static const char *cat_names[] = { "All Apps", "App Clips", "Default", "Developer" };
+    ImGui::SetNextItemWidth(9 * ImGui::GetFontSize());
+    if (ImGui::BeginCombo("##cat", cat_names[cat])) {
+        if (ImGui::Selectable(cat_names[0], cat == 0)) cat = 0;
+        ImGui::Separator();
+        for (int i = 1; i < 4; i++)
+            if (ImGui::Selectable(cat_names[i], cat == i)) cat = i;
+        ImGui::EndCombo();
+    }
     if (g_apps_pending) { ImGui::SameLine(); ImGui::TextDisabled("loading..."); }
     ImGui::SameLine();
     ImGui::TextDisabled("%d apps", (int)g_apps.size());
@@ -444,6 +456,12 @@ static void tab_apps()
                 name.find(g_apps_filter) == std::string::npos &&
                 bundle.find(g_apps_filter) == std::string::npos)
                 continue;
+            bool fp = a.value("isFirstParty", false);
+            if (cat == 2 && !fp) continue;   /* Default   = first-party */
+            if (cat == 3 && fp) continue;    /* Developer = third-party */
+            /* cat == 1 (App Clips) needs the engine to expose the app TYPE (installation_proxy
+             * returns it); list_apps only surfaces isFirstParty today, so this is a no-op until
+             * the engine adds it. */
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted(name.c_str());
             ImGui::TableNextColumn(); ImGui::TextUnformatted(a.value("version", "").c_str());
@@ -464,6 +482,10 @@ static void tab_apps()
 
 static void tab_console()
 {
+    static char filter[128];
+    static bool autoscroll = true;
+
+    /* Top row: the actions only (Device Hub keeps the log filter at the bottom, not here). */
     bool on = g_slog_on;
     if (ImGui::Button(on ? "Stop" : "Start")) {
         if (on) {
@@ -476,16 +498,13 @@ static void tab_console()
         }
     }
     ImGui::SameLine();
-    static char filter[128];
-    ImGui::SetNextItemWidth(220);
-    ImGui::InputTextWithHint("##logfilter", "filter", filter, sizeof filter);
-    ImGui::SameLine();
-    static bool autoscroll = true;
     ImGui::Checkbox("Follow", &autoscroll);
     ImGui::SameLine();
     if (ImGui::Button("Clear")) { std::lock_guard<std::mutex> lk(g_slog_mu); g_slog.clear(); }
 
-    ImGui::BeginChild("log", ImVec2(0, 0), ImGuiChildFlags_Borders,
+    /* Log fills the tab except for one line reserved at the bottom for the filter bar. */
+    float footer = ImGui::GetFrameHeightWithSpacing();
+    ImGui::BeginChild("log", ImVec2(0, -footer), ImGuiChildFlags_Borders,
                       ImGuiWindowFlags_HorizontalScrollbar);
     {
         std::lock_guard<std::mutex> lk(g_slog_mu);
@@ -497,6 +516,10 @@ static void tab_console()
     if (autoscroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 40)
         ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
+
+    /* Bottom filter input — full width, where Device Hub places it. */
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##logfilter", "Filter", filter, sizeof filter);
 }
 
 static void tab_files()
