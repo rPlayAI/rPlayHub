@@ -30,6 +30,7 @@
  */
 #include <arpa/inet.h>
 #include <errno.h>
+#include <math.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <stdio.h>
@@ -291,10 +292,13 @@ typedef struct {
     SDL_Renderer *ren;
     SDL_Texture  *tex;
     int tex_w, tex_h;
+    SDL_Rect dst;                /* where the picture was last drawn, in renderer coords */
+    int out_w, out_h;            /* renderer output size at that draw */
 } display;
 
 static display g_disp;
 static int g_quit, g_headless;
+static const char *g_api_host;   /* 9876 control host for input; NULL when playing a file */
 
 static void show_frame(AVFrame *f, int active_w, int active_h)
 {
@@ -346,6 +350,9 @@ static void show_frame(AVFrame *f, int active_w, int active_h)
     SDL_RenderClear(d->ren);
     SDL_RenderCopy(d->ren, d->tex, &src, &dst);
     SDL_RenderPresent(d->ren);
+    d->dst = dst;
+    d->out_w = ww;
+    d->out_h = wh;
 }
 
 /* --dump: write every decoded frame as y4m (full range, full coded size), so the client's own
@@ -371,15 +378,103 @@ static void dump_frame(AVFrame *f, int active_w, int active_h)
     }
 }
 
+/* ------------------------------------------------------------------ input: click→tap, drag→swipe
+ *
+ * Mouse position maps through the drawn picture rect to 0..1 fractions of the device screen,
+ * which is exactly what the 9876 API's tap/swipe take -- no knowledge of the device resolution
+ * needed here. One lazy JSON-lines connection; on any failure it is dropped and the next event
+ * reconnects, so a restarted engine just works. */
+
+static int tcp_connect(const char *host, int port);
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0   /* macOS: no flag; a dead engine costs one write error, not the process */
+#endif
+
+static int g_api_fd = -1;
+
+static void api_send(const char *json)
+{
+    if (!g_api_host) return;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (g_api_fd < 0) {
+            g_api_fd = tcp_connect(g_api_host, 9876);
+            if (g_api_fd < 0) return;
+            struct timeval tv = { 2, 0 };
+            setsockopt(g_api_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        }
+        size_t len = strlen(json);
+        if (send(g_api_fd, json, len, MSG_NOSIGNAL) == (ssize_t)len) {
+            /* Drain the one-line reply so the socket does not fill; content is not needed. */
+            char reply[512];
+            ssize_t n;
+            while ((n = recv(g_api_fd, reply, sizeof reply, 0)) > 0)
+                if (memchr(reply, '\n', (size_t)n)) break;
+            return;
+        }
+        close(g_api_fd);
+        g_api_fd = -1;               /* engine restarted: reconnect once */
+    }
+}
+
+/* Window coords -> 0..1 fractions of the displayed picture. Returns 0 if outside it. */
+static int mouse_to_frac(int mx, int my, double *fx, double *fy)
+{
+    display *d = &g_disp;
+    if (!d->win || d->dst.w <= 0 || d->dst.h <= 0) return 0;
+    int win_w, win_h;
+    SDL_GetWindowSize(d->win, &win_w, &win_h);
+    if (win_w <= 0 || win_h <= 0) return 0;
+    /* Mouse events are in window coords; the picture rect is in renderer-output coords
+     * (they differ on high-DPI displays). */
+    double rx = (double)mx * d->out_w / win_w;
+    double ry = (double)my * d->out_h / win_h;
+    *fx = (rx - d->dst.x) / d->dst.w;
+    *fy = (ry - d->dst.y) / d->dst.h;
+    if (*fx < 0 || *fx > 1 || *fy < 0 || *fy > 1) return 0;
+    return 1;
+}
+
 static void poll_events(void)
 {
+    static double down_fx, down_fy;
+    static uint32_t down_at;
+    static int down = 0;
     if (!g_disp.win) return;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT ||
             (e.type == SDL_KEYDOWN &&
-             (e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_q)))
+             (e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_q))) {
             g_quit = 1;
+        } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+            down = mouse_to_frac(e.button.x, e.button.y, &down_fx, &down_fy);
+            down_at = e.button.timestamp;
+        } else if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT && down) {
+            down = 0;
+            double fx, fy;
+            if (!mouse_to_frac(e.button.x, e.button.y, &fx, &fy)) continue;
+            uint32_t held = e.button.timestamp - down_at;
+            char req[256];
+            /* Same rule as the macOS app's MirrorView: below 0.02 normalized distance a drag is
+             * really a tap; anything else replays as one swipe with the gesture's own duration. */
+            double dx = fx - down_fx, dy = fy - down_fy;
+            if (sqrt(dx * dx + dy * dy) < 0.02) {
+                snprintf(req, sizeof req,
+                         "{\"method\":\"tap\",\"params\":{\"fx\":%.4f,\"fy\":%.4f}}\n",
+                         down_fx, down_fy);
+            } else {
+                uint32_t dur = held < 60 ? 60 : held > 2000 ? 2000 : held;
+                snprintf(req, sizeof req,
+                         "{\"method\":\"swipe\",\"params\":{\"fx0\":%.4f,\"fy0\":%.4f,"
+                         "\"fx1\":%.4f,\"fy1\":%.4f,\"duration_ms\":%u}}\n",
+                         down_fx, down_fy, fx, fy, dur);
+            }
+            api_send(req);
+        } else if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_RIGHT) {
+            /* Borrowed from rplay's SDL viewer: right-click is the Home button. */
+            api_send("{\"method\":\"press_button\",\"params\":{\"button\":\"home\"}}\n");
+        }
     }
 }
 
@@ -453,6 +548,7 @@ int main(int argc, char **argv)
 
     if (codec_arg) g_h264 = !strcmp(codec_arg, "h264");
     else if (!file) g_h264 = stream_says_h264(host, 9876);
+    if (!file) g_api_host = host;   /* live view: clicks and drags go to the control API */
 
     /* Arm RVRA reference resampling in the linked libavcodec (a no-op on stock ffmpeg, which
      * just never reads the variable). Respect an explicit setting, so RPLAY_RVRA=0 disables. */
