@@ -433,9 +433,9 @@ static void tab_apps()
                           ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Name");
-        ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 70);
+        ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 5 * ImGui::GetFontSize());
         ImGui::TableSetupColumn("Bundle");
-        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, 70);
+        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, 5 * ImGui::GetFontSize());
         ImGui::TableHeadersRow();
         for (auto &a : g_apps) {
             std::string name = a.value("name", "");
@@ -517,8 +517,8 @@ static void tab_files()
                           ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Name");
-        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 90);
-        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, 60);
+        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 6 * ImGui::GetFontSize());
+        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, 4 * ImGui::GetFontSize());
         ImGui::TableHeadersRow();
 
         if (g_files_path != "/") {
