@@ -24,8 +24,10 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     var control: ControlClient? {
         didSet {
             guard control !== oldValue else { return }
-            rows = []
-            table.reloadData()
+            // Don't blank the list here -- same fix as AppsPanel. The daemon reconnects the
+            // SAME device often enough on its own that eagerly clearing blanked and repopulated
+            // this list every time, which reads as flicker rather than a refresh. refresh()'s
+            // eventual success replaces `rows` wholesale regardless.
             loaded = false
             status.stringValue = control == nil ? "Not connected to the engine." : ""
             if control != nil, !isHidden { refresh() }

@@ -28,11 +28,12 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
     var control: ControlClient? {
         didSet {
             guard control !== oldValue else { return }
-            // A new connection usually means a different device (the engine re-executes to
-            // switch), so the old list is wrong, not stale. Refetch now if the tab is showing;
-            // otherwise on its next reveal.
-            apps = []
-            reloadTable()
+            // Don't blank the list here. It used to (a new connection usually means a different
+            // device, so the old list reads as wrong rather than stale) -- but the daemon
+            // reconnects the SAME device often enough on its own that this blanked and
+            // repopulated the list every time, which reads as flicker rather than a refresh.
+            // refresh()'s eventual success replaces `apps` wholesale regardless of whether the
+            // device actually changed, so staying stale in between is the safer trade.
             loaded = false
             status.stringValue = control == nil ? "Not connected to the engine." : ""
             if control != nil, !isHidden { refresh() }
