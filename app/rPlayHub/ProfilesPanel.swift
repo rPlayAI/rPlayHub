@@ -66,18 +66,16 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         // WHOLE visible scroll area in stripes, independent of actual row count, which is what
         // showed as leftover "row shadows" when a list was empty.
         table.usesAlternatingRowBackgroundColors = false
-        // Same background as the Info/Apps/Profiles tab header row above it, not plain white --
-        // confirmed all of Device Hub's lists (Apps, Profiles, Files) share this one color.
-        // Transparent, so it shows whatever the inspector's own view already shows there rather
-        // than guessing at a specific system color.
-        table.backgroundColor = .clear
+        // Same background as the sidebar's device list and Device Hub's own lists -- sampled
+        // directly off the live Device Hub window (#E4E4E4), not white.
+        let rowBackground = NSColor(srgbRed: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255, alpha: 1)
+        table.backgroundColor = rowBackground
         // The thin grey line between rows Device Hub's list has.
-        table.gridStyleMask = .solidHorizontalGridLineMask
-        table.gridColor = .separatorColor
 
         let scroll = NSScrollView()
         scroll.documentView = table
-        scroll.drawsBackground = false
+        scroll.drawsBackground = true
+        scroll.backgroundColor = rowBackground
         scroll.hasVerticalScroller = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
@@ -300,6 +298,22 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             ])
             for v in [title, detail] {
                 v.setContentCompressionResistancePriority(.init(100), for: .horizontal)
+            }
+
+            // The thin grey line between rows Device Hub's list has -- drawn per-cell rather
+            // than via NSTableView.gridStyleMask, which paints grid lines across the table's
+            // ENTIRE bounds regardless of actual row count and showed as "row shadows" when a
+            // list was empty. Not on header rows -- they read as section titles, not entries.
+            if !header {
+                let divider = NSBox()
+                divider.boxType = .separator
+                divider.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(divider)
+                NSLayoutConstraint.activate([
+                    divider.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    divider.trailingAnchor.constraint(equalTo: trailingAnchor),
+                    divider.bottomAnchor.constraint(equalTo: bottomAnchor),
+                ])
             }
         }
 

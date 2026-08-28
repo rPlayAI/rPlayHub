@@ -100,17 +100,15 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         // showed as leftover "row shadows" (alternating reddish/white, no text) when a category
         // filter matched nothing.
         table.usesAlternatingRowBackgroundColors = false
-        // Same background as the Info/Apps/Profiles tab header row above it, not plain white --
-        // transparent, so it shows whatever the inspector's own view already shows there rather
-        // than guessing at a specific system color.
-        table.backgroundColor = .clear
-        // The thin grey line between rows Device Hub's list has.
-        table.gridStyleMask = .solidHorizontalGridLineMask
-        table.gridColor = .separatorColor
+        // Same background as the sidebar's device list and Device Hub's own Apps list --
+        // sampled directly off the live Device Hub window (#E4E4E4), not white.
+        let rowBackground = NSColor(srgbRed: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255, alpha: 1)
+        table.backgroundColor = rowBackground
 
         let scroll = NSScrollView()
         scroll.documentView = table
-        scroll.drawsBackground = false
+        scroll.drawsBackground = true
+        scroll.backgroundColor = rowBackground
         scroll.hasVerticalScroller = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
@@ -208,6 +206,10 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
             v.setContentHuggingPriority(.init(100), for: .horizontal)
         }
         status.stringValue = "Select a device to list its apps."
+        // control's didSet only fires on an actual change, so if the engine is never reachable
+        // at all it never runs -- leaving the placeholder at its build-time default (hidden)
+        // forever instead of showing "No Apps" like every other empty state does.
+        reloadTable()
     }
 
     /// Fetch on first reveal; the list is a few hundred entries over the tunnel.
@@ -404,6 +406,20 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
             for v in [name, detail] {
                 v.setContentCompressionResistancePriority(.init(100), for: .horizontal)
             }
+
+            // The thin grey line between rows Device Hub's list has -- drawn per-cell rather
+            // than via NSTableView.gridStyleMask, which paints grid lines across the table's
+            // ENTIRE bounds regardless of actual row count: that is what "row shadows" turned
+            // out to be when a category filter matched nothing (confirmed by disabling it).
+            let divider = NSBox()
+            divider.boxType = .separator
+            divider.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(divider)
+            NSLayoutConstraint.activate([
+                divider.leadingAnchor.constraint(equalTo: leadingAnchor),
+                divider.trailingAnchor.constraint(equalTo: trailingAnchor),
+                divider.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
         }
 
         required init?(coder: NSCoder) { nil }

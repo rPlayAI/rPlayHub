@@ -70,13 +70,15 @@ final class FilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         // sharing one background color with the tab header row above them.
         table.usesAlternatingRowBackgroundColors = false
         table.style = .plain
-        table.backgroundColor = .clear
-        table.gridStyleMask = .solidHorizontalGridLineMask
-        table.gridColor = .separatorColor
+        // Same background as the sidebar's device list and Device Hub's own lists -- sampled
+        // directly off the live Device Hub window (#E4E4E4), not white.
+        let rowBackground = NSColor(srgbRed: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255, alpha: 1)
+        table.backgroundColor = rowBackground
 
         let scroll = NSScrollView()
         scroll.documentView = table
-        scroll.drawsBackground = false
+        scroll.drawsBackground = true
+        scroll.backgroundColor = rowBackground
         scroll.hasVerticalScroller = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
@@ -288,6 +290,20 @@ final class FilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             for v in [title, detail, text, row] as [NSView] {
                 v.setContentCompressionResistancePriority(.init(100), for: .horizontal)
             }
+
+            // The thin grey line between rows Device Hub's list has -- drawn per-cell rather
+            // than via NSTableView.gridStyleMask, which paints grid lines across the table's
+            // ENTIRE bounds regardless of actual row count and showed as "row shadows" when a
+            // list was empty.
+            let divider = NSBox()
+            divider.boxType = .separator
+            divider.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(divider)
+            NSLayoutConstraint.activate([
+                divider.leadingAnchor.constraint(equalTo: leadingAnchor),
+                divider.trailingAnchor.constraint(equalTo: trailingAnchor),
+                divider.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
         }
 
         required init?(coder: NSCoder) { nil }
