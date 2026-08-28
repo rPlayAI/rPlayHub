@@ -53,6 +53,7 @@ struct media_session {
     media_nal_fn on_nal;
     void        *ctx;
     double       keyframe_every_s;
+    volatile int want_pli;        /* a viewer just joined: ask for an IDR now, not at the next tick */
     void       (*on_discontinuity)(void *ctx);
     void       (*on_active_rect)(void *ctx, uint32_t width, uint32_t height);
     uint16_t     last_ext_profile;
@@ -323,7 +324,8 @@ static void *rtcp_loop(void *arg)
         /* Periodic keyframes. The device sends exactly one IDR unprompted, so without asking,
          * any corruption stays on screen for the rest of the session. It answers a PLI once the
          * request carries the SSRC it registered. */
-        if (m->keyframe_every_s > 0 &&
+        if (m->want_pli) { m->want_pli = 0; last_pli = 0; }
+        if ((m->keyframe_every_s > 0 || !last_pli) &&
             t - last_pli >= (uint64_t)(m->keyframe_every_s * 1000)) {
             size_t n = rp_rtcp_build_pli(&m->rtcp, buf, sizeof buf);
             if (n) udp_send_peer(m, buf, n);
@@ -781,6 +783,13 @@ long media_sock_write(void *ctx, const void *buf, size_t len) { return tun_write
 long media_sock_read(void *ctx, void *buf, size_t len)  { return (long)recv(*(int *)ctx, buf, len, 0); }
 long media_sock_write(void *ctx, const void *buf, size_t len) { return (long)send(*(int *)ctx, buf, len, 0); }
 #endif
+
+void media_request_keyframe(media_session *m)
+{
+    /* A joining viewer starts black until the next IDR -- with a static screen that next IDR
+     * never comes on its own, so the fan-out asks for one the moment a viewer connects. */
+    if (m) m->want_pli = 1;
+}
 
 void media_stop(media_session *m)
 {

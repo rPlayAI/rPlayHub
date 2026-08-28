@@ -61,6 +61,10 @@ typedef void (*media_nal_fn)(void *ctx, const uint8_t *annexb, size_t len, int i
 media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *ctx);
 void media_stop(media_session *m);
 
+/* Ask the device for an IDR soon (a PLI on the next RTCP tick). Called when a viewer joins:
+ * with a static screen the stream carries nothing, and the newcomer would stay black forever. */
+void media_request_keyframe(media_session *m);
+
 /* Live counters for stream_info. */
 /* `bad` counts access units the depacketizer rejected: a declared NAL length that disagreed
  * with the bytes present, or a fragmented NAL too large to reassemble. Distinct from `lost`,

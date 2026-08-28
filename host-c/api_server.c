@@ -281,6 +281,13 @@ static void method_screenshot(int fd, long id)
     if (n >= 24 && !memcmp(bytes, "\x89PNG\r\n\x1a\n", 8)) {
         wpx = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
         hpx = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
+        /* The screenshot is the one place the TRUE screen size shows up (the video is coded with
+         * 16-pixel alignment padding, 1184x2576 for a 1170x2532 screen). Remember it: clients map
+         * clicks and crop the mirror against list_devices' screen_width/height. */
+        if (wpx > 0 && hpx > 0 && g_session) {
+            g_session->screen_w = wpx;
+            g_session->screen_h = hpx;
+        }
     }
 
     /* Heap, not static: two clients screenshotting at once would share one buffer. */
@@ -1916,6 +1923,7 @@ int api_serve(api_session *session)
                 printf("  viewer connected (%d total)\n", viewer_count + 1);
                 ensure_media();
                 viewer_add(fd);
+                media_request_keyframe(g_media);   /* a static screen would leave it black */
             }
         }
     }

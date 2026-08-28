@@ -32,7 +32,22 @@ CFLAGS += $(shell pkg-config --cflags sdl2)
 rplay-view: rplay-view.c
 	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
 
+# The full GUI (mirror pane + inspector tabs) — a SEPARATE app: Dear ImGui over the same SDL2
+# renderer. rplay-view stays the untouched minimal reference viewer; stream-core.c is the GUI's
+# verbatim copy of its stream engine (kept in sync by hand — the reference captures verify both).
+# Needs deps/imgui + deps/json (scripts/fetch-gui-deps.sh) and a C++ compiler; `make` alone still
+# builds only the minimal viewer.
+IMGUI_DIR ?= ../deps/imgui
+IMGUI_SRC := $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_draw.cpp $(IMGUI_DIR)/imgui_tables.cpp \
+             $(IMGUI_DIR)/imgui_widgets.cpp $(IMGUI_DIR)/backends/imgui_impl_sdl2.cpp \
+             $(IMGUI_DIR)/backends/imgui_impl_sdlrenderer2.cpp
+CXXFLAGS += $(CFLAGS) -std=c++17 -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -I../deps/json
+
+rplay-gui: rplay-gui.cpp stream-core.c stream-core.h
+	$(CC) $(CFLAGS) -c stream-core.c -o stream-core.o
+	$(CXX) $(CXXFLAGS) -o $@ rplay-gui.cpp stream-core.o $(IMGUI_SRC) $(LIBS)
+
 clean:
-	rm -f rplay-view
+	rm -f rplay-view rplay-gui stream-core.o
 
 .PHONY: clean
