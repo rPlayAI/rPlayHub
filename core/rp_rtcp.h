@@ -34,6 +34,10 @@ typedef struct {
 
     uint32_t highest_seq;
     uint32_t cycles;
+    uint32_t base_seq;      /* the first sequence number seen: the device starts at a random seq,
+                             * and an RR whose expected-count ignores that claims tens of thousands
+                             * of lost packets -- which the device rejects, and 20 s later it stops
+                             * sending (RTCPTimeoutInterval) */
     uint64_t received;
     uint64_t expected_prior, received_prior;
 
@@ -60,6 +64,7 @@ void rp_rtcp_note_rtcp(rp_rtcp_session *s, const uint8_t *pkt, size_t len, uint6
 /* Build packets. Each returns the length written, or 0 if there is nothing to send yet (which is
  * the case until we know their SSRC). */
 size_t rp_rtcp_build_rr(rp_rtcp_session *s, uint64_t now_ms, uint8_t *out, size_t cap);
+size_t rp_rtcp_build_sr(rp_rtcp_session *s, uint8_t *out, size_t cap);
 size_t rp_rtcp_build_pli(rp_rtcp_session *s, uint8_t *out, size_t cap);
 size_t rp_rtcp_build_fir(rp_rtcp_session *s, uint8_t *out, size_t cap);
 

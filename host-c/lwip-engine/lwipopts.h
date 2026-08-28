@@ -47,7 +47,7 @@
 #define MEMP_NUM_TCP_PCB            32
 #define MEMP_NUM_TCP_SEG           (8 * TCP_SND_QUEUELEN)
 #define MEMP_NUM_NETCONN            32
-#define PBUF_POOL_SIZE              1024
+#define PBUF_POOL_SIZE              4096  /* every packet in flight (tcpip mbox + recvmbox) holds one */
 #define PBUF_POOL_BUFSIZE           1600
 #define LWIP_IPV6_REASS            0
 #define IPV6_FRAG_COPYHEADER        1
@@ -61,7 +61,9 @@
 #define LWIP_SO_RCVTIMEO            1
 
 #define MEM_ALIGNMENT               8
-#define LWIP_STATS                  0
+/* Stats stay on: they are how RPLAY_NET_DEBUG=1 accounts for every dropped packet (pbuf pool,
+ * tcpip mbox, UDP layer), and the counters are cheap. */
+#define LWIP_STATS                  1
 #define LWIP_NETIF_STATUS_CALLBACK  0
 #define LWIP_NETIF_LINK_CALLBACK    0
 #define LWIP_DEBUG                  0
@@ -69,10 +71,21 @@
 /* pthread port needs these thread settings. */
 #define TCPIP_THREAD_STACKSIZE      65536
 #define TCPIP_THREAD_PRIO           1
-#define TCPIP_MBOX_SIZE             1024  /* tcpip_input tryposts here; full = silent drop, so > one video burst */
+#define TCPIP_MBOX_SIZE             4096  /* tcpip_input tryposts here; full = silent drop. USB delivers a
+                                           * keyframe as one multi-thousand-packet burst faster than the
+                                           * tcpip thread drains, so size for the whole burst (measured:
+                                           * 1024 still dropped ~9% on live video) */
+#define SYS_MBOX_SIZE               4096  /* the vendored unix-port sys_arch honors this; upstream
+                                           * hard-codes 128 and ignores every per-mbox size above */
+#define MEMP_NUM_TCPIP_MSG_INPKT    4096  /* one per packet queued to the tcpip thread; the default
+                                           * (8!) made tcpip_input fail under any burst regardless
+                                           * of how deep the mailbox itself was */
 #define DEFAULT_THREAD_STACKSIZE    65536
 #define DEFAULT_RAW_RECVMBOX_SIZE   64
-#define DEFAULT_UDP_RECVMBOX_SIZE   1024  /* the RTP socket's queue; a burst must fit while recv_loop drains */
+#define DEFAULT_UDP_RECVMBOX_SIZE   4096  /* the RTP socket's queue; a burst must fit while recv_loop drains */
+#define MEMP_NUM_NETBUF             4096  /* one netbuf per queued datagram; the DEFAULT (2!) capped the
+                                           * recvmbox at two packets in flight and silently dropped the
+                                           * rest -- measured as chronic ~67% RTP loss on live video */
 #define DEFAULT_TCP_RECVMBOX_SIZE   64
 #define DEFAULT_ACCEPTMBOX_SIZE     64
 

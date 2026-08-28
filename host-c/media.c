@@ -25,7 +25,13 @@
 #define CLIENT_SUPPORTED_FEATURES 140
 #define ACCESS_NETWORK_TYPE        1
 #define TRANSPORT_PROTOCOL_TYPE    2
-#define STREAM_TIMEOUT_S         600
+/* Apple's own value, byte-for-byte. NOT a free parameter: the device echoes it back as
+ * RTCPTimeoutInterval, and an oversized value (600 was ours for a while) makes it fall back to a
+ * NON-RESETTABLE 20 s fuse -- the stream then dies at exactly 20 s no matter what RTCP arrives.
+ * With a sane value the timer resets on our 1/s Receiver Reports and the session lives.
+ * Measured on iPhone14,2 / iOS 27.0: timeout=600 -> dead at 20.0 s every run; timeout=40 ->
+ * outlives both marks. RPLAY_STREAM_TIMEOUT_S overrides for experiments. */
+#define STREAM_TIMEOUT_S         20
 
 struct media_session {
     int      udp;                 /* RTP and RTCP share this socket */
@@ -133,8 +139,15 @@ static void *recv_loop(void *arg)
 {
     media_session *m = arg;
     uint8_t pkt[65536];
+    /* RPLAY_NET_DEBUG=1: drain-rate accounting. The recvmbox overflows silently when this loop
+     * is the bottleneck, so print consumed pkts/s and where the time went every 2 s. */
+    int dbg = getenv("RPLAY_NET_DEBUG") && getenv("RPLAY_NET_DEBUG")[0] == '1';
+    uint64_t dbg_last = 0, dbg_pkts = 0, dbg_recv_us = 0, dbg_work_us = 0;
     while (!m->stop) {
         ssize_t n;
+        uint64_t t_in = 0;
+        if (dbg) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+                   t_in = (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)ts.tv_nsec / 1000; }
 #ifdef HAVE_USERNET
         if (usernet_owns(m->udp)) {
             usernet_addr from;
@@ -159,6 +172,21 @@ static void *recv_loop(void *arg)
         }
         m->packets++;
         m->bytes += (uint64_t)n;
+        if (dbg) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            uint64_t t_got = (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)ts.tv_nsec / 1000;
+            dbg_recv_us += t_got - t_in;      /* time blocked waiting in recvfrom */
+            dbg_pkts++;
+            if (!dbg_last) dbg_last = t_got;
+            if (t_got - dbg_last >= 2000000ull) {
+                fprintf(stderr, "  [recv_loop] %.0f pkt/s, recv-wait %.0f%%, work %.0f%%\n",
+                        dbg_pkts * 1e6 / (double)(t_got - dbg_last),
+                        100.0 * (double)dbg_recv_us / (double)(t_got - dbg_last),
+                        100.0 * (double)dbg_work_us / (double)(t_got - dbg_last));
+                dbg_last = t_got; dbg_pkts = 0; dbg_recv_us = 0; dbg_work_us = 0;
+            }
+            t_in = t_got;                     /* from here on we time the work */
+        }
 
         /* Optional: hand a verbatim copy of every RTP packet to a second, independent receiver.
          * RPLAY_RTP_FORWARD=<port> mirrors the stream to 127.0.0.1:<port>, where ffmpeg or
@@ -177,8 +205,11 @@ static void *recv_loop(void *arg)
             sendto(m->fwd_fd, pkt, (size_t)n, 0,
                    (struct sockaddr *)&m->fwd_addr, sizeof m->fwd_addr);
 
+#define DBG_WORK_DONE() do { if (dbg) { struct timespec ts_; clock_gettime(CLOCK_MONOTONIC, &ts_); \
+        dbg_work_us += (uint64_t)ts_.tv_sec * 1000000ull + (uint64_t)ts_.tv_nsec / 1000 - t_in; } } while (0)
         if (rp_rtp_is_rtcp(pkt, (size_t)n)) {
             rp_rtcp_note_rtcp(&m->rtcp, pkt, (size_t)n, now_ms());
+            DBG_WORK_DONE();
             continue;
         }
         rp_rtcp_note_rtp(&m->rtcp, pkt, (size_t)n, now_ms());
@@ -199,6 +230,7 @@ static void *recv_loop(void *arg)
              * reorder queue the packet that completes a frame is not necessarily the one that
              * just arrived, which is precisely the case the old path got wrong. */
             rp_ra_feed(&m->ra, pkt, (size_t)n, now_ms() * 1000ull);
+            DBG_WORK_DONE();
             continue;
         }
 
@@ -228,7 +260,9 @@ static void *recv_loop(void *arg)
             }
             m->lost_at_frame_start = m->rtp.lost;
         }
+        DBG_WORK_DONE();
     }
+#undef DBG_WORK_DONE
     return NULL;
 }
 
@@ -256,9 +290,13 @@ static void *rtcp_loop(void *arg)
         uint8_t buf[64];
 
         /* Once a second, because the device's own answer asks for exactly that and stops sending
-         * video after twenty seconds without it. */
+         * video after twenty seconds without it. The SR is what actually feeds its liveness
+         * timer (see rp_rtcp_build_sr); the RR carries the loss/jitter story. Device Hub sends
+         * both, each compounded with SDES. */
         if (t - last_rr >= 1000) {
-            size_t n = rp_rtcp_build_rr(&m->rtcp, t, buf, sizeof buf);
+            size_t n = rp_rtcp_build_sr(&m->rtcp, buf, sizeof buf);
+            if (n) udp_send_peer(m, buf, n);
+            n = rp_rtcp_build_rr(&m->rtcp, t, buf, sizeof buf);
             if (n) udp_send_peer(m, buf, n);
             last_rr = t;
         }
@@ -298,6 +336,58 @@ static void *rtcp_loop(void *arg)
 /* ------------------------------------------------------------------ negotiation */
 
 static int connect_service(media_session *m, const char *addr, long port);
+
+/* Debug: print every key/scalar of an XPC object (RPLAY_NET_DEBUG). The negotiation answer is
+ * where the device states its ports and intervals, and it has never been looked at. */
+static void dump_xpc(const rp_xpc_obj *o, int depth)
+{
+    char pad[32];
+    snprintf(pad, sizeof pad, "%*s", depth * 2 + 2, "");
+    rp_xpc_type t = rp_xpc_obj_type(o);
+    if (t == RP_XPC_DICT) {
+        size_t cur = 0; const char *k; rp_xpc_obj v;
+        while (rp_xpc_dict_next(o, &cur, &k, &v) == 0) {
+            rp_xpc_type vt = rp_xpc_obj_type(&v);
+            if (vt == RP_XPC_DICT || vt == RP_XPC_ARRAY) {
+                fprintf(stderr, "%s%s:\n", pad, k);
+                dump_xpc(&v, depth + 1);
+            } else {
+                uint64_t u; const char *s; bool b;
+                if (rp_xpc_get_uint64(&v, &u) == 0) fprintf(stderr, "%s%s = %llu\n", pad, k, (unsigned long long)u);
+                else if (rp_xpc_get_string(&v, &s) == 0) fprintf(stderr, "%s%s = \"%s\"\n", pad, k, s);
+                else if (rp_xpc_get_bool(&v, &b) == 0) fprintf(stderr, "%s%s = %s\n", pad, k, b ? "true" : "false");
+                else if (vt == RP_XPC_DOUBLE && v.size >= 12) {
+                    double d; memcpy(&d, v.data + 4, 8);
+                    fprintf(stderr, "%s%s = %g\n", pad, k, d);
+                }
+                else fprintf(stderr, "%s%s (type 0x%x, %zu B)\n", pad, k, (unsigned)vt, v.size);
+            }
+        }
+    } else if (t == RP_XPC_ARRAY) {
+        size_t cur = 0; rp_xpc_obj v; int i = 0;
+        while (rp_xpc_array_next(o, &cur, &v) == 0) {
+            fprintf(stderr, "%s[%d]:\n", pad, i++);
+            dump_xpc(&v, depth + 1);
+        }
+    }
+}
+
+/* Debug: after negotiation nothing reads the display-service channel, so anything the device
+ * sends there -- HTTP/2 PINGs, GOAWAY, RemoteXPC keepalives -- vanishes into the receive buffer.
+ * Watch it and say what arrives. */
+static void *svc_watch_loop(void *arg)
+{
+    media_session *m = arg;
+    uint8_t buf[512];
+    for (;;) {
+        long n = tun_read(m->svc, buf, sizeof buf);
+        if (n == 0) { fprintf(stderr, "  [svc] channel EOF\n"); return NULL; }
+        if (n < 0) { continue; }   /* recv timeout: keep watching */
+        fprintf(stderr, "  [svc %ld B] ", n);
+        for (long i = 0; i < n && i < 48; i++) fprintf(stderr, "%02x", buf[i]);
+        fprintf(stderr, "\n");
+    }
+}
 
 static void frame_size_note(media_session *m)
 {
@@ -578,7 +668,18 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     rp_xpc_set_string(&w, "receiverIP", cfg->our_addr);
     rp_xpc_set_uint64(&w, "receiverPort", (uint64_t)recv_port);
     rp_xpc_set_string(&w, "senderIP", cfg->device_addr);
-    rp_xpc_set_uint64(&w, "timeout", STREAM_TIMEOUT_S);
+    /* RPLAY_STREAM_TIMEOUT_S overrides the offered timeout (default 600). The device echoes this
+     * back as RTCPTimeoutInterval; varying it tells apart "our RTCP never resets that timer"
+     * (death follows the value) from "a separate fixed lease" (death stays at 20 s). */
+    {
+        uint64_t tmo = STREAM_TIMEOUT_S;
+        const char *ts = getenv("RPLAY_STREAM_TIMEOUT_S");
+        if (ts && ts[0]) {
+            long v = strtol(ts, NULL, 10);
+            if (v > 0) tmo = (uint64_t)v;
+        }
+        rp_xpc_set_uint64(&w, "timeout", tmo);
+    }
     rp_xpc_set_string(&w, "type", "video");
     rp_xpc_dict_end(&w);
     if (w.overflow) goto fail;
@@ -590,6 +691,12 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
                      input, w.len, ua, ub, &out, NULL) != 0) {
         fprintf(stderr, "  startmediastream returned no output\n");
         goto fail;
+    }
+    if (getenv("RPLAY_NET_DEBUG") && getenv("RPLAY_NET_DEBUG")[0] == '1') {
+        dump_xpc(&out, 0);   /* the device's answer names ports and intervals we currently ignore */
+        pthread_t dbg_t;
+        pthread_create(&dbg_t, NULL, svc_watch_loop, m);   /* watch what the device says post-negotiation */
+        pthread_detach(dbg_t);
     }
     printf("  media stream negotiated, receiving on port %d\n", recv_port);
     m->negotiated = 1;

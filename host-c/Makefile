@@ -104,14 +104,16 @@ LWIP_SRC  := $(LWIP_DIR)/src/core/init.c $(LWIP_DIR)/src/core/def.c $(LWIP_DIR)/
              $(LWIP_DIR)/src/core/ip.c $(LWIP_DIR)/src/core/mem.c $(LWIP_DIR)/src/core/memp.c \
              $(LWIP_DIR)/src/core/netif.c $(LWIP_DIR)/src/core/pbuf.c $(LWIP_DIR)/src/core/tcp.c \
              $(LWIP_DIR)/src/core/tcp_in.c $(LWIP_DIR)/src/core/tcp_out.c $(LWIP_DIR)/src/core/timeouts.c \
-             $(LWIP_DIR)/src/core/udp.c $(LWIP_DIR)/src/core/sys.c \
+             $(LWIP_DIR)/src/core/udp.c $(LWIP_DIR)/src/core/sys.c $(LWIP_DIR)/src/core/stats.c \
              $(LWIP_DIR)/src/core/ipv6/ip6.c $(LWIP_DIR)/src/core/ipv6/ip6_addr.c \
              $(LWIP_DIR)/src/core/ipv6/icmp6.c $(LWIP_DIR)/src/core/ipv6/nd6.c \
              $(LWIP_DIR)/src/core/ipv6/ip6_frag.c $(LWIP_DIR)/src/core/ipv6/inet6.c \
              $(LWIP_DIR)/src/core/ipv6/mld6.c \
              $(LWIP_DIR)/src/api/api_lib.c $(LWIP_DIR)/src/api/api_msg.c $(LWIP_DIR)/src/api/netbuf.c \
              $(LWIP_DIR)/src/api/sockets.c $(LWIP_DIR)/src/api/tcpip.c $(LWIP_DIR)/src/api/err.c \
-             $(LWIP_PORT)/sys_arch.c
+             lwip-engine/sys_arch.c
+             # sys_arch.c is the unix port's file vendored into lwip-engine/ so mailbox sizing
+             # actually applies -- see the note at its SYS_MBOX_SIZE definition.
 
 CORE_DIR := ../core
 CORE_SRC := $(CORE_DIR)/rp_xpc.c $(CORE_DIR)/rp_http2.c $(CORE_DIR)/rp_remotexpc.c \

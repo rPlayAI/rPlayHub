@@ -1,9 +1,11 @@
 #include "rp_rtcp.h"
 
 #include <string.h>
+#include <sys/time.h>
 
 #define PT_SR   200
 #define PT_RR   201
+#define PT_SDES 202
 #define PT_PSFB 206
 #define PT_APP  204
 #define FMT_PLI 1
@@ -25,6 +27,7 @@ void rp_rtcp_note_rtp(rp_rtcp_session *s, const uint8_t *pkt, size_t len, uint64
 {
     if (len < 12) return;
     uint16_t seq = (uint16_t)((pkt[2] << 8) | pkt[3]);
+    if (!s->received) s->base_seq = seq;
     if (s->received && seq < (uint16_t)(s->highest_seq & 0xFFFF) - 0x4000) s->cycles++;
     s->highest_seq = (s->cycles << 16) | seq;
     s->their_ssrc = ((uint32_t)pkt[8] << 24) | ((uint32_t)pkt[9] << 16) |
@@ -50,11 +53,46 @@ void rp_rtcp_note_rtcp(rp_rtcp_session *s, const uint8_t *pkt, size_t len, uint6
     s->last_sr_at_ms = now_ms;
 }
 
+/* SDES with a CNAME, appended to SR and RR alike: a compound that starts with a report and
+ * carries a CNAME is what a standards RTCP stack counts as a valid packet from us. */
+static size_t append_sdes(rp_rtcp_session *s, uint8_t *sd)
+{
+    sd[0] = 0x81;                       /* version 2, one chunk */
+    sd[1] = PT_SDES;
+    sd[2] = 0; sd[3] = 3;               /* 16 bytes = 4 words - 1 */
+    put32(sd + 4, s->ssrc);
+    sd[8] = 1; sd[9] = 5;               /* CNAME, 5 bytes */
+    memcpy(sd + 10, "rplay", 5);
+    sd[15] = 0;                         /* END + pad to a word boundary */
+    return 16;
+}
+
+size_t rp_rtcp_build_sr(rp_rtcp_session *s, uint8_t *out, size_t cap)
+{
+    /* We originate no RTP, but the device's liveness timer is fed by Sender Reports -- Device
+     * Hub sends MORE SRs than RRs (28 vs 15 over 20 s in the reference capture), and with our
+     * RR/APP/PSFB all demonstrably received (PLI produces keyframes) the stream still died at
+     * exactly RTCPTimeoutInterval until an SR was added. */
+    if (cap < 28 + 16) return 0;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    out[0] = 0x80;                      /* version 2, no report blocks */
+    out[1] = PT_SR;
+    out[2] = 0; out[3] = 6;             /* 28 bytes = 7 words - 1 */
+    put32(out + 4, s->ssrc);
+    put32(out + 8, (uint32_t)((uint64_t)tv.tv_sec + 2208988800ull));   /* NTP seconds */
+    put32(out + 12, (uint32_t)((double)tv.tv_usec * 4294.967296));     /* NTP fraction */
+    put32(out + 16, s->last_rtp_ts);    /* loosely on the media clock; we send no RTP */
+    put32(out + 20, 0);                 /* sender packet count */
+    put32(out + 24, 0);                 /* sender octet count */
+    return 28 + append_sdes(s, out + 28);
+}
+
 size_t rp_rtcp_build_rr(rp_rtcp_session *s, uint64_t now_ms, uint8_t *out, size_t cap)
 {
     if (!s->their_ssrc || cap < 32) return 0;
 
-    uint32_t expected = s->highest_seq + 1;
+    uint32_t expected = s->highest_seq - s->base_seq + 1;
     uint32_t lost = expected > s->received ? (uint32_t)(expected - s->received) : 0;
     uint32_t expected_interval = expected - (uint32_t)s->expected_prior;
     uint32_t received_interval = (uint32_t)(s->received - s->received_prior);
@@ -80,8 +118,10 @@ size_t rp_rtcp_build_rr(rp_rtcp_session *s, uint64_t now_ms, uint8_t *out, size_
     put32(out + 20, 0);                 /* jitter: not computed */
     put32(out + 24, s->last_sr_middle);
     put32(out + 28, dlsr);
+
+    if (cap < 32 + 16) { s->rr_sent++; return 32; }
     s->rr_sent++;
-    return 32;
+    return 32 + append_sdes(s, out + 32);   /* SDES on every report, like Device Hub */
 }
 
 size_t rp_rtcp_build_pli(rp_rtcp_session *s, uint8_t *out, size_t cap)

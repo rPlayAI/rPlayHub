@@ -13,23 +13,78 @@
 #include "lwip/ip6.h"
 #include "lwip/pbuf.h"
 #include "lwip/inet.h"
+#include "lwip/stats.h"
+#include <stdlib.h>
+#include <time.h>
 
 static void *g_conn;             /* the idevice_connection_t */
 static struct netif g_netif;
 
-/* lwIP wants to send an IPv6 packet: write its raw bytes to the tunnel connection. Called on the
- * tcpip thread. pbufs may be chained. */
+/* Outbound queue between the tcpip thread and the tunnel. imd_conn_send blocks on the tunnel's
+ * kernel socket, and while the device floods video at us its reads of our direction lag -- a
+ * blocking write here therefore stalls the whole tcpip thread, and inbound packets are dropped at
+ * tcpip_input while it sleeps (measured: ~9% inbound loss on live video came from exactly this).
+ * So tun_output only copies + enqueues, and a dedicated writer thread owns the blocking send. */
+#define OUTQ_SLOTS 512
+static struct { uint8_t *buf; uint16_t len; } g_outq[OUTQ_SLOTS];
+static unsigned g_outq_head, g_outq_tail;      /* tail==head empty; writer owns head, tcpip owns tail */
+static unsigned long g_outq_dropped;
+static unsigned long g_outq_written;           /* packets actually sent down the tunnel */
+static pthread_mutex_t g_outq_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_outq_cv = PTHREAD_COND_INITIALIZER;
+
+static void *writer_thread(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&g_outq_mu);
+        while (g_outq_tail == g_outq_head) pthread_cond_wait(&g_outq_cv, &g_outq_mu);
+        uint8_t *buf = g_outq[g_outq_head % OUTQ_SLOTS].buf;
+        uint16_t len = g_outq[g_outq_head % OUTQ_SLOTS].len;
+        g_outq_head++;
+        pthread_mutex_unlock(&g_outq_mu);
+        imd_conn_send(g_conn, buf, len);   /* a failed send surfaces as reader EOF; nothing to do here */
+        g_outq_written++;
+        free(buf);
+    }
+    return NULL;
+}
+
+/* lwIP wants to send an IPv6 packet: copy it onto the outbound queue. Called on the tcpip thread,
+ * which must never block. pbufs may be chained. */
 static err_t tun_output(struct netif *nif, struct pbuf *p, const ip6_addr_t *ip)
 {
     (void)nif; (void)ip;
-    /* Coalesce the chain into one contiguous packet for a single framed write. */
-    uint8_t stackbuf[2048];
-    uint8_t *buf = p->tot_len <= sizeof stackbuf ? stackbuf : malloc(p->tot_len);
+    uint8_t *buf = malloc(p->tot_len);
     if (!buf) return ERR_MEM;
     pbuf_copy_partial(p, buf, p->tot_len, 0);
-    int rc = imd_conn_send(g_conn, buf, p->tot_len);
-    if (buf != stackbuf) free(buf);
-    return rc == 0 ? ERR_OK : ERR_IF;
+    /* RPLAY_NET_DEBUG: hexdump the first outbound RTCP-sized UDP packets exactly as the device
+     * will see them -- src/dst/ports/checksum and payload, to compare against the known-good
+     * kernel path. */
+    static int dump_left = -1;
+    if (dump_left == -1)
+        dump_left = (getenv("RPLAY_NET_DEBUG") && getenv("RPLAY_NET_DEBUG")[0] == '1') ? 24 : 0;
+    if (dump_left > 0 && p->tot_len >= 48 && p->tot_len <= 120 && buf[6] == 17) {  /* UDP, small */
+        dump_left--;
+        fprintf(stderr, "  [tun_out %u B] ", (unsigned)p->tot_len);
+        for (unsigned i = 0; i < p->tot_len && i < 96; i++) fprintf(stderr, "%02x", buf[i]);
+        fprintf(stderr, "\n");
+    }
+    pthread_mutex_lock(&g_outq_mu);
+    if (g_outq_tail - g_outq_head >= OUTQ_SLOTS) {
+        /* Full: the tunnel is not draining. Dropping here is the same decision the kernel makes
+         * when a socket sendq is full -- TCP retransmits, RTCP repeats next interval. */
+        g_outq_dropped++;
+        pthread_mutex_unlock(&g_outq_mu);
+        free(buf);
+        return ERR_MEM;
+    }
+    g_outq[g_outq_tail % OUTQ_SLOTS].buf = buf;
+    g_outq[g_outq_tail % OUTQ_SLOTS].len = p->tot_len;
+    g_outq_tail++;
+    pthread_cond_signal(&g_outq_cv);
+    pthread_mutex_unlock(&g_outq_mu);
+    return ERR_OK;
 }
 
 static err_t tun_netif_init(struct netif *nif)
@@ -47,15 +102,37 @@ static err_t tun_netif_init(struct netif *nif)
 static void *reader_thread(void *arg)
 {
     (void)arg;
+    /* RPLAY_NET_DEBUG=1: account for every packet between the tunnel and the sockets, because a
+     * drop here is silent and looks identical to device-side loss from the RTP seq numbers. */
+    int dbg = getenv("RPLAY_NET_DEBUG") && getenv("RPLAY_NET_DEBUG")[0] == '1';
+    unsigned long rd = 0, drop_nopbuf = 0, drop_input = 0;
+    int last_input_err = 0;
+    time_t last = time(NULL);
     for (;;) {
         uint8_t hdr[40];
         if (imd_conn_recv(g_conn, hdr, sizeof hdr) != 0) break;
         uint16_t plen = (uint16_t)((hdr[4] << 8) | hdr[5]);
         size_t total = 40u + plen;
+        rd++;
+        if (dbg) {
+            time_t now = time(NULL);
+            if (now - last >= 2) {
+                fprintf(stderr, "  [usernet] read=%lu wrote=%lu inputfail=%lu udp{in=%lu drop=%lu} icmp6{in=%lu out=%lu drop=%lu} nd6{drop=%lu rterr=%lu} ip6{drop=%lu rterr=%lu}\n",
+                        rd, g_outq_written, drop_input,
+                        (unsigned long)lwip_stats.udp.recv, (unsigned long)lwip_stats.udp.drop,
+                        (unsigned long)lwip_stats.icmp6.recv, (unsigned long)lwip_stats.icmp6.xmit,
+                        (unsigned long)lwip_stats.icmp6.drop,
+                        (unsigned long)lwip_stats.nd6.drop, (unsigned long)lwip_stats.nd6.rterr,
+                        (unsigned long)lwip_stats.ip6.drop, (unsigned long)lwip_stats.ip6.rterr);
+                (void)drop_nopbuf; (void)last_input_err;
+                last = now;
+            }
+        }
         struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)total, PBUF_POOL);
         if (!p) { /* drop; read+discard the payload to stay in frame */
             uint8_t skip[2048];
             size_t left = plen;
+            drop_nopbuf++;
             while (left) { size_t c = left < sizeof skip ? left : sizeof skip;
                            if (imd_conn_recv(g_conn, skip, c) != 0) return NULL; left -= c; }
             continue;
@@ -74,8 +151,23 @@ static void *reader_thread(void *arg)
             }
             if (!ok) { pbuf_free(p); break; }
         }
-        if (g_netif.input(p, &g_netif) != ERR_OK)   /* tcpip_input: thread-safe hand-off */
+        if (dbg && hdr[6] == 58) {   /* inbound ICMPv6: the type+code is the whole story */
+            static int icmp_dumps = 12;
+            if (icmp_dumps > 0) {
+                icmp_dumps--;
+                uint8_t d[96]; u16_t c = total < sizeof d ? (u16_t)total : (u16_t)sizeof d;
+                pbuf_copy_partial(p, d, c, 0);
+                fprintf(stderr, "  [icmp6 in %u B] ", (unsigned)total);
+                for (u16_t i = 0; i < c; i++) fprintf(stderr, "%02x", d[i]);
+                fprintf(stderr, "\n");
+            }
+        }
+        err_t ierr = g_netif.input(p, &g_netif);    /* tcpip_input: thread-safe hand-off */
+        if (ierr != ERR_OK) {
+            drop_input++;
+            last_input_err = (int)ierr;
             pbuf_free(p);
+        }
     }
     return NULL;
 }
@@ -103,6 +195,8 @@ int usernet_start(void *idev_conn, const char *our_addr, const char *dev_addr)
 
     pthread_t t;
     if (pthread_create(&t, NULL, reader_thread, NULL) != 0) return -1;
+    pthread_detach(t);
+    if (pthread_create(&t, NULL, writer_thread, NULL) != 0) return -1;
     pthread_detach(t);
     return 0;
 }
