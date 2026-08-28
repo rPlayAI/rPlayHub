@@ -72,6 +72,82 @@ final class MirrorView: NSView {
 
     var isShowingStill: Bool { !stillLayer.isHidden }
 
+    /// Device Hub's device pane, before View Screen: the device name + OS below the picture, and
+    /// a button that starts the actual video pipeline. AppKit views (not layers, like the rest of
+    /// this class) since they need text layout and a click target -- they sit above the layers,
+    /// which keep rendering the still underneath so the button reads as an overlay on the phone
+    /// rather than a replacement for it.
+    private let viewScreenName = NSTextField(labelWithString: "")
+    private let viewScreenOS = NSTextField(labelWithString: "")
+    private let viewScreenButton = NSButton()
+    /// The dark backing behind the name/OS/button -- what showViewScreenPrompt/hideViewScreenPrompt
+    /// actually show and hide.
+    private var viewScreenStack: NSView!
+
+    /// Called when the View Screen button is clicked. AppDelegate starts the video pipeline.
+    var onViewScreen: (() -> Void)?
+
+    func showViewScreenPrompt(name: String, os: String) {
+        viewScreenName.stringValue = name
+        viewScreenOS.stringValue = os
+        viewScreenOS.isHidden = os.isEmpty
+        viewScreenStack.isHidden = false
+    }
+
+    func hideViewScreenPrompt() {
+        viewScreenStack.isHidden = true
+    }
+
+    private func buildViewScreenPrompt() {
+        viewScreenName.font = .systemFont(ofSize: 13, weight: .semibold)
+        viewScreenName.alignment = .center
+        viewScreenName.textColor = .white
+        viewScreenOS.font = .systemFont(ofSize: 11)
+        viewScreenOS.textColor = NSColor.white.withAlphaComponent(0.7)
+        viewScreenOS.alignment = .center
+        viewScreenButton.title = "  View Screen"
+        viewScreenButton.image = NSImage(systemSymbolName: "rectangle.on.rectangle",
+                                         accessibilityDescription: "View Screen")
+        viewScreenButton.imagePosition = .imageLeading
+        viewScreenButton.bezelStyle = .rounded
+        viewScreenButton.target = self
+        viewScreenButton.action = #selector(viewScreenClicked)
+
+        let stack = NSStackView(views: [viewScreenName, viewScreenOS, viewScreenButton])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 20, bottom: 14, right: 20)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        // A dark backing, since this sits ON the screenshot/still (that picture fills the whole
+        // pane, unlike Device Hub's small centered mockup with room below it for this text) --
+        // without it the name/OS read poorly against whatever is on the phone's screen.
+        let backing = NSVisualEffectView()
+        backing.material = .hudWindow
+        backing.blendingMode = .withinWindow
+        backing.state = .active
+        backing.wantsLayer = true
+        backing.layer?.cornerRadius = 12
+        backing.translatesAutoresizingMaskIntoConstraints = false
+        backing.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: backing.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: backing.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: backing.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: backing.bottomAnchor),
+        ])
+        backing.isHidden = true
+        addSubview(backing)
+        NSLayoutConstraint.activate([
+            backing.centerXAnchor.constraint(equalTo: centerXAnchor),
+            backing.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        viewScreenStack = backing
+    }
+
+    @objc private func viewScreenClicked() { onViewScreen?() }
+
     /// Quarter-turns applied to the picture, 0-3, clockwise.
     ///
     /// The device is not rotated by this -- iOS orientation follows the phone's own sensors and
@@ -149,6 +225,7 @@ final class MirrorView: NSView {
 
     private func setUpLayers() {
         buildContextMenu()
+        buildViewScreenPrompt()
         wantsLayer = true
         // Clear, not black. The screen keeps the device's aspect ratio, so it rarely fills the
         // pane exactly and the leftover margin is drawn by this layer. Black made that margin

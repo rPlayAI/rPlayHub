@@ -43,6 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var retryTimer: Timer?
     /// True from the start of connect() until it has either got video or given up.
     private var connecting = false
+    /// True once the user has clicked View Screen for the currently-selected device -- Device
+    /// Hub's device pane shows a static picture and a button until then, gating the actual video
+    /// pipeline (not just its display) behind the click. Reset on a deliberate device switch;
+    /// kept across a background reconnect so video resumes on its own.
+    private var wantsVideo = false
     private var statusTimer: Timer?
     private var deviceLabel = "no device"
     /// Which device the daemon is currently bound to, so re-selecting it is a no-op.
@@ -153,6 +158,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.boundUDID = device.udid
                     self.deviceLabel = "switching device…"
                     self.updateStatus()
+                    // A newly-selected device always starts at the static-picture-and-button
+                    // state, matching Device Hub -- it does not carry over "already watching"
+                    // from whatever was selected before.
+                    self.wantsVideo = false
                     // The daemon re-executes, so the socket goes away and comes back. Give it
                     // time to rebuild the tunnel before reconnecting; too eager and we connect
                     // to the dying process.
@@ -166,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.perform(command, on: device)
         }
         view.onCommand = { [weak self] command in self?.perform(command, on: nil) }
+        view.onViewScreen = { [weak self] in self?.viewScreenTapped() }
         controls.onAction = { [weak self] action in
             switch action {
             case .pin:        self?.perform(.pin, on: nil)
@@ -823,8 +833,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // subsystem, and that turned into a long detour for no picture. The CoreDevice path now
         // recovers from artefacting on its own, so it is the sane default and nothing here should
         // pester about permissions to reach it.
-        let wantUSB = ProcessInfo.processInfo.environment["RPLAYHUB_USB_CAPTURE"] == "1"
-        let usbRunning = wantUSB && (usb != nil || startUSBMirror())
+        // USB capture goes straight to the cable and needs nothing from the engine, so this is
+        // attempted before the control connection below rather than after it -- only if the user
+        // has already opted into video for this device, though: Device Hub shows a static
+        // picture and a View Screen button until clicked, and starting capture before that would
+        // show a live picture the click was supposed to gate.
+        var usbRunning = false
+        if wantsVideo {
+            let wantUSB = ProcessInfo.processInfo.environment["RPLAYHUB_USB_CAPTURE"] == "1"
+            usbRunning = wantUSB && (usb != nil || startUSBMirror())
+        }
 
         let c = ControlClient(port: controlPort)
         do {
@@ -852,7 +870,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if usbRunning { connecting = false; return }
 
         refreshDevices(c)
+        connecting = false
 
+        // Device Hub's device pane shows a static picture and a View Screen button until
+        // clicked; the actual video pipeline below is deferred until then (or run immediately
+        // here on a reconnect, once the user has already opted in for this device).
+        guard wantsVideo else {
+            updateViewScreenPrompt()
+            return
+        }
+        startVideo(c)
+    }
+
+    /// The actual video pipeline: USB capture if opted in, else the RTP/proxy path. Split out of
+    /// connect() so the View Screen click can run it directly against the control connection
+    /// connect() already established, without repeating that handshake.
+    private func startVideo(_ c: ControlClient) {
         // Prefer receiving RTP ourselves, with nothing in the data path.
         //
         // The daemon only has to create the utun; once it exists the tunnel addresses are
@@ -912,7 +945,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // trailer on the last slice NAL (HEVCStream.parseActiveRectTrailer), which agrees
             // with what avconferenced passes its decoder. Left unwired rather than deleted so
             // the C side keeps a place to publish from if the extension is ever decoded.
-            self.connecting = false
             if direct.start(tunnel) {
                 self.directStream = direct
                 // Video is flowing, so stop retrying. Without this the 2-second retry timer keeps
@@ -930,6 +962,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.startProxiedStream(c)
             }
         }
+    }
+
+    /// Shows the device's name/OS and a View Screen button in place of video, as Device Hub does
+    /// until it is clicked. Re-derives the text each time since refreshDevices(_:) learns the
+    /// real name/OS asynchronously, after the prompt may already be showing a placeholder.
+    private func updateViewScreenPrompt() {
+        guard !wantsVideo else { return }
+        if let row = sidebar.selectedRow() {
+            view.showViewScreenPrompt(name: row.name, os: "iOS \(row.version)")
+        } else {
+            view.showViewScreenPrompt(name: deviceLabel, os: "")
+        }
+    }
+
+    /// Device Hub's View Screen: starts the actual video pipeline against the control connection
+    /// connect() already has, without repeating that handshake.
+    private func viewScreenTapped() {
+        guard let c = control else { return }
+        wantsVideo = true
+        view.hideViewScreenPrompt()
+        startVideo(c)
     }
 
     /// Populate the sidebar and learn the real screen size.
@@ -997,6 +1050,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     self.deviceLabel = "engine has no device"
                 }
+                // The View Screen prompt may already be showing a placeholder from before this
+                // answer arrived; refresh it with the real name/OS now that sidebar.update(...)
+                // above has them.
+                self.updateViewScreenPrompt()
             case .failure(let e):
                 self.deviceLabel = "list_devices failed: \(e)"
             }
