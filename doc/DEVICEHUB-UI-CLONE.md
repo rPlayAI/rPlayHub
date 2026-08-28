@@ -53,15 +53,16 @@ button; the live screen only appears **on click**. To match: canvas opens with a
 `take_screenshot` still is the natural source) + a "View Screen" button; live mirror starts on
 click.
 
-✅ **macOS, done (2026-08-28), true click-to-connect**: `AppDelegate` no longer starts USB capture
-or the RTP/proxy video path inside `connect()` unconditionally — that only runs once
-`wantsVideo` is true, set by clicking `MirrorView`'s new View Screen button (`onViewScreen`) or
-already true from a prior click when a background reconnect re-runs `connect()`. Until clicked,
+✅ **macOS, done and confirmed live (2026-08-28), true click-to-connect**: `AppDelegate` no longer
+starts USB capture or the RTP/proxy video path inside `connect()` unconditionally — that only runs
+once `wantsVideo` is true, set by clicking `MirrorView`'s new View Screen button (`onViewScreen`)
+or already true from a prior click when a background reconnect re-runs `connect()`. Until clicked,
 the canvas shows the device name + OS and the button, over whatever still picture the existing
-idle-screenshot mechanism (`refreshStillIfIdle`, unchanged) already fetches. Selecting a different
-device resets `wantsVideo` to false. Build-verified via `xcodebuild`; falls back cleanly with no
-engine attached. **Still needs a live pass against the real device** (click → does video actually
-start) once the daemon is back up — not yet confirmed end-to-end.
+idle-screenshot mechanism (`refreshStillIfIdle`, unchanged) already fetches; a plain blue rectangle
+(`clipLayer.backgroundColor`, matching Device Hub's own "no screenshot yet" placeholder, sampled
+off the live app) shows before even that. Selecting a different device resets `wantsVideo` to
+false. **Confirmed end-to-end against the live iPhone**: static prompt shows, click hides it and
+starts genuine live video (watched real device content start playing).
 **Not yet done on Linux** (`rplay-view`/`rplay-gui` stream immediately, same as macOS did before).
 
 ## Inspector — Device Hub  ← the tab-structure difference (the main ask)
@@ -77,10 +78,13 @@ start) once the daemon is back up — not yet confirmed end-to-end.
 2. **Second row (under Info): TEXT-named tabs** — **Info / Apps / Profiles**.
    - **Apps**: a **Filter** search field + a **category dropdown** (`All Apps` ─ separator ─
      `App Clips` / `Default` / `Developer`), the app list, and **`+` / `-` buttons** (install /
-     uninstall). ✅ Filter + dropdown done on both apps; **`+`/`-` still needs engine API**
-     (install/uninstall app) before the buttons do anything. App Clips category needs the engine
-     to surface app TYPE (installation_proxy has it; `list_apps` only returns `isFirstParty`).
-   - **Profiles**: list + **`+` / `-`** (install / remove profile) — same engine-API gap.
+     uninstall). ✅ All done and confirmed live: Filter + dropdown, `+`/`-` (engine API in
+     `api_server.c`), and accurate category matching (`isDeveloper` = `get-task-allow` out of
+     Entitlements, not just `isFirstParty` — confirmed against the live Device Hub, whose
+     Developer bucket held only 3 sideloaded test builds, not every third-party app; `isAppClip`
+     = `IsAppClip` verbatim, confirmed both apps agree the test device has none).
+   - **Profiles**: list + **`+` / `-`** (install / remove profile). ✅ Engine API done
+     (`install_profile`/`remove_profile` in `api_server.c`), wired on both front-ends.
    - **Info**: device identifiers/health.
 
 **rPlayHub today**: a SINGLE row of **6 icon tabs** (Controls / Info / Apps / Profiles / Files /
@@ -133,20 +137,33 @@ rather than kept as their own icon tabs or moved into Settings. On macOS this ma
 row wider than Device Hub's real one (6 segments vs. 3) — fixed by pinning it to the inspector's
 full width and shrinking the segment font, rather than by cutting any panel.
 
+## Row/list styling fixed (2026-08-28)
+
+Both real NSTableView quirks that paint across a list's ENTIRE visible bounds regardless of
+actual row count (not just real Device Hub differences) — `usesAlternatingRowBackgroundColors`
+and `gridStyleMask` — were the cause of "row shadows" appearing under an empty category filter.
+Fixed on macOS (Apps/Profiles/Files): flat rows, a per-cell `NSBox` bottom divider instead of
+`gridStyleMask`, and an explicit background color (`#E4E4E4`, sampled directly off the live
+Device Hub window) instead of white. Confirmed clean against the live app in both states.
+**Not yet checked on Linux** — `ImGuiTableFlags_BordersInnerH` may or may not have the same
+"fills empty space" behavior; worth verifying once building on Linux is possible again.
+
 ## Remaining, in rough priority
 
-1. **Linux inspector restructure** to match the macOS one above (needs the icon-tab design call),
-   including the click-active-icon-to-collapse behavior.
+1. **Linux inspector restructure** to match the macOS one above (needs the icon-tab design call:
+   this app has no icon font anywhere, so the "3 icon tabs" row would need to fake icons somehow
+   or just be 3 more text tabs), including the click-active-icon-to-collapse behavior.
 2. **Settings panel**: the device appearance/accessibility controls (needs engine methods to read/set
    them — a new capability).
-3. **Canvas View Screen button** + static screenshot preview.
-4. **Sidebar Unavailable section**; remaining toolbar items: `+`, list icon, keyboard/grid pair,
+3. **Sidebar Unavailable section**; remaining toolbar items: `+`, list icon, keyboard/grid pair,
    `»` expander, device title repositioned left-aligned at the canvas start (not centered) — see
    the Toolbar section above for the exact catalogued order.
-5. App-type field in `list_apps` (for the App Clips category).
-6. Icon choices for Settings/Report/Info (currently `slider.horizontal.3`/`doc.text`/`info.circle`
+4. Icon choices for Settings/Report/Info (currently `slider.horizontal.3`/`doc.text`/`info.circle`
    SF Symbol guesses) — a designer will supply the real ones later; don't spend effort extracting
    Device Hub's compiled `Assets.car` for this.
+5. Verify the Linux `rplay-gui.cpp` changes from this session actually build — every check so far
+   has hit the pre-existing `deps/ffmpeg/version` vs. C++ `<version>` collision on this Mac; needs
+   a Linux-side `make rplay-gui`.
 
 ## Kickoff for the next session
 
