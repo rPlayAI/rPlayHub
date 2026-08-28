@@ -150,9 +150,12 @@ Device Hub window) instead of white. Confirmed clean against the live app in bot
 
 ## Remaining, in rough priority
 
-1. **Linux inspector restructure** to match the macOS one above (needs the icon-tab design call:
-   this app has no icon font anywhere, so the "3 icon tabs" row would need to fake icons somehow
-   or just be 3 more text tabs), including the click-active-icon-to-collapse behavior.
+1. **Verify the Linux build** — every check this session hit the pre-existing
+   `deps/ffmpeg/version` vs. C++ `<version>` collision on this Mac; needs a Linux-side
+   `make rplay-gui`. Covers all of this session's Linux changes: `+`/`-` wiring, Filter-to-bottom,
+   the inspector restructure (nested `toplevel`/`sublevel` tab bars), row styling.
+   ✅ Structurally done (design call made: text tabs for the top row too, no icon font available)
+   but **not build-verified** — reviewed by hand only.
 2. **Settings panel**: the device appearance/accessibility controls (needs engine methods to read/set
    them — a new capability).
 3. **Sidebar Unavailable section**; remaining toolbar items: `+`, list icon, keyboard/grid pair,
@@ -161,9 +164,12 @@ Device Hub window) instead of white. Confirmed clean against the live app in bot
 4. Icon choices for Settings/Report/Info (currently `slider.horizontal.3`/`doc.text`/`info.circle`
    SF Symbol guesses) — a designer will supply the real ones later; don't spend effort extracting
    Device Hub's compiled `Assets.car` for this.
-5. Verify the Linux `rplay-gui.cpp` changes from this session actually build — every check so far
-   has hit the pre-existing `deps/ffmpeg/version` vs. C++ `<version>` collision on this Mac; needs
-   a Linux-side `make rplay-gui`.
+5. **Click-active-tab-to-collapse** on Linux — Device Hub's Settings/Report/Info icons also toggle
+   the whole inspector shut on a re-click (done on macOS, see above); ImGui's `BeginTabBar` doesn't
+   naturally support that, so this needs a custom Selectable-based tab row instead if wanted.
+6. Row-shadow check on Linux — `ImGuiTableFlags_BordersInnerH` (Apps table) may or may not have
+   the same "fills empty space regardless of row count" behavior `gridStyleMask` had on macOS;
+   worth a look once Linux building is possible again.
 
 ## Kickoff for the next session
 
