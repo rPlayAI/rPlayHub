@@ -375,18 +375,33 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
     private var iconCache: [String: NSImage] = [:]
     private var iconRequested: Set<String> = []
 
+    /// Shown while a real icon is loading, and left up if the fetch fails -- springboardservices
+    /// genuinely has no icon for some apps (a helper/widget process, or one that's never been
+    /// launched to register with SpringBoard), and this engine's own daemon drops its tunnel
+    /// often enough that many "failures" are really just that, not a permanent answer.
+    private static let placeholderIcon = NSImage(systemSymbolName: "app.dashed",
+                                                 accessibilityDescription: "App icon unavailable")
+
     private func icon(for bundleID: String, in cell: AppCell) {
         if let cached = iconCache[bundleID] { cell.icon.image = cached; return }
-        cell.icon.image = nil
+        cell.icon.image = Self.placeholderIcon
         guard let control, !iconRequested.contains(bundleID) else { return }
         iconRequested.insert(bundleID)
         control.getAppIcon(bundleID: bundleID) { [weak self] result in
-            guard let self, case .success(let image) = result else { return }
-            self.iconCache[bundleID] = image
-            // The row may have scrolled/reused by the time this returns; only apply it if this
-            // exact cell is still showing that bundle id.
-            if cell.identifier?.rawValue == "cell", cell.bundleID == bundleID {
-                cell.icon.image = image
+            guard let self else { return }
+            switch result {
+            case .failure:
+                // Drop the request marker so a later reveal/refresh/re-scroll can retry --
+                // most failures here are the daemon's own frequent tunnel drops, not a real
+                // "this app has no icon" answer.
+                self.iconRequested.remove(bundleID)
+            case .success(let image):
+                self.iconCache[bundleID] = image
+                // The row may have scrolled/reused by the time this returns; only apply it if
+                // this exact cell is still showing that bundle id.
+                if cell.identifier?.rawValue == "cell", cell.bundleID == bundleID {
+                    cell.icon.image = image
+                }
             }
         }
     }
