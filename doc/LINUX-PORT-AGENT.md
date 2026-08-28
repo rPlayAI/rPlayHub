@@ -110,14 +110,13 @@ But none of it is business logic. Every panel is just a front-end over the engin
 GUI is one client of that API; the Python SDK (`rplayhub-sdk`) is another. So on Linux the "app" is
 a **design choice, not a translation of the Swift**:
 
-- **Minimal (recommended first):** ship `rplay-view` (mirror + input) and reach device management
-  through the JSON API / the SDK / a small CLI. Fastest, and it exercises the whole engine.
-- **Full GUI later:** build a native front-end in a Linux toolkit — Qt, GTK, Dear ImGui, or a local
-  web UI — that re-implements the sidebar + inspector tabs against the **same** 9876 API. This is
-  new UI code in whatever toolkit you pick; the tab views are redrawn, not ported. Because the API
-  already returns everything the tabs display, any toolkit works and none of the wire logic changes.
-
-Get the mirror + engine + API working first; decide the GUI framework after, as its own task.
+- **Minimal:** ship `rplay-view` (mirror + input) and reach device management through the JSON
+  API / the SDK / a small CLI. Stays the untouched reference viewer.
+- **Full GUI — EXISTS as of 2026-08-28: `client-c/rplay-gui`** (Dear ImGui over the same SDL2
+  renderer; `scripts/fetch-gui-deps.sh` then `make -C client-c rplay-gui`). Device Hub's anatomy:
+  device sidebar, live-mirror canvas with a Screenshot/Record/Home strip, inspector tabs (Info,
+  Apps, Console/syslog, Files, Profiles, Diagnostics) — every panel a thin client over the 9876
+  API. Video rides `stream-core.c`, a verbatim copy of rplay-view's verified engine.
 
 ## 4. Build the ENGINE
 

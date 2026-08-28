@@ -846,11 +846,21 @@ int main(int argc, char **argv)
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = NULL;   /* window layout is fixed; don't scatter imgui.ini files */
     ImGui::StyleColorsDark();
-    /* Rough high-DPI accommodation: scale the UI with the desktop. */
+    /* Rough high-DPI accommodation: scale the UI with the desktop, and load a real TTF at the
+     * target pixel size — the stock bitmap font upscaled is what makes tools look homemade. */
     SDL_DisplayMode dm;
     float ui_scale = SDL_GetCurrentDisplayMode(0, &dm) == 0 && dm.h >= 2000 ? 2.0f : 1.0f;
     ImGui::GetStyle().ScaleAllSizes(ui_scale);
-    io.FontGlobalScale = ui_scale;
+    {
+        const char *faces[] = {
+            "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        };
+        bool loaded = false;
+        for (size_t i = 0; i < sizeof faces / sizeof *faces && !loaded; i++)
+            loaded = io.Fonts->AddFontFromFileTTF(faces[i], 15.0f * ui_scale) != NULL;
+        if (!loaded) io.FontGlobalScale = ui_scale;
+    }
     ImGui_ImplSDL2_InitForSDLRenderer(win, g_ren);
     ImGui_ImplSDLRenderer2_Init(g_ren);
 

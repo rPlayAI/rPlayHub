@@ -20,6 +20,14 @@ jobs:
           key: ffmpeg-rvra-${{ hashFiles('patches/ffmpeg-rvra.patch', 'scripts/build-ffmpeg-rvra.sh') }}
       - run: ./scripts/build-ffmpeg-rvra.sh
       - run: make -C client-c
+      - name: cache gui deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps/imgui
+            deps/json
+          key: gui-${{ hashFiles('scripts/fetch-gui-deps.sh') }}
+      - run: ./scripts/fetch-gui-deps.sh && make -C client-c rplay-gui
       - name: decode the committed reference captures (RVRA on, must be clean)
         run: |
           RPLAY_RVRA=1 ./client-c/rplay-view --check -f reference/captures/gop-reproducer.h265 2>&1 | tee check.out
