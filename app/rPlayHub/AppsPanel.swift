@@ -9,7 +9,7 @@
 
 import AppKit
 
-final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
+final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     struct App {
         let bundleID: String
         let name: String
@@ -40,6 +40,26 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let launchButton = NSButton()
     private let killButton = NSButton()
     private let refreshButton = NSButton()
+    private let filterField = NSSearchField()
+    private let categoryPopup = NSPopUpButton()
+
+    /// Apps passing the current filter text + category, in the order the table shows them.
+    private var filtered: [App] {
+        let q = filterField.stringValue.lowercased()
+        return apps.filter { a in
+            if !q.isEmpty && !a.name.lowercased().contains(q) && !a.bundleID.lowercased().contains(q) {
+                return false
+            }
+            switch categoryPopup.indexOfSelectedItem {
+            case 2:  return a.isFirstParty      // Default   (Apple's own)
+            case 4:  return !a.isFirstParty     // Developer (user-installed)
+            // index 3 (App Clips) needs the engine to surface the app TYPE (installation_proxy has
+            // it); list_apps only carries isFirstParty today, so it matches nothing until then.
+            case 3:  return false
+            default: return true                // 0 = All Apps (index 1 is the separator)
+            }
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -83,6 +103,19 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         launchButton.isEnabled = false
         killButton.isEnabled = false
 
+        // Top filter row: search field + category popup, laid out like Device Hub's Apps tab.
+        filterField.placeholderString = "Filter"
+        filterField.controlSize = .small
+        filterField.delegate = self                       // controlTextDidChange -> live filter
+        categoryPopup.controlSize = .small
+        categoryPopup.addItem(withTitle: "All Apps")
+        categoryPopup.menu?.addItem(.separator())
+        categoryPopup.addItem(withTitle: "App Clips")
+        categoryPopup.addItem(withTitle: "Default")
+        categoryPopup.addItem(withTitle: "Developer")
+        categoryPopup.target = self
+        categoryPopup.action = #selector(applyFilter)
+
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byWordWrapping
@@ -91,7 +124,11 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let buttons = NSStackView(views: [launchButton, killButton, NSView(), refreshButton])
         buttons.orientation = .horizontal
         buttons.spacing = 6
-        let stack = NSStackView(views: [scroll, buttons, status])
+        let filterRow = NSStackView(views: [filterField, categoryPopup])
+        filterRow.orientation = .horizontal
+        filterRow.spacing = 6
+        filterField.setContentHuggingPriority(.init(1), for: .horizontal)   // field grows, popup fixed
+        let stack = NSStackView(views: [filterRow, scroll, buttons, status])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -104,13 +141,15 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
+            filterRow.widthAnchor.constraint(equalTo: scroll.widthAnchor),
             buttons.widthAnchor.constraint(equalTo: scroll.widthAnchor),
             status.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
         // The inspector holds its 260-point width at priority 700; anything in here that resists
         // compression at the default 750 would win and grow the pane across the window, pushing
         // the screen out. Everything yields instead and truncates or scrolls.
-        for v in [self, stack, buttons, status, scroll] + buttons.arrangedSubviews {
+        for v in [self, stack, buttons, status, scroll, filterRow, filterField, categoryPopup]
+                 + buttons.arrangedSubviews {
             v.setContentCompressionResistancePriority(.init(100), for: .horizontal)
             v.setContentHuggingPriority(.init(100), for: .horizontal)
         }
@@ -152,9 +191,13 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     private var selected: App? {
+        let f = filtered
         let r = table.selectedRow
-        return r >= 0 && r < apps.count ? apps[r] : nil
+        return r >= 0 && r < f.count ? f[r] : nil
     }
+
+    @objc private func applyFilter() { table.reloadData() }
+    func controlTextDidChange(_ obj: Notification) { table.reloadData() }
 
     @objc private func launch() {
         guard let control, let app = selected else { return }
@@ -206,10 +249,10 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     // MARK: - table
 
-    func numberOfRows(in tableView: NSTableView) -> Int { apps.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let app = apps[row]
+        let app = filtered[row]
         let id = NSUserInterfaceItemIdentifier("cell")
         let cell = tableView.makeView(withIdentifier: id, owner: nil) as? AppCell ?? AppCell(id)
         cell.name.stringValue = app.name
