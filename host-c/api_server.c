@@ -1616,11 +1616,29 @@ static struct {
     int      behind;       /* consecutive drops, so a hopeless viewer gets closed */
 } viewers[MAX_VIEWERS];
 
-/* Cached so a late viewer can start decoding. */
-static uint8_t param_cache[4096];
-static size_t  param_len;
+/* Cached so a late viewer can start decoding. One slot per parameter-set TYPE (VPS/SPS/PPS;
+ * h264 uses the last two), overwritten in place -- the old grow-only cache overflowed after a
+ * few hundred keyframes' worth of re-sent sets and reset MID-SET, after which a joining viewer
+ * could receive an SPS+PPS with no VPS and decode nothing until the next in-band set, which a
+ * static screen never sends. */
+static uint8_t ps_cache[3][512];
+static size_t  ps_len[3];
 static uint8_t keyframe_cache[RP_RTP_MAX_NAL + 4];
 static size_t  keyframe_len;
+
+/* Which slot a parameter-set NAL belongs in. `annexb` starts with the 4-byte start code. Both
+ * grammars are tried; the HEVC read of an h264 SPS/PPS lands outside 32..34 and vice versa, so
+ * the classification is unambiguous for NALs media.c already flagged as parameter sets. */
+static int ps_slot(const uint8_t *annexb, size_t len)
+{
+    if (len < 5) return -1;
+    int hevc_t = (annexb[4] >> 1) & 0x3F;
+    if (hevc_t >= 32 && hevc_t <= 34) return hevc_t - 32;
+    int avc_t = annexb[4] & 0x1F;
+    if (avc_t == 7) return 1;
+    if (avc_t == 8) return 2;
+    return -1;
+}
 
 /* Never block the caller.
  *
@@ -1680,11 +1698,11 @@ static void on_media_nal(void *ctx, const uint8_t *annexb, size_t len,
      * stream is Annex-B, which carries no frame boundaries anyway. */
     if (end_of_frame || !annexb || !len) return;
     if (is_parameter_set) {
-        /* Parameter sets accumulate: VPS, SPS and PPS are three separate NALs and a decoder
-         * needs all three. Reset when one repeats, which is how a new set is signalled. */
-        if (param_len + len > sizeof param_cache) param_len = 0;
-        memcpy(param_cache + param_len, annexb, len);
-        param_len += len;
+        int slot = ps_slot(annexb, len);
+        if (slot >= 0 && len <= sizeof ps_cache[0]) {
+            memcpy(ps_cache[slot], annexb, len);
+            ps_len[slot] = len;
+        }
     } else if (is_keyframe && len <= sizeof keyframe_cache) {
         memcpy(keyframe_cache, annexb, len);
         keyframe_len = len;
@@ -1710,8 +1728,10 @@ static void viewer_add(int fd)
     viewer_count++;
     pthread_mutex_unlock(&viewers_lock);
 
-    /* Prime this viewer so it can decode from its first frame. */
-    if (param_len) send(fd, param_cache, param_len, 0);
+    /* Prime this viewer so it can decode from its first frame: the full parameter set in
+     * VPS, SPS, PPS order, then the last keyframe. */
+    for (int i = 0; i < 3; i++)
+        if (ps_len[i]) send(fd, ps_cache[i], ps_len[i], 0);
     if (keyframe_len) send(fd, keyframe_cache, keyframe_len, 0);
 }
 

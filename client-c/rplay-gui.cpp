@@ -814,7 +814,12 @@ static void mirror_pane()
             }
         }
         if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
-            g_api.request("press_button", {{"button", "home"}}, nullptr);
+            ImGui::OpenPopup("device_actions");
+    }
+    /* Device actions live on the mirror's right-click, like the macOS MirrorView's context menu. */
+    if (ImGui::BeginPopup("device_actions")) {
+        menu_device();
+        ImGui::EndPopup();
     }
 }
 
@@ -885,15 +890,7 @@ int main(int argc, char **argv)
         ImGui::SetNextWindowSize(vp->WorkSize);
         ImGui::Begin("##root", NULL,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBringToFrontOnFocus);
-        if (ImGui::BeginMenuBar()) {
-            if (ImGui::BeginMenu("Device")) { menu_device(); ImGui::EndMenu(); }
-            if (!g_status.empty() && now_ms() - g_status_at < 6000) {
-                ImGui::Separator();
-                ImGui::TextDisabled("%s", g_status.c_str());
-            }
-            ImGui::EndMenuBar();
-        }
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
         confirm_modal();
 
         /* Device Hub's three columns: sidebar | canvas | inspector. Proportional with floors, so
@@ -910,10 +907,15 @@ int main(int argc, char **argv)
 
         ImGui::BeginChild("canvas", ImVec2(canvas_w, 0), ImGuiChildFlags_Borders);
         {
-            /* Header: device name + OS, like the canvas title. */
+            /* Header: device name + OS, like the canvas title; transient status on the right. */
             ImGui::TextUnformatted(g_dev_name.empty() ? "no device" : g_dev_name.c_str());
             ImGui::SameLine();
             ImGui::TextDisabled("iOS %s", g_dev_os.c_str());
+            if (!g_status.empty() && now_ms() - g_status_at < 6000) {
+                float w = ImGui::CalcTextSize(g_status.c_str()).x;
+                ImGui::SameLine(canvas_w - w - 2 * ImGui::GetFontSize());
+                ImGui::TextDisabled("%s", g_status.c_str());
+            }
             float strip_h = ImGui::GetFrameHeightWithSpacing() + em / 2;
             ImGui::BeginChild("screen", ImVec2(0, -strip_h));
             mirror_pane();
