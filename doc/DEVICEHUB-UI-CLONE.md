@@ -76,10 +76,31 @@ Info/Apps/Profiles), or keep them as additional sub-tabs.
   too; needs a Linux-side `make rplay-gui` check.
   Not yet exercised against the live device (would actually install/remove something real) —
   do that deliberately, not as a side effect of a build check.
+- **macOS inspector restructure**: `InspectorPane.swift` now matches Device Hub's real two-level
+  shape, confirmed live against the actual app (`screencapture` + `osascript`/System Events
+  driving it) — a top-right row of exactly 3 icon tabs (Settings/Report/Info, `.texturedRounded`,
+  trailing-pinned not centered), and under Info a second row of TEXT tabs: Info/Apps/Profiles
+  (Device Hub's real three) plus our folded-in Files/Console/Controls (Device Hub has no
+  equivalents for those three — product decision, see below). Settings and Report are
+  `ComingSoonPanel` stubs pending the engine methods item 2 below needs. Built and
+  screenshot-verified via `xcodebuild`.
+  **Linux still has the OLD flat single-row-of-6 text tabs** (`rplay-gui.cpp`'s `BeginTabBar`
+  with Info/Apps/Console/Files/Profiles/Diagnostics) — this app has no icon font anywhere, so
+  its "3 icon tabs" row would need to fake icons somehow or just be 3 more text tabs; needs a
+  design call before porting this restructure over.
+
+## Product decision (2026-08-28): folded-in extra tabs
+
+Device Hub's Info sub-tab row is only Info/Apps/Profiles. rPlayHub's extra panels (Controls,
+Files, Console on macOS; Files, Console, Diagnostics on Linux) have no Device Hub equivalent, so
+per the user's call they're folded in as additional text sub-tabs alongside Info/Apps/Profiles
+rather than kept as their own icon tabs or moved into Settings. On macOS this made the sub-tab
+row wider than Device Hub's real one (6 segments vs. 3) — fixed by pinning it to the inspector's
+full width and shrinking the segment font, rather than by cutting any panel.
 
 ## Remaining, in rough priority
 
-1. **Inspector restructure**: 3 icon tabs (Settings/Report/Info) + text sub-tab row — both apps.
+1. **Linux inspector restructure** to match the macOS one above (needs the icon-tab design call).
 2. **Settings panel**: the device appearance/accessibility controls (needs engine methods to read/set
    them — a new capability).
 3. **Canvas View Screen button** + static screenshot preview.
