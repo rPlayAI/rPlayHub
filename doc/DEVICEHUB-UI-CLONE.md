@@ -73,3 +73,35 @@ Info/Apps/Profiles), or keep them as additional sub-tabs.
 4. **Canvas View Screen button** + static screenshot preview.
 5. **Sidebar Unavailable section**; **toolbar** `+`/list/keyboard/grid/`»`.
 6. App-type field in `list_apps` (for the App Clips category).
+
+## Kickoff for the next session
+
+Paste this to start a fresh session focused on finishing the Device Hub clone:
+
+> Continue rplay-hub on branch `rendering-resolution-switch` (GitHub: rPlayAI/rplay-hub, private;
+> git is the single source of truth — a Linux agent works the same tree, so `git pull` first, and
+> `commit`+`push` your changes; never rsync). Goal: make rPlayHub a pixel-faithful **Device Hub
+> clone** on macOS (`app/rPlayHub/`, Swift/AppKit) and Linux (`client-c/rplay-gui.cpp`, Dear ImGui).
+> **Read `doc/DEVICEHUB-UI-CLONE.md` first** — it has the exact target structure (validated against
+> the real Device Hub) and the priority order. Device Hub (Xcode 26) is on the user's shared
+> desktop: you can `screencapture -x` to see it and drive it with `osascript`/System Events to
+> examine each state (click its Settings/Report/ⓘ icons, the Info→Info/Apps/Profiles sub-tabs) —
+> match those precisely. Both apps build today: macOS via
+> `xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug
+> -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO build`, then run
+> `build/dd/Build/Products/Debug/rPlayHub.app` and screenshot to verify; the engine is already
+> running and the iPhone 13 live-mirrors. Linux `rplay-gui` builds on the Linux box (its Mac build
+> hits a `-I../deps/ffmpeg` vs C++ `<version>` collision — Linux/CI is clean).
+>
+> Done already: macOS Edit+Device menus, the app-link regression fix (`usernet.h` `tun_*`
+> fallbacks), and the Apps Filter+category dropdown on both apps. First tasks, in order:
+> (1) **Engine API** for the `+`/`-` buttons — add `install_app`/`uninstall_app` and
+> `install_profile`/`remove_profile` to `host-c/api_server.c` (see `app/api/PROTOCOL.md`), then wire
+> the buttons on both front-ends. (2) **Inspector restructure** to Device Hub's two levels: a top
+> row of 3 icon tabs (Settings/Report/Info) and, under Info, text sub-tabs Info/Apps/Profiles —
+> fold our extra panels (Console, Files, Controls) in sensibly. (3) **Settings panel** (device
+> Appearance/Text Size/Reduce Motion/…): needs new engine methods to read/set them. (4) Canvas
+> **View Screen** button + static screenshot preview. (5) sidebar **Unavailable** section; toolbar
+> `+`/list/keyboard/grid/`»`. (6) app-type field in `list_apps` for the App Clips category.
+> Build + screenshot after each change; keep both platforms building; push frequently so the Linux
+> agent stays in sync. The daemon needs sudo to (re)start — ask the user.
