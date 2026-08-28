@@ -17,14 +17,18 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#ifdef __APPLE__
 #include <mach-o/dyld.h>
+#endif
 #include <limits.h>
 #include <sys/un.h>
 #include <unistd.h>
 
 #include <stdarg.h>
+#ifdef __APPLE__
 #include <sys/kern_control.h>
 #include <sys/sys_domain.h>
+#endif
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <pthread.h>
@@ -115,6 +119,7 @@ static int tunnel_handshake_full(conn_t *c, char *addr, size_t addrlen,
  * This is the C port of host/rplayhub/net/{tun,pump}.py. The failure signalling matters: if
  * either direction dies the tunnel is dead, and saying so beats looking alive.
  */
+#ifdef __APPLE__
 #define UTUN_CONTROL_NAME "com.apple.net.utun_control"
 #define UTUN_OPT_IFNAME 2
 #define IPV6_HDR_LEN 40
@@ -212,6 +217,7 @@ static void *pump_device_to_host(void *arg) {
         p->rx++;
     }
 }
+#endif /* __APPLE__ — the kernel-utun path; other platforms use RPLAY_USERSPACE_NET=1 (lwIP) */
 
 /* Prove the routing works: an ordinary TCP connect to the device's RSD port. */
 static int g_userspace;   /* fwd: set in main from RPLAY_USERSPACE_NET */
@@ -543,11 +549,17 @@ int main(int argc, char **argv) {
      * execv then gets "No such file or directory". _NSGetExecutablePath always returns the real
      * path. */
     {
+#ifdef __APPLE__
         char raw[PATH_MAX];
         uint32_t sz = sizeof raw;
         if (_NSGetExecutablePath(raw, &sz) == 0 && realpath(raw, g_self)) {
             /* got it */
-        } else if (!realpath(argv[0], g_self)) {
+        } else
+#else
+        /* Linux: /proc/self/exe is the same always-real path the dyld call provides on macOS. */
+        if (!realpath("/proc/self/exe", g_self))
+#endif
+        if (!realpath(argv[0], g_self)) {
             snprintf(g_self, sizeof g_self, "%s", argv[0]);
         }
     }
@@ -619,6 +631,12 @@ int main(int argc, char **argv) {
         if (usernet_start(tun.idev, ours, addr) != 0) { fprintf(stderr, "  usernet_start failed\n"); return 1; }
         printf("  lwIP netif up over the tunnel\n");
     } else {
+#ifndef __APPLE__
+        /* The kernel tunnel path is the macOS utun; a Linux TUN equivalent has not been needed
+         * because the userspace stack covers it without root. */
+        fprintf(stderr, "  the kernel utun path is macOS-only — run with RPLAY_USERSPACE_NET=1\n");
+        return 1;
+#else
         printf("\n== Layer 3a: utun + packet pump ==\n");
         if (geteuid() != 0) {
             printf("  not root — cannot create a utun. Re-run with sudo, or set RPLAY_USERSPACE_NET=1\n");
@@ -640,6 +658,7 @@ int main(int argc, char **argv) {
         pthread_create(&t1, NULL, pump_host_to_device, &pump);
         pthread_create(&t2, NULL, pump_device_to_host, &pump);
         printf("  pump running\n");
+#endif /* __APPLE__ */
     }
 
     sleep(1);

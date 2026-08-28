@@ -27,8 +27,20 @@ SDK_EXTERNAL := $(SDK_ROOT)/External
 CFLAGS  += -Wall -Wextra -O2
 
 # libimobiledevice stack (Stage-1 migration: device_info, and more to come). Homebrew prefix on
-# macOS; a Linux/Windows build points these at the system or vendored copies.
-IMD_PREFIX ?= /opt/homebrew
+# macOS; a Linux/Windows build points these at the system or vendored copies. The code needs the
+# MODERN stack (libplist >= 2.3 for the 4-arg plist_from_memory) -- Ubuntu <= 22.04's packages are
+# too old, so a Linux build typically sets IMD_PREFIX to a from-source install prefix.
+ifeq ($(UNAME),Darwin)
+  IMD_PREFIX ?= /opt/homebrew
+else
+  IMD_PREFIX ?= /usr
+  OPENSSL    ?= /usr
+  # Non-system prefixes are not on the default search path; bake them in so cdhost runs
+  # without LD_LIBRARY_PATH.
+  ifneq ($(IMD_PREFIX),/usr)
+    LDFLAGS += -Wl,-rpath,$(IMD_PREFIX)/lib
+  endif
+endif
 CFLAGS  += -I$(IMD_PREFIX)/include
 
 # STATIC=1 links the libimobiledevice stack from its .a archives, so the shipped binary needs no
