@@ -472,11 +472,15 @@ static void tab_apps()
                 bundle.find(g_apps_filter) == std::string::npos)
                 continue;
             bool fp = a.value("isFirstParty", false);
-            if (cat == 2 && !fp) continue;   /* Default   = first-party */
-            if (cat == 3 && fp) continue;    /* Developer = third-party */
-            /* cat == 1 (App Clips) needs the engine to expose the app TYPE (installation_proxy
-             * returns it); list_apps only surfaces isFirstParty today, so this is a no-op until
-             * the engine adds it. */
+            /* isDeveloper is get-task-allow out of Entitlements: true for a development-signed
+             * build (what Xcode installs), false for an App Store or ad-hoc one. Device Hub's
+             * "Developer" filter is this, not merely "not an Apple app" -- isFirstParty alone
+             * matched every third-party app, App Store installs included. */
+            bool dev = a.value("isDeveloper", false);
+            bool clip = a.value("isAppClip", false);
+            if (cat == 1 && !clip) continue; /* App Clips */
+            if (cat == 2 && !fp) continue;   /* Default    = first-party */
+            if (cat == 3 && !dev) continue;  /* Developer  = get-task-allow */
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted(name.c_str());
             ImGui::TableNextColumn(); ImGui::TextUnformatted(a.value("version", "").c_str());

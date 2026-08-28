@@ -225,7 +225,6 @@ final class MirrorView: NSView {
 
     private func setUpLayers() {
         buildContextMenu()
-        buildViewScreenPrompt()
         wantsLayer = true
         // Clear, not black. The screen keeps the device's aspect ratio, so it rarely fills the
         // pane exactly and the leftover margin is drawn by this layer. Black made that margin
@@ -235,7 +234,10 @@ final class MirrorView: NSView {
         layer?.masksToBounds = true
 
         clipLayer.masksToBounds = true
-        clipLayer.backgroundColor = NSColor.black.cgColor
+        // Device Hub's own placeholder, before any real screenshot exists: a plain blue
+        // rectangle inside the phone bezel, not a wallpaper mockup. Only visible while neither
+        // stillLayer nor displayLayer has content -- both fully cover this the moment either does.
+        clipLayer.backgroundColor = NSColor.systemBlue.cgColor
         // Above the video, inside the clip, so it rounds off with the screen corners.
         cutoutLayer.fillColor = NSColor.black.cgColor
         cutoutLayer.zPosition = 10
@@ -263,6 +265,10 @@ final class MirrorView: NSView {
         clipLayer.addSublayer(stillLayer)
         clipLayer.addSublayer(cutoutLayer)
         layer?.addSublayer(clipLayer)
+
+        // Built last so its (implicit) layer lands above clipLayer's sublayers in the view's
+        // layer tree -- built earlier, it rendered UNDER the still/video and was invisible.
+        buildViewScreenPrompt()
     }
 
     // MARK: - geometry

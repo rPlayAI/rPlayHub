@@ -16,6 +16,12 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
         let name: String
         let version: String
         let isFirstParty: Bool
+        /// get-task-allow out of the app's Entitlements: true for a development-signed build
+        /// (what Xcode installs), false for an App Store or ad-hoc one. Device Hub's "Developer"
+        /// filter is this, not merely "not an Apple app" -- isFirstParty alone matched every
+        /// third-party app, App Store installs included.
+        let isDeveloper: Bool
+        let isAppClip: Bool
     }
 
     /// Set by the owner whenever the engine connection changes.
@@ -54,12 +60,10 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
                 return false
             }
             switch categoryPopup.indexOfSelectedItem {
-            case 2:  return a.isFirstParty      // Default   (Apple's own)
-            case 4:  return !a.isFirstParty     // Developer (user-installed)
-            // index 3 (App Clips) needs the engine to surface the app TYPE (installation_proxy has
-            // it); list_apps only carries isFirstParty today, so it matches nothing until then.
-            case 3:  return false
-            default: return true                // 0 = All Apps (index 1 is the separator)
+            case 2:  return a.isFirstParty       // Default    (Apple's own)
+            case 3:  return a.isAppClip          // App Clips
+            case 4:  return a.isDeveloper        // Developer  (get-task-allow, not just 3rd-party)
+            default: return true                 // 0 = All Apps (index 1 is the separator)
             }
         }
     }
@@ -194,7 +198,9 @@ final class AppsPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSSea
                     return App(bundleID: bid,
                                name: d["name"] as? String ?? bid,
                                version: d["version"] as? String ?? "",
-                               isFirstParty: d["isFirstParty"] as? Bool ?? false)
+                               isFirstParty: d["isFirstParty"] as? Bool ?? false,
+                               isDeveloper: d["isDeveloper"] as? Bool ?? false,
+                               isAppClip: d["isAppClip"] as? Bool ?? false)
                 }.sorted { ($0.isFirstParty ? 1 : 0, $0.name.lowercased())
                          < ($1.isFirstParty ? 1 : 0, $1.name.lowercased()) }
                 self.loaded = true

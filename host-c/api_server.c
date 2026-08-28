@@ -834,7 +834,15 @@ static void sb_plstr(strbuf *b, plist_t v)
  * minutes -- host/appservice.py reproduces it). installation_proxy's classic Browse answers the
  * same question in 0.2 s with 320 apps, so the list comes from there; launch and terminate stay
  * on appservice, which works. The reply is shaped like listapps would have been, so the app
- * does not care which service answered: bundleIdentifier, name, version, isFirstParty.
+ * does not care which service answered: bundleIdentifier, name, version, isFirstParty,
+ * isDeveloper, isAppClip.
+ *
+ * isDeveloper is get-task-allow out of the app's Entitlements -- the flag Xcode sets true on a
+ * development-signed build (to let a debugger attach) and false on an App Store or ad-hoc one.
+ * Confirmed against Device Hub's own Apps > Developer filter: it shows only the get-task-allow
+ * apps (three sideloaded test builds, all the same signer), not every third-party app the way
+ * isFirstParty alone would -- that field is "not an Apple app", a much wider net than Device
+ * Hub's actual "Developer" bucket.
  */
 static void method_list_apps(int fd, long id, const char *line)
 {
@@ -863,6 +871,8 @@ static void method_list_apps(int fd, long id, const char *line)
         "\t\t\t<string>CFBundleName</string>\n"
         "\t\t\t<string>CFBundleShortVersionString</string>\n"
         "\t\t\t<string>ApplicationType</string>\n"
+        "\t\t\t<string>Entitlements</string>\n"
+        "\t\t\t<string>IsAppClip</string>\n"
         "\t\t</array>\n\t</dict>\n</dict>\n</plist>\n";
     if (relay_send(s, browse, sizeof browse - 1) != 0) {
         close(s);
@@ -898,12 +908,22 @@ static void method_list_apps(int fd, long id, const char *line)
                 plist_t type = plist_dict_get_item(app, "ApplicationType");
                 int user = 0;
                 if (type) { char *tv = NULL; plist_get_string_val(type, &tv); if (tv && !strcmp(tv, "User")) user = 1; free(tv); }
+                plist_t ent = plist_dict_get_item(app, "Entitlements");
+                plist_t gta = (ent && plist_get_node_type(ent) == PLIST_DICT)
+                            ? plist_dict_get_item(ent, "get-task-allow") : NULL;
+                uint8_t developer = 0;
+                if (gta && plist_get_node_type(gta) == PLIST_BOOLEAN) plist_get_bool_val(gta, &developer);
+                plist_t clip = plist_dict_get_item(app, "IsAppClip");
+                uint8_t appClip = 0;
+                if (clip && plist_get_node_type(clip) == PLIST_BOOLEAN) plist_get_bool_val(clip, &appClip);
                 sb_puts(&b, first ? "{" : ",{");
                 first = 0;
                 sb_puts(&b, "\"bundleIdentifier\":"); sb_plstr(&b, bid);
                 sb_puts(&b, ",\"name\":");             sb_plstr(&b, name);
                 sb_puts(&b, ",\"version\":");          sb_plstr(&b, ver);
-                sb_printf(&b, ",\"isFirstParty\":%s}", user ? "false" : "true");
+                sb_printf(&b, ",\"isFirstParty\":%s", user ? "false" : "true");
+                sb_printf(&b, ",\"isDeveloper\":%s", developer ? "true" : "false");
+                sb_printf(&b, ",\"isAppClip\":%s}", appClip ? "true" : "false");
             }
         }
         plist_free(pl);

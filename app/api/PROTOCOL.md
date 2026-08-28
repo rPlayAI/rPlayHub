@@ -104,9 +104,14 @@ Params `{"action": "restart" | "shutdown" | "sleep"}`. Speaks `diagnostics_relay
 (classic plist framing plus the RSDCheckin preamble). `restart` drops the tunnel; the app
 reconnects about 45 s later. `shutdown` leaves the phone off until its side button is pressed.
 
-### `list_apps` → `[{"bundleIdentifier", "name", "version", "isFirstParty"}, ...]`
+### `list_apps` → `[{"bundleIdentifier", "name", "version", "isFirstParty", "isDeveloper", "isAppClip"}, ...]`
 A JSON **array**, from `installation_proxy`'s Browse (appservice's `listapps` validates and then
-never answers on iOS 26.5). `isFirstParty` is `ApplicationType != User`.
+never answers on iOS 26.5). `isFirstParty` is `ApplicationType != User`. `isDeveloper` is
+`get-task-allow` out of the app's `Entitlements` — the flag Xcode sets `true` on a
+development-signed build (to let a debugger attach), `false` on an App Store or ad-hoc one. This,
+not `isFirstParty`, is Device Hub's actual "Developer" filter: confirmed against the live app,
+whose Developer bucket held only 3 sideloaded test builds under one signer, not every third-party
+app the way "not Apple's own" would. `isAppClip` is `IsAppClip` verbatim, for the App Clips filter.
 
 ### `list_processes` → `{"processTokens": [{"processIdentifier", "executableURL": {"relative"}}]}`
 ### `launch_app` → `{"processToken": {"processIdentifier", "executableURL", ...}}`
