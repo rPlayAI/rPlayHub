@@ -79,8 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 0
-        // Wide enough for the longest device name we show without the toolbar clipping it.
+        // Wide enough for the longest device name we show without the toolbar clipping it, and
+        // tall enough to set the toolbar's own height: a toolbar grows to fit its tallest item,
+        // and ours came out ~50pt against Device Hub's ~57pt measured across the two windows
+        // side by side, which made every pane below start higher than its.
         stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
+        stack.heightAnchor.constraint(equalToConstant: 40).isActive = true
         return stack
     }()
 
@@ -1476,6 +1480,9 @@ extension AppDelegate: NSToolbarDelegate {
         case Self.deviceTitleItem:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Device"
+            // No capsule behind it. This macOS draws toolbar items on a rounded background; Device
+            // Hub's device name is plain text on the bar, so ours was reading as a control.
+            item.isBordered = false
             item.view = deviceTitleView
             return item
         case Self.inspectorTabsItem:
