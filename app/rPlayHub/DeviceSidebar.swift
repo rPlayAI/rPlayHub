@@ -60,7 +60,8 @@ struct DeviceRow {
 final class DeviceSidebar: NSView {
     private let scroll = NSScrollView()
     private let table = NSTableView()
-    private let search = NSSearchField()
+    /// Exposed so the toolbar's filter button can focus it rather than duplicating it.
+    let search = NSSearchField()
     private let sectionLabel = NSTextField(labelWithString: "Available")
     private var allRows: [DeviceRow] = []
     private var rows: [DeviceRow] = []

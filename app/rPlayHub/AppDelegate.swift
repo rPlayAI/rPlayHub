@@ -47,7 +47,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// works against the recovery it is waiting for.
     private var retryDelay: TimeInterval = AppDelegate.retryDelayBase
     private static let retryDelayBase: TimeInterval = 2.0
-    private static let retryDelayMax: TimeInterval = 60.0
+    /// 10s, not 60. The engine is a LOCAL daemon that is restarted constantly during development,
+    /// and a 60-second ceiling meant the app could sit idle for most of a minute after it came
+    /// back: observed launching at 00:48:08 against a dead daemon, reaching the 60s step at
+    /// 00:49:22, and cdhost starting seven seconds later -- so nothing reconnected until 00:50:22.
+    /// A 10s ceiling still stops the tight 2-second loop this backoff exists to prevent.
+    private static let retryDelayMax: TimeInterval = 10.0
     /// True from the start of connect() until it has either got video or given up.
     private var connecting = false
     /// True once the user has clicked View Screen for the currently-selected device -- Device
@@ -61,6 +66,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var boundUDID: String?
     private var lastFrameCount = 0
     private var fps = 0
+
+    /// The title bar's two-line device block (name over OS), Device Hub's own shape.
+    private let deviceTitleName = NSTextField(labelWithString: "")
+    private let deviceTitleOS = NSTextField(labelWithString: "")
+    private lazy var deviceTitleView: NSView = {
+        deviceTitleName.font = .systemFont(ofSize: 13, weight: .bold)
+        deviceTitleName.textColor = .labelColor
+        deviceTitleOS.font = .systemFont(ofSize: 11)
+        deviceTitleOS.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [deviceTitleName, deviceTitleOS])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 0
+        // Wide enough for the longest device name we show without the toolbar clipping it.
+        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
+        return stack
+    }()
 
     private let videoPort: UInt16 = 9877
     private let controlPort: UInt16 = 9876
@@ -292,10 +314,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         toolbar.displayMode = .iconOnly
         window.toolbar = toolbar
         window.toolbarStyle = .unified
+        // Device Hub shows no centred window title -- the device name is a two-line block in the
+        // toolbar itself, left-aligned at the canvas. Leaving the standard title visible put a
+        // second, centred copy of roughly the same text in the same row.
+        window.titleVisibility = .hidden
     }
 
     @objc private func toggleSidebar() {
         sidebar.isHidden.toggle()
+    }
+
+    /// Device Hub's title-bar device block: the name in bold over the OS version in grey, two
+    /// lines, left-aligned where the canvas begins. Its window carries no centred title at all,
+    /// which is why ours sets `titleVisibility = .hidden` rather than competing with this.
+    @objc private func addDeviceTapped() {
+        // Device Hub opens a pairing flow here. Ours has nothing to pair with yet -- say so
+        // rather than leaving a button that looks broken.
+        present(title: "Add Device",
+                text: "Devices attached over USB or paired over the network appear in the "
+                    + "sidebar automatically. Pairing a new device from here is not implemented "
+                    + "yet.")
+    }
+
+    @objc private func filterDevicesTapped() {
+        // The sidebar already has a search field; focus it rather than duplicating the filter.
+        window.makeFirstResponder(sidebar.search)
+    }
+
+    @objc private func overflowTapped() {
+        guard let item = window.toolbar?.items.first(where: {
+            $0.itemIdentifier == NSToolbarItem.Identifier("overflow") }),
+              let view = item.view ?? window.contentView else { return }
+        let menu = NSMenu()
+        for command in [("Take Screenshot", DeviceSidebar.Command.screenshot),
+                        ("Press Home", .home),
+                        ("Open in New Window", .openInNewWindow),
+                        ("Reconnect", .reconnect)] {
+            let mi = NSMenuItem(title: command.0, action: #selector(overflowCommand(_:)),
+                                keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = command.1.rawValue
+            menu.addItem(mi)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
+    }
+
+    @objc private func overflowCommand(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let command = DeviceSidebar.Command(rawValue: raw) else { return }
+        perform(command, on: sidebar.selectedRow())
+    }
+
+    /// Keeps the two-line title in step with whatever the sidebar has selected.
+    private func updateDeviceTitle() {
+        if let row = sidebar.selectedRow() {
+            deviceTitleName.stringValue = row.name
+            deviceTitleOS.stringValue = row.isSimulator ? "Simulator" : "iOS \(row.version)"
+        } else {
+            deviceTitleName.stringValue = deviceLabel
+            deviceTitleOS.stringValue = ""
+        }
     }
 
     /// Bring the embedded root engine up via SMAppService on launch. No-op in dev builds, which
@@ -1222,6 +1300,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateStatus() {
+        // The two-line device block in the toolbar is the visible title now (the window's own
+        // centred title is hidden), so it tracks whatever the sidebar has selected.
+        updateDeviceTitle()
         guard let decoder = hevc else {
             window.title = "rPlayHub — \(deviceLabel)"
             return
@@ -1307,38 +1388,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - toolbar
 
+/// The title bar, in Device Hub's own left-to-right order, catalogued off its live window:
+///
+///     [traffic lights]  +  ≡  ▢▏   iPhone13 / iOS 27.0   [⌨ ▣]   »        [sliders doc ⓘ]
+///
+/// The two things that made ours read differently at a glance: the sidebar toggle sat alone on
+/// the far left with nothing beside it, and the device name was a standard one-line window title
+/// centred across the bar. Device Hub's is a two-line name/OS block, left-aligned where the
+/// canvas begins, and its window has no centred title at all.
 extension AppDelegate: NSToolbarDelegate {
+    private static let addDeviceItem = NSToolbarItem.Identifier("addDevice")
+    private static let listItem = NSToolbarItem.Identifier("deviceList")
     private static let sidebarItem = NSToolbarItem.Identifier("toggleSidebar")
+    private static let deviceTitleItem = NSToolbarItem.Identifier("deviceTitle")
+    private static let keyboardItem = NSToolbarItem.Identifier("keyboardInput")
+    private static let framesItem = NSToolbarItem.Identifier("frames")
+    private static let overflowItem = NSToolbarItem.Identifier("overflow")
     /// Settings/Report/Info -- Device Hub keeps these in the title bar itself, at the trailing
     /// edge, same row as the traffic lights; not inside the inspector's content area.
     private static let inspectorTabsItem = NSToolbarItem.Identifier("inspectorTabs")
 
+    private static let order: [NSToolbarItem.Identifier] = [
+        addDeviceItem, listItem, sidebarItem, deviceTitleItem,
+        .flexibleSpace, keyboardItem, framesItem, .flexibleSpace, overflowItem,
+        .flexibleSpace, inspectorTabsItem,
+    ]
+
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.sidebarItem, .flexibleSpace, Self.inspectorTabsItem]
+        Self.order
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.sidebarItem, .flexibleSpace, Self.inspectorTabsItem]
+        Self.order
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        if id == Self.sidebarItem {
+        func icon(_ symbol: String, _ label: String, _ tip: String,
+                  _ action: Selector?) -> NSToolbarItem {
             let item = NSToolbarItem(itemIdentifier: id)
-            item.label = "Sidebar"
-            item.toolTip = "Hide Sidebar"
-            item.image = NSImage(systemSymbolName: "sidebar.left",
-                                 accessibilityDescription: "Hide Sidebar")
-            item.target = self
-            item.action = #selector(toggleSidebar)
+            item.label = label
+            item.toolTip = tip
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
+            item.target = action == nil ? nil : self
+            item.action = action
+            // Device Hub greys the pair it cannot use rather than hiding them, so the bar keeps
+            // its shape whatever the device supports. isEnabled alone does not stop a toolbar
+            // item responding, hence the nil action above.
+            item.isEnabled = action != nil
             return item
         }
-        if id == Self.inspectorTabsItem {
+        switch id {
+        case Self.addDeviceItem:
+            return icon("plus", "Add", "Add Device", #selector(addDeviceTapped))
+        case Self.listItem:
+            return icon("line.3.horizontal.decrease", "Filter", "Filter Devices",
+                        #selector(filterDevicesTapped))
+        case Self.sidebarItem:
+            return icon("sidebar.left", "Sidebar", "Hide Sidebar", #selector(toggleSidebar))
+        case Self.keyboardItem:
+            // Greyed in Device Hub too unless the device takes keyboard input.
+            return icon("keyboard", "Keyboard", "Send Keyboard Input", nil)
+        case Self.framesItem:
+            return icon("rectangle.on.rectangle", "Frames", "Window Frames", nil)
+        case Self.overflowItem:
+            return icon("chevron.right.2", "More", "More", #selector(overflowTapped))
+        case Self.deviceTitleItem:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = "Device"
+            item.view = deviceTitleView
+            return item
+        case Self.inspectorTabsItem:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = "Inspector"
             item.view = inspector.iconTabs
             return item
+        default:
+            return nil
         }
-        return nil
     }
 }

@@ -34,8 +34,11 @@ final class InspectorPane: NSView {
         detail: "A diagnostics report view, matching Device Hub's Report tab.")
 
     /// Settings, Report, Info -- lives in the window's title bar, not in this view. Exposed so
-    /// AppDelegate can put it in a toolbar item.
-    let iconTabs = NSSegmentedControl()
+    /// AppDelegate can put it in a toolbar item. Hand-rolled (see IconTabBar) because a
+    /// segmented control paints its selection with the accent colour and Device Hub's is grey.
+    let iconTabs = IconTabBar(icons: [("slider.horizontal.3", "Settings"),
+                                      ("doc.text", "Report"),
+                                      ("info.circle", "Info")])
     /// Second row, under Info only: the text-named tabs.
     private let textTabs = NSSegmentedControl()
 
@@ -43,10 +46,6 @@ final class InspectorPane: NSView {
     /// Which of the 3 icon segments is active, kept even while the pane is hidden so a re-show
     /// (clicking any icon) restores the last tab rather than always resetting to Info.
     private var activeIcon = infoIndex
-    /// What iconTabs' 3 segments were actually showing as selected after our last pass --
-    /// diffed against on the next click to find which one the user just clicked, since
-    /// .selectAny toggles only the clicked segment and leaves the others as we last set them.
-    private var lastIconSelected = [false, false, false]
 
     /// The device whose details the Info tab should show.
     var udid: String? {
@@ -86,25 +85,8 @@ final class InspectorPane: NSView {
         layer?.backgroundColor = NSColor(srgbRed: 0xFA / 255, green: 0xFA / 255, blue: 0xFA / 255,
                                          alpha: 1).cgColor
 
-        let icons = [("slider.horizontal.3", "Settings"), ("doc.text", "Report"), ("info.circle", "Info")]
-        iconTabs.segmentCount = icons.count
-        for (i, (symbol, label)) in icons.enumerated() {
-            iconTabs.setImage(NSImage(systemSymbolName: symbol, accessibilityDescription: label),
-                              forSegment: i)
-            iconTabs.setToolTip(label, forSegment: i)
-            iconTabs.setWidth(0, forSegment: i)     // 0 = size to fit
-        }
-        iconTabs.segmentStyle = .texturedRounded
-        // .selectAny (not the default .selectOne) so a click on the ALREADY-selected segment
-        // still fires the action -- that re-click is what toggles the panel closed, exactly
-        // like the real Device Hub. Exclusivity among the 3 is enforced by hand in
-        // iconTabChanged() below.
-        iconTabs.trackingMode = .selectAny
-        iconTabs.setSelected(true, forSegment: Self.infoIndex)
-        lastIconSelected[Self.infoIndex] = true
-        iconTabs.target = self
-        iconTabs.action = #selector(iconTabChanged)
-        iconTabs.translatesAutoresizingMaskIntoConstraints = false
+        iconTabs.selected = Self.infoIndex
+        iconTabs.onSelect = { [weak self] index in self?.iconTabClicked(index) }
 
         let subNames = ["Info", "Apps", "Profiles", "Files", "Console", "Controls"]
         textTabs.segmentCount = subNames.count
@@ -162,32 +144,24 @@ final class InspectorPane: NSView {
     /// active icon does.
     func setHidden(_ hidden: Bool) {
         isHidden = hidden
-        for i in 0..<iconTabs.segmentCount {
-            let selected = !isHidden && i == activeIcon
-            iconTabs.setSelected(selected, forSegment: i)
-            lastIconSelected[i] = selected
-        }
+        iconTabs.selected = hidden ? nil : activeIcon
         applySelection()
     }
 
     /// Re-clicking the already-active icon collapses this pane instead of just reselecting it --
     /// Device Hub's Settings/Report/Info icons are also the show/hide toggle for the whole
     /// panel, with no separate dedicated button for it.
-    @objc private func iconTabChanged() {
-        guard let clicked = (0..<iconTabs.segmentCount).first(where: {
-            iconTabs.isSelected(forSegment: $0) != lastIconSelected[$0]
-        }) else { return }
+    /// Device Hub's behaviour, confirmed against the live app: clicking the tab that is already
+    /// active collapses the whole inspector (and no icon shows lit); clicking any icon while
+    /// collapsed reopens it on that tab.
+    private func iconTabClicked(_ clicked: Int) {
         if clicked == activeIcon && !isHidden {
             isHidden = true
         } else {
             activeIcon = clicked
             isHidden = false
         }
-        for i in 0..<iconTabs.segmentCount {
-            let selected = !isHidden && i == activeIcon
-            iconTabs.setSelected(selected, forSegment: i)
-            lastIconSelected[i] = selected
-        }
+        iconTabs.selected = isHidden ? nil : activeIcon
         applySelection()
     }
 
