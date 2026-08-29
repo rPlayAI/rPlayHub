@@ -93,7 +93,6 @@ final class MirrorView: NSView {
     /// True while the picture is the small pre-connect mockup rather than the full-bleed
     /// screen/video -- `screenRect()` and `layout()` both key off this.
     private var isGated = false { didSet { needsLayout = true } }
-    private var panelTracking: NSTrackingArea?
 
     /// Called when the View Screen button is clicked. AppDelegate starts the video pipeline.
     var onViewScreen: (() -> Void)?
@@ -379,22 +378,6 @@ final class MirrorView: NSView {
         return CGPoint(x: min(max(fx, 0), 1), y: min(max(fy, 0), 1))
     }
 
-    /// Device Hub lights the View Screen button while the pointer is anywhere in this panel, so
-    /// the tracking area covers the whole view rather than the button. `.inVisibleRect` keeps it
-    /// correct as the pane resizes, without recomputing a rect on every layout pass.
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let panelTracking { removeTrackingArea(panelTracking) }
-        let area = NSTrackingArea(rect: .zero,
-                                  options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                  owner: self, userInfo: nil)
-        addTrackingArea(area)
-        panelTracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { viewScreenButton.isLit = true }
-    override func mouseExited(with event: NSEvent) { viewScreenButton.isLit = false }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
@@ -581,13 +564,18 @@ final class MirrorView: NSView {
 /// Device Hub's View Screen button: a #DCDCDC grey capsule that turns solid #6155F5 indigo with
 /// white text and icon.
 ///
-/// What triggers it is the part worth recording, because two plausible guesses were both wrong.
-/// It is NOT hovering the button, and NOT window focus on its own: it lights while the pointer is
-/// anywhere inside the MIDDLE PANEL (the device pane), and goes grey when the pointer leaves it.
-/// Established by driving the real app -- pointer parked in the canvas well away from the button,
-/// window focused, and the button was indigo; same window focused with the pointer outside the
-/// canvas, and it was grey. So the tracking area belongs to MirrorView, not to this button, and
-/// this just renders whatever state it is handed.
+/// The trigger is simply whether the window is KEY -- the standard macOS default-button
+/// behaviour, tinted with Device Hub's own colour. It has nothing to do with the pointer.
+///
+/// Recorded because it cost three wrong guesses: hovering the button, then pointer-anywhere-in-
+/// the-middle-panel, before the truth. Each was "confirmed" by a measurement that happened to
+/// agree. What settled it was testing the states separately -- click the panel then move the
+/// pointer right outside the window (stays indigo), click the sidebar instead (still indigo),
+/// then make another app frontmost (grey). Only key state explains all three.
+///
+/// The misleading data point was activating Device Hub with System Events `set frontmost`, which
+/// left the button grey: that activates the app without the window actually becoming key, so it
+/// looked like focus alone was not the trigger when it is.
 ///
 /// #6155F5 is Device Hub's own tint, not the system accent: this machine's AppleAccentColor is
 /// unset, so `controlAccentColor` is the default blue and would be visibly the wrong colour.
@@ -597,8 +585,6 @@ final class MirrorView: NSView {
 /// (228,228,228) face whatever it was set to. A borderless button with its own layer background
 /// is the only way to get both the exact colour and the capsule shape.
 final class HoverButton: NSButton {
-    /// Set by the owning view as the pointer enters and leaves the panel.
-    var isLit = false { didSet { if isLit != oldValue { apply() } } }
     private var observers: [NSObjectProtocol] = []
 
     static let resting = NSColor(srgbRed: 0xDC / 255, green: 0xDC / 255, blue: 0xDC / 255, alpha: 1)
@@ -636,7 +622,8 @@ final class HoverButton: NSButton {
         for o in observers { NotificationCenter.default.removeObserver(o) }
         observers.removeAll()
         guard let window else { return }
-        // Losing focus must drop the highlight even if the pointer never moved.
+        // The highlight is entirely a function of key state, so these two notifications are the
+        // only thing that drives it.
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
             observers.append(NotificationCenter.default.addObserver(
                 forName: name, object: window, queue: .main) { [weak self] _ in self?.apply() })
@@ -649,7 +636,7 @@ final class HoverButton: NSButton {
     }
 
     private func apply() {
-        let lit = isLit && (window?.isKeyWindow ?? false)
+        let lit = window?.isKeyWindow ?? false
         layer?.backgroundColor = (lit ? Self.active : Self.resting).cgColor
         contentTintColor = lit ? .white : .labelColor      // tints the SF Symbol
         attributedTitle = NSAttributedString(string: title, attributes: [
