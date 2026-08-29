@@ -1001,6 +1001,61 @@ int main(int argc, char **argv)
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = NULL;   /* window layout is fixed; don't scatter imgui.ini files */
     ImGui::StyleColorsDark();
+    /* A restrained pass over the stock dark theme: rounded shapes, quieter grays, one blue
+     * accent, more air. The goal is "polished tool", not pretending to be AppKit. */
+    {
+        ImGuiStyle &st = ImGui::GetStyle();
+        st.WindowRounding = st.ChildRounding = st.PopupRounding = 6.0f;
+        st.FrameRounding = st.GrabRounding = st.TabRounding = 5.0f;
+        st.ScrollbarRounding = 8.0f;
+        st.WindowPadding = ImVec2(12, 10);
+        st.FramePadding = ImVec2(10, 5);
+        st.ItemSpacing = ImVec2(10, 7);
+        st.CellPadding = ImVec2(8, 4);
+        st.ScrollbarSize = 12.0f;
+        st.WindowBorderSize = 0.0f;
+        st.ChildBorderSize = 1.0f;
+
+        ImVec4 *c = st.Colors;
+        const ImVec4 bg(0.106f, 0.110f, 0.122f, 1.0f);       /* window ground */
+        const ImVec4 panel(0.137f, 0.141f, 0.157f, 1.0f);    /* columns */
+        const ImVec4 field(0.192f, 0.196f, 0.216f, 1.0f);    /* inputs, buttons */
+        const ImVec4 fieldHi(0.24f, 0.25f, 0.28f, 1.0f);
+        const ImVec4 accent(0.255f, 0.500f, 0.890f, 1.0f);   /* the one blue */
+        const ImVec4 accentDim(0.20f, 0.36f, 0.62f, 1.0f);
+        c[ImGuiCol_WindowBg] = bg;
+        c[ImGuiCol_ChildBg] = panel;
+        c[ImGuiCol_PopupBg] = ImVec4(0.15f, 0.155f, 0.17f, 0.98f);
+        c[ImGuiCol_Border] = ImVec4(1, 1, 1, 0.06f);
+        c[ImGuiCol_FrameBg] = field;
+        c[ImGuiCol_FrameBgHovered] = fieldHi;
+        c[ImGuiCol_FrameBgActive] = fieldHi;
+        c[ImGuiCol_Button] = field;
+        c[ImGuiCol_ButtonHovered] = fieldHi;
+        c[ImGuiCol_ButtonActive] = accentDim;
+        c[ImGuiCol_Header] = accentDim;
+        c[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.42f, 0.72f, 1.0f);
+        c[ImGuiCol_HeaderActive] = accent;
+        c[ImGuiCol_Tab] = field;
+        c[ImGuiCol_TabHovered] = accent;
+        c[ImGuiCol_TabSelected] = accentDim;
+        c[ImGuiCol_TabDimmed] = panel;
+        c[ImGuiCol_TabDimmedSelected] = field;
+        c[ImGuiCol_TableHeaderBg] = field;
+        c[ImGuiCol_TableRowBg] = ImVec4(1, 1, 1, 0.015f);
+        c[ImGuiCol_TableRowBgAlt] = ImVec4(1, 1, 1, 0.045f);
+        c[ImGuiCol_TableBorderLight] = ImVec4(1, 1, 1, 0.04f);
+        c[ImGuiCol_TableBorderStrong] = ImVec4(1, 1, 1, 0.08f);
+        c[ImGuiCol_TitleBgActive] = panel;
+        c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0.0f);
+        c[ImGuiCol_ScrollbarGrab] = ImVec4(1, 1, 1, 0.14f);
+        c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(1, 1, 1, 0.24f);
+        c[ImGuiCol_SeparatorHovered] = accentDim;
+        c[ImGuiCol_Text] = ImVec4(0.92f, 0.93f, 0.94f, 1.0f);
+        c[ImGuiCol_TextDisabled] = ImVec4(0.55f, 0.56f, 0.60f, 1.0f);
+        c[ImGuiCol_CheckMark] = accent;
+        c[ImGuiCol_PlotLines] = accent;
+    }
     /* Rough high-DPI accommodation: scale the UI with the desktop, and load a real TTF at the
      * target pixel size — the stock bitmap font upscaled is what makes tools look homemade. */
     SDL_DisplayMode dm;
