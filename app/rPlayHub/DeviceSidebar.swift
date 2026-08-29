@@ -110,6 +110,17 @@ final class DeviceSidebar: NSView {
         build()
     }
 
+    /// Clicking anywhere in this pane -- including the empty space below its content -- takes
+    /// focus, which is what turns the canvas's View Screen highlight off. Clicks that land on a
+    /// control or table row reach that subview first and it claims focus itself; this only
+    /// catches the dead space those miss.
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
     private func build() {
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("device"))
         column.width = 220

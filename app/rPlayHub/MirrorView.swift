@@ -134,6 +134,11 @@ final class MirrorView: NSView {
         viewScreenButton.image = NSImage(systemSymbolName: "rectangle.inset.filled.and.person.filled",
                                          accessibilityDescription: "View Screen")
         viewScreenButton.imagePosition = .imageLeading
+        // Centre the image+title as one group. The button has an explicit 127pt frame (wider than
+        // its fitting size, to match Device Hub), and without this the cell pins the group to the
+        // leading edge -- which put the icon inside the capsule's rounded end rather than clear
+        // of it. The two leading spaces in the title are the gap between icon and text.
+        viewScreenButton.alignment = .center
         // Colour, shape and hover behaviour all live in HoverButton (below) -- it draws its own
         // capsule, because a bezelled button would not take the colour.
         viewScreenButton.title = "  View Screen"
@@ -534,7 +539,20 @@ final class MirrorView: NSView {
 
     // MARK: - input
 
+    override func becomeFirstResponder() -> Bool {
+        viewScreenButton.isFocusedPanel = true
+        return super.becomeFirstResponder()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        viewScreenButton.isFocusedPanel = false
+        return super.resignFirstResponder()
+    }
+
     override func mouseDown(with event: NSEvent) {
+        // Clicking a view does not make it first responder on its own, and this panel's focus is
+        // what lights the View Screen button (see HoverButton).
+        window?.makeFirstResponder(self)
         let p = convert(event.locationInWindow, from: nil)
         dragStart = normalized(p)
         dragStartedAt = event.timestamp
@@ -564,18 +582,16 @@ final class MirrorView: NSView {
 /// Device Hub's View Screen button: a #DCDCDC grey capsule that turns solid #6155F5 indigo with
 /// white text and icon.
 ///
-/// The trigger is simply whether the window is KEY -- the standard macOS default-button
-/// behaviour, tinted with Device Hub's own colour. It has nothing to do with the pointer.
+/// It lights when the MIDDLE PANEL is the focused one and its window is key, and goes grey when
+/// either the sidebar or the inspector is clicked, or the app goes to the background. Nothing to
+/// do with the pointer.
 ///
-/// Recorded because it cost three wrong guesses: hovering the button, then pointer-anywhere-in-
-/// the-middle-panel, before the truth. Each was "confirmed" by a measurement that happened to
-/// agree. What settled it was testing the states separately -- click the panel then move the
-/// pointer right outside the window (stays indigo), click the sidebar instead (still indigo),
-/// then make another app frontmost (grey). Only key state explains all three.
-///
-/// The misleading data point was activating Device Hub with System Events `set frontmost`, which
-/// left the button grey: that activates the app without the window actually becoming key, so it
-/// looked like focus alone was not the trigger when it is.
+/// Recorded because it cost several wrong guesses -- hovering the button, pointer anywhere in the
+/// middle panel, then key-window state alone -- each "confirmed" by a measurement that happened
+/// to agree with it. Two things kept poisoning those checks: activating Device Hub with System
+/// Events `set frontmost` activates the app WITHOUT its window becoming key, and its window moves
+/// between runs, so a fixed sample coordinate silently reads background instead of the button.
+/// The behaviour above came from the user watching the real app, not from those captures.
 ///
 /// #6155F5 is Device Hub's own tint, not the system accent: this machine's AppleAccentColor is
 /// unset, so `controlAccentColor` is the default blue and would be visibly the wrong colour.
@@ -585,6 +601,8 @@ final class MirrorView: NSView {
 /// (228,228,228) face whatever it was set to. A borderless button with its own layer background
 /// is the only way to get both the exact colour and the capsule shape.
 final class HoverButton: NSButton {
+    /// Set by the owning panel as it gains and loses first-responder status.
+    var isFocusedPanel = false { didSet { if isFocusedPanel != oldValue { apply() } } }
     private var observers: [NSObjectProtocol] = []
 
     static let resting = NSColor(srgbRed: 0xDC / 255, green: 0xDC / 255, blue: 0xDC / 255, alpha: 1)
@@ -636,7 +654,7 @@ final class HoverButton: NSButton {
     }
 
     private func apply() {
-        let lit = window?.isKeyWindow ?? false
+        let lit = isFocusedPanel && (window?.isKeyWindow ?? false)
         layer?.backgroundColor = (lit ? Self.active : Self.resting).cgColor
         contentTintColor = lit ? .white : .labelColor      // tints the SF Symbol
         attributedTitle = NSAttributedString(string: title, attributes: [

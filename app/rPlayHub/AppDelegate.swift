@@ -301,7 +301,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = split
         window.setContentSize(NSSize(width: 250 + 389 + 320, height: 844))
         buildToolbar()
-        window.makeFirstResponder(view)
+        // Deliberately NOT focusing the canvas at launch: Device Hub opens with its View Screen
+        // button grey, and that highlight follows this panel's focus (see HoverButton).
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
