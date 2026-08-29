@@ -78,11 +78,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var framesAtLastTick = 0
     private var quietTicks = 0
 
-    /// Device Hub's device pane shows the phone's current screen as a still picture before View
-    /// Screen, and that is all it can show for a device that cannot mirror. Do the same: while
-    /// no frames are arriving, take a screenshot every few seconds and put it where the video
-    /// would be. The first frame of real video hides it.
+    /// Once View Screen has been clicked, while no video frames are arriving (a device that
+    /// cannot mirror, or the stream stalling), take a screenshot every few seconds and put it
+    /// where the video would be. The first real frame hides it.
+    ///
+    /// Only runs once `wantsVideo` -- confirmed against the live app: Device Hub's own pre-View
+    /// Screen state is the plain blue placeholder, not a screenshot, and doesn't connect to the
+    /// device at all until clicked. This used to run unconditionally, which took a screenshot (a
+    /// real connection to the device) a couple of seconds after every launch whether or not
+    /// anyone had asked to view the screen.
     private func refreshStillIfIdle() {
+        guard wantsVideo else { return }
         // Every video path -- the engine proxy AND the direct RTP stream -- ends at
         // displayLayer.present, so its counter is the one signal that means "a picture arrived".
         // hevc.framesEnqueued only moves on the proxy path, so watching it painted a screenshot
@@ -195,8 +201,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         split.dividerStyle = .thin
         split.autoresizingMask = [.width, .height]
         // Screen with its actions directly underneath, as Device Hub arranges them: the buttons
-        // act on the picture, so they sit with it rather than off in the inspector.
+        // act on the picture, so they sit with it rather than off in the inspector. Hidden until
+        // View Screen is clicked and there is a picture for them to act on.
         strip = ControlStrip()
+        strip.isHidden = true
         strip.onAction = { [weak self] action in
             switch action {
             case .pin:        self?.perform(.pin, on: nil)
@@ -239,7 +247,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Without explicit widths the split view squeezes the side panes and the rows clip.
         // Equal-constant at a lower priority sets the resting width; the >= keeps them usable.
-        for (pane, width) in [(sidebar as NSView, 250.0), (inspector as NSView, 260.0)] {
+        //
+        // `stage` didn't used to be in this list -- as the pane with the lowest holding priority
+        // (240, above) it's the one meant to give first when something else legitimately needs
+        // more room, but with no resting width of its own it had nothing to give FROM: any
+        // over-demand anywhere (Device Hub's inspector has three text sub-tabs; this one folds in
+        // three more of ours, Files/Console/Controls, and needs more room for them) shrank it
+        // arbitrarily far instead of by a bounded amount. 389 is Device Hub's own canvas width,
+        // measured directly off its live window.
+        for (pane, width) in [(sidebar as NSView, 250.0), (stage as NSView, 389.0),
+                              (inspector as NSView, 320.0)] {
             pane.translatesAutoresizingMaskIntoConstraints = false
             let resting = pane.widthAnchor.constraint(equalToConstant: width)
             resting.priority = NSLayoutConstraint.Priority(700)
@@ -248,7 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         window.contentView = split
-        window.setContentSize(NSSize(width: 250 + 390 + 260, height: 844))
+        window.setContentSize(NSSize(width: 250 + 389 + 320, height: 844))
         buildToolbar()
         window.makeFirstResponder(view)
         window.makeKeyAndOrderFront(nil)
@@ -974,6 +991,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             view.showViewScreenPrompt(name: deviceLabel, os: "")
         }
+        // The action buttons act on the live picture; before View Screen there is none to act on.
+        strip.isHidden = true
     }
 
     /// Device Hub's View Screen: starts the actual video pipeline against the control connection
@@ -982,6 +1001,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let c = control else { return }
         wantsVideo = true
         view.hideViewScreenPrompt()
+        strip.isHidden = false
         startVideo(c)
     }
 

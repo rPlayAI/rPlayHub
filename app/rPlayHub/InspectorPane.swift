@@ -74,6 +74,12 @@ final class InspectorPane: NSView {
     }
 
     private func build() {
+        // The device list's own background (sampled off the live Device Hub window, #E4E4E4) --
+        // only the canvas in the middle is white; both side panes match each other.
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(srgbRed: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255,
+                                         alpha: 1).cgColor
+
         let icons = [("slider.horizontal.3", "Settings"), ("doc.text", "Report"), ("info.circle", "Info")]
         iconTabs.segmentCount = icons.count
         for (i, (symbol, label)) in icons.enumerated() {
@@ -98,13 +104,13 @@ final class InspectorPane: NSView {
         textTabs.segmentCount = subNames.count
         for (i, name) in subNames.enumerated() {
             textTabs.setLabel(name, forSegment: i)
-            textTabs.setWidth(0, forSegment: i)
         }
+        textTabs.segmentDistribution = .fillEqually
         textTabs.segmentStyle = .texturedRounded
         textTabs.selectedSegment = 0
         textTabs.target = self
         textTabs.action = #selector(subTabChanged)
-        textTabs.font = .systemFont(ofSize: 12)
+        textTabs.font = .systemFont(ofSize: 11)
         textTabs.translatesAutoresizingMaskIntoConstraints = false
 
         for v in allPanes {
@@ -115,13 +121,17 @@ final class InspectorPane: NSView {
 
         // iconTabs is NOT a subview here -- AppDelegate hosts it in the title bar toolbar
         // instead, so textTabs anchors directly to this pane's own top.
+        //
+        // Width is an explicit constraint tied to this pane, not a leading+trailing pin: with
+        // six folded-in sub-tabs (Device Hub's real inspector has three) `.texturedRounded`'s
+        // intrinsic content size ran wider than the pane and, pinned by two required edges, that
+        // intrinsic size won against the pane's own (lower-priority) resting width -- growing the
+        // whole inspector and stealing space from the canvas next to it, not just this control.
+        // Deriving the width from the pane instead removes intrinsic size from the fight entirely.
         NSLayoutConstraint.activate([
             textTabs.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            // Six folded-in sub-tabs are wider than Device Hub's real three, so this row is
-            // pinned to the inspector's full width (not just centered) and left to compress --
-            // unlike the icon row, which always fits.
             textTabs.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            textTabs.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            textTabs.widthAnchor.constraint(equalTo: widthAnchor, constant: -8),
         ])
         for v in allPanes {
             NSLayoutConstraint.activate([

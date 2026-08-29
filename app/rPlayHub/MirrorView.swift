@@ -72,17 +72,21 @@ final class MirrorView: NSView {
 
     var isShowingStill: Bool { !stillLayer.isHidden }
 
-    /// Device Hub's device pane, before View Screen: the device name + OS below the picture, and
-    /// a button that starts the actual video pipeline. AppKit views (not layers, like the rest of
-    /// this class) since they need text layout and a click target -- they sit above the layers,
-    /// which keep rendering the still underneath so the button reads as an overlay on the phone
-    /// rather than a replacement for it.
+    /// Device Hub's device pane, before View Screen: a small fixed-size phone mockup with the
+    /// device name + OS + button stacked underneath it, both centered as one block -- not a
+    /// full-bleed picture with the text overlaid on top. AppKit views (not layers, like the rest
+    /// of this class) since they need text layout and a click target; positioned by hand in
+    /// `layout()` (not Auto Layout) because where they sit depends on `screenRect()`, which is
+    /// itself only known there.
     private let viewScreenName = NSTextField(labelWithString: "")
     private let viewScreenOS = NSTextField(labelWithString: "")
     private let viewScreenButton = NSButton()
-    /// The dark backing behind the name/OS/button -- what showViewScreenPrompt/hideViewScreenPrompt
-    /// actually show and hide.
-    private var viewScreenStack: NSView!
+    /// What showViewScreenPrompt/hideViewScreenPrompt actually show and hide.
+    private var viewScreenStack: NSStackView!
+
+    /// True while the picture is the small pre-connect mockup rather than the full-bleed
+    /// screen/video -- `screenRect()` and `layout()` both key off this.
+    private var isGated = false { didSet { needsLayout = true } }
 
     /// Called when the View Screen button is clicked. AppDelegate starts the video pipeline.
     var onViewScreen: (() -> Void)?
@@ -92,18 +96,20 @@ final class MirrorView: NSView {
         viewScreenOS.stringValue = os
         viewScreenOS.isHidden = os.isEmpty
         viewScreenStack.isHidden = false
+        isGated = true
     }
 
     func hideViewScreenPrompt() {
         viewScreenStack.isHidden = true
+        isGated = false
     }
 
     private func buildViewScreenPrompt() {
         viewScreenName.font = .systemFont(ofSize: 13, weight: .semibold)
         viewScreenName.alignment = .center
-        viewScreenName.textColor = .white
+        viewScreenName.textColor = .labelColor
         viewScreenOS.font = .systemFont(ofSize: 11)
-        viewScreenOS.textColor = NSColor.white.withAlphaComponent(0.7)
+        viewScreenOS.textColor = .secondaryLabelColor
         viewScreenOS.alignment = .center
         viewScreenButton.title = "  View Screen"
         viewScreenButton.image = NSImage(systemSymbolName: "rectangle.on.rectangle",
@@ -117,35 +123,11 @@ final class MirrorView: NSView {
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 20, bottom: 14, right: 20)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        // A dark backing, since this sits ON the screenshot/still (that picture fills the whole
-        // pane, unlike Device Hub's small centered mockup with room below it for this text) --
-        // without it the name/OS read poorly against whatever is on the phone's screen.
-        let backing = NSVisualEffectView()
-        backing.material = .hudWindow
-        backing.blendingMode = .withinWindow
-        backing.state = .active
-        backing.wantsLayer = true
-        backing.layer?.cornerRadius = 12
-        backing.translatesAutoresizingMaskIntoConstraints = false
-        backing.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: backing.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: backing.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: backing.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: backing.bottomAnchor),
-        ])
-        backing.isHidden = true
-        addSubview(backing)
-        NSLayoutConstraint.activate([
-            backing.centerXAnchor.constraint(equalTo: centerXAnchor),
-            // Below the screenshot, not centered on top of it -- Device Hub's device pane shows
-            // the mockup image, then the name/OS/button underneath it, not overlaid on top.
-            backing.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -40),
-        ])
-        viewScreenStack = backing
+        // Frame-based, like the phone mockup it sits under -- `layout()` places both by hand.
+        stack.translatesAutoresizingMaskIntoConstraints = true
+        stack.isHidden = true
+        addSubview(stack)
+        viewScreenStack = stack
     }
 
     @objc private func viewScreenClicked() { onViewScreen?() }
@@ -228,11 +210,9 @@ final class MirrorView: NSView {
     private func setUpLayers() {
         buildContextMenu()
         wantsLayer = true
-        // Clear, not black. The screen keeps the device's aspect ratio, so it rarely fills the
-        // pane exactly and the leftover margin is drawn by this layer. Black made that margin
-        // read as part of the picture -- edges the video appeared to have and did not. Device
-        // Hub lets its window background show there, and so do we.
-        layer?.backgroundColor = NSColor.clear.cgColor
+        // Plain white, sampled directly off the live Device Hub pane -- true in both states, not
+        // just the letterboxing margin around a fitted picture.
+        layer?.backgroundColor = NSColor.white.cgColor
         layer?.masksToBounds = true
 
         clipLayer.masksToBounds = true
@@ -240,6 +220,10 @@ final class MirrorView: NSView {
         // rectangle inside the phone bezel, not a wallpaper mockup. Only visible while neither
         // stillLayer nor displayLayer has content -- both fully cover this the moment either does.
         clipLayer.backgroundColor = NSColor.systemBlue.cgColor
+        // The bezel outline -- without it the phone reads as a plain rounded rectangle rather
+        // than a device. Width is set proportionally in layout(), since it must scale with the
+        // mockup's own (much smaller, fixed) size before View Screen.
+        clipLayer.borderColor = NSColor.black.withAlphaComponent(0.85).cgColor
         // Above the video, inside the clip, so it rounds off with the screen corners.
         cutoutLayer.fillColor = NSColor.black.cgColor
         cutoutLayer.zPosition = 10
@@ -295,8 +279,38 @@ final class MirrorView: NSView {
     /// against `bounds` — that is the classic off-by-a-letterbox bug.
     private func screenRect() -> CGRect {
         var content = presentedSize
+        if content.width <= 0 || content.height <= 0 {
+            guard isGated else { return bounds }
+            // The real aspect isn't known yet -- deviceSize arrives asynchronously and can lag
+            // behind the gated prompt showing. Falling back to `bounds` here (as the non-gated
+            // path does) put the mockup at the CANVAS's own aspect ratio, which happens to look
+            // roughly phone-shaped and so read as "correct but huge" rather than obviously wrong.
+            // A generic phone ratio keeps the mockup small and phone-shaped either way; it is
+            // replaced by the real one within a layout pass or two once deviceSize is known.
+            content = CGSize(width: 9, height: 19.5)
+        }
         if rotation % 2 == 1 { content = CGSize(width: content.height, height: content.width) }
-        guard content.width > 0, content.height > 0 else { return bounds }
+        if isGated {
+            // Device Hub's pre-connect mockup is a small fixed-size phone (measured off the live
+            // app: ~94pt wide in its ~390pt canvas, a ratio of 0.24), not the picture scaled to
+            // fill the pane -- that fill only happens once there is an actual screen to show. The
+            // block (phone + gap + name/OS/button) is centered as a whole, matching the roughly
+            // equal top/bottom margins Device Hub leaves around it.
+            //
+            // Ratio, not a flat constant: an earlier version used bounds.width * 0.12, which is
+            // 94/923 -- Device Hub's WINDOW width, not this view's own (canvas-only) bounds. That
+            // silently halved the mockup every time, since `bounds` here has always been the
+            // canvas alone.
+            let targetWidth = min(120, max(60, bounds.width * 0.24))
+            let scale = targetWidth / content.width
+            let w = content.width * scale
+            let h = content.height * scale
+            let gap: CGFloat = 16
+            let stackHeight = viewScreenStack?.fittingSize.height ?? 0
+            let blockHeight = h + gap + stackHeight
+            let top = max(20, (bounds.height - blockHeight) / 2)
+            return CGRect(x: (bounds.width - w) / 2, y: top, width: w, height: h)
+        }
         let scale = min(bounds.width / content.width, bounds.height / content.height)
         let w = content.width * scale
         let h = content.height * scale
@@ -327,6 +341,11 @@ final class MirrorView: NSView {
         let screen = screenRect()
         clipLayer.frame = screen
         stillLayer.frame = clipLayer.bounds
+        // displayLayer sits above clipLayer's blue placeholder fill and is opaque black by
+        // default (see setUpLayers) -- with no video content that painted over the placeholder
+        // solid black instead of letting the blue mockup show through, even once it was sized
+        // down to the small pre-connect mockup rather than filling the whole pane.
+        displayLayer.isHidden = isGated
         // Turn the clip, not the display layer: the crop maths below is expressed in the
         // device's own frame, and rotating underneath it would mean redoing all of it per angle.
         clipLayer.transform = CATransform3DMakeRotation(CGFloat(rotation) * .pi / 2, 0, 0, 1)
@@ -347,6 +366,7 @@ final class MirrorView: NSView {
         // than as a rectangle of video. Both are pure presentation -- the picture underneath is
         // untouched, and taps still map to the full screen including behind the cutout.
         clipLayer.cornerRadius = clipSize.width * DeviceModel.cornerFraction(for: productType)
+        clipLayer.borderWidth = max(1, clipSize.width * 0.03)
         cutoutLayer.frame = clipLayer.bounds
         if let c = DeviceModel.cutoutRect(for: productType), clipSize.width > 0 {
             let w = clipSize.width * c.w
@@ -372,6 +392,17 @@ final class MirrorView: NSView {
             cutoutLayer.isHidden = false
         } else {
             cutoutLayer.isHidden = true
+        }
+
+        // Positioned here, not after the video-geometry guards below: those return early
+        // whenever there's no video size yet (videoSize is genuinely (0,0) for the whole time
+        // before View Screen is first clicked), which used to skip this every single time while
+        // gated and leave the name/OS/button stuck at a stale or default frame.
+        if isGated {
+            let fit = viewScreenStack.fittingSize
+            viewScreenStack.frame = CGRect(
+                x: (bounds.width - fit.width) / 2, y: screen.maxY + 16,
+                width: fit.width, height: fit.height)
         }
 
         let fraction = visibleFraction

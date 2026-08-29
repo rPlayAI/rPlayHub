@@ -43,6 +43,13 @@ final class DiagnosticsPanel: NSView {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byWordWrapping
         statusLabel.maximumNumberOfLines = 4
+        // A width CONSTRAINT doesn't cap what a wrapping label reports as its intrinsic width --
+        // preferredMaxLayoutWidth is the property Auto Layout actually consults for that, and
+        // without it a long sentence (the no-source-checkout notice, a fetch error) reported its
+        // unwrapped single-line width as intrinsic and dragged the whole inspector pane wider,
+        // stealing space from the canvas next to it. 224 = the inspector's resting 260pt minus
+        // this stack's 14pt insets on each side.
+        statusLabel.preferredMaxLayoutWidth = 224
 
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -155,6 +162,10 @@ final class DiagnosticsPanel: NSView {
             l.textColor = .tertiaryLabelColor
             l.lineBreakMode = .byWordWrapping
             l.maximumNumberOfLines = 0
+            // See statusLabel above: preferredMaxLayoutWidth, not a width constraint, is what
+            // stops a wrapping label's reverse-DNS service identifiers from reporting their
+            // unwrapped single-line width as intrinsic and dragging the pane wider with them.
+            l.preferredMaxLayoutWidth = 224
             stack.addArrangedSubview(l)
         }
     }
