@@ -259,11 +259,65 @@ screenshot over AX `size` for any element that might be word-wrapping.
   Screen) while it captures. The user needs to run this (sudo); screenshots of both tabs' actual
   content would also help even without a capture, to know what fields/controls to build toward.
 
+## Settings tab: protocol SOLVED (2026-08-28, third session)
+
+No longer blocked. The user ran `host/capture-settings.sh` while clicking through the tab, and
+the capture (`settings-20260828-223037.pcap`) decodes cleanly with `host/decode_settings.py`.
+
+**It is not usbmux, and there was never anything to capture there.** Checked live with a
+connected device: `DeviceHub.app` holds **zero** connections to `/var/run/usbmuxd`. Every device
+connection it has is TCP over IPv6 to the CoreDevice tunnel's ULA address on the mtu-16000 utun.
+usbmux is used only by `remotepairingd` to bring that tunnel up. So a plain `tcpdump` on the
+tunnel sees all of it in cleartext, and none of the invasive options (moving the usbmuxd socket
+aside for a proxy, or dtrace against an Apple-signed binary, which SIP blocks) are needed.
+
+**Wire format** — the same CoreDevice envelope screenshots and media already use
+(`host/coredevice.py`, `core/rp_coredevice.c`), but carrying **only an `actionIdentifier`, no
+`featureIdentifier`**. `rp_cd_invoke` already accepts exactly this (NULL feature + action), so
+the engine needs no new transport code:
+
+```
+request   CoreDevice.actionIdentifier = com.apple.coredevice.action.setshowborders
+          CoreDevice.input.showBorders.enabled = true
+response  CoreDevice.output.showBorders.enabled = true
+```
+
+**The payload key is not derivable from the action name** and must be taken as observed:
+`setshowborders`→`showBorders`, `setdeviceincreasecontrast`→`increaseContrast`,
+`setvoiceover`→`voiceOverConfiguration`, `setliquidglassconfiguration`→`configuration.opacity`
+(a double, 0..1 — captured at 0.64, so this is the Liquid Glass slider).
+
+**Confirmed on the wire** (both directions): `get/setshowborders`,
+`get/setdeviceincreasecontrast`, `get/setvoiceover`, `get/setliquidglassconfiguration`,
+`getreducemotion`, `getreducetransparency`, `getcolorfilter`, `getdevicetextsize`,
+`availablelocationscenarios`, `setsimulatedlocation` (`input.latitude`/`input.longitude`),
+`clearsimulatedlocation`.
+
+**Also present in Apple's catalog but not exercised during the capture** — pulled from
+`/Library/Developer/PrivateFrameworks/CoreDeviceUtilities.framework`, which carries every
+`com.apple.coredevice.action.*` string, so these are confirmed to exist rather than guessed:
+`setreducemotion`, `setreducetransparency`, `setcolorfilter`, `setdevicetextsize`,
+`get/setuserinterfacestyle` (**this is the Appearance Light/Dark row**), `get/setdevicelookandfeel`,
+`get/setlargeraccessibilitysizesenabled`, `getsupportedlooksandfeels`,
+`getcustomizableappearanceelements`, `setlocationscenario`. That framework is the reference for
+any action we still need — grep it before capturing again.
+
+**The one open unknown: which RSD service hosts them.** The capture shows accessibility actions on
+one device port and location actions on another (`com.apple.coredevice.locationservice`, matched by
+port offset against `reference/rsd-services-ios27.json`), but RSD ports are per-session so the port
+alone does not name the service. `host/settings.py probe` settles it by trying each candidate
+(`configuration`, `devicecontrol`, `deviceinfo`, `appservice`, `diagnosticsservice`) with the
+read-only `getreducemotion` — needs a live tunnel, so run it with the daemon up.
+
+`host/settings.py` has the full action/payload table and get/set/probe; it is the reference
+implementation to port into `host-c/api_server.c` (as `get_settings`/`set_setting`) and then wire
+to the `SettingsPanel` on both front-ends.
+
 ## Remaining, in rough priority
 
-1. **Settings and Report tabs** — blocked on a live capture or screenshots of Device Hub's actual
-   content for both (see "Open issues" above); nothing to build until then beyond the existing
-   `ComingSoonPanel` stubs.
+1. **Settings tab** — protocol solved (see above). Next: run `host/settings.py probe` with the
+   daemon up to name the service, then engine API + `SettingsPanel` replacing `ComingSoonPanel`.
+   The **Report** tab is still unexamined — no capture, no screenshot yet.
 2. **"Open in New Window" frozen-frame bug** — fix implemented (see "Open issues"), needs a live
    check with the daemon up. `scheduleRetry` backoff ✅ done and verified.
 3. **Verify the Linux build** — ✅ done (third 2026-08-28 session): the Linux box (Ubuntu 22.04,
