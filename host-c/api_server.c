@@ -2285,6 +2285,63 @@ static int settings_try(const api_session *s, long port, strbuf *b, const char *
     return 0;
 }
 
+/* Every read action, in one round trip for the caller. Read-only: each of these takes no input
+ * and changes nothing, so this is safe to call whenever the tab is opened.
+ *
+ * The shapes of the answers are the point as much as the values: several of these were never
+ * exercised in the capture (Device Hub did not touch them), so their input shape for the matching
+ * set* action is inferred from what the get* returns here. */
+static const struct { const char *name; const char *action; } SETTINGS_GET[] = {
+    { "reduceMotion",       "getreducemotion" },
+    { "reduceTransparency", "getreducetransparency" },
+    { "increaseContrast",   "getdeviceincreasecontrast" },
+    { "showBorders",        "getshowborders" },
+    { "voiceOver",          "getvoiceover" },
+    { "colorFilter",        "getcolorfilter" },
+    { "textSize",           "getdevicetextsize" },
+    { "appearance",         "getuserinterfacestyle" },
+    { "lookAndFeel",        "getdevicelookandfeel" },
+    { "supportedLooksAndFeels", "getsupportedlooksandfeels" },
+    { "liquidGlass",        "getliquidglassconfiguration" },
+    { "largerAccessibilitySizes", "getlargeraccessibilitysizesenabled" },
+};
+
+static void method_get_settings(int fd, long id)
+{
+    const api_session *s = g_session;
+    if (!s->configuration_port) {
+        reply_error(fd, id, "unavailable", "the device did not offer coredevice.configuration");
+        return;
+    }
+    strbuf b = {0};
+    sb_printf(&b, "{\"id\":%ld,\"ok\":true,\"result\":{", id);
+    for (size_t i = 0; i < sizeof SETTINGS_GET / sizeof SETTINGS_GET[0]; i++) {
+        if (i) sb_puts(&b, ",");
+        sb_json_string(&b, SETTINGS_GET[i].name);
+        sb_puts(&b, ":");
+        char action[128];
+        snprintf(action, sizeof action, "com.apple.coredevice.action.%s", SETTINGS_GET[i].action);
+        svc_conn c;
+        if (svc_open(&c, s->tunnel_addr, s->configuration_port) != 0) {
+            sb_puts(&b, "{\"error\":\"unreachable\"}");
+            continue;
+        }
+        char ua[37], ub[37];
+        make_uuid(ua); make_uuid(ub);
+        rp_xpc_obj out, reply;
+        memset(&reply, 0, sizeof reply);
+        if (rp_cd_invoke(&c.s, NULL, action, NULL, 0, ua, ub, &out, &reply) == 0)
+            sb_xpc(&b, &out, 0);
+        else
+            sb_puts(&b, "null");     /* not supported on this OS version, or no output */
+        svc_close(&c);
+    }
+    sb_puts(&b, "}}\n");
+    if (b.p && !b.oom) send_all(fd, b.p, b.len);
+    else reply_error(fd, id, "internal_error", "out of memory rendering the reply");
+    free(b.p);
+}
+
 static void method_settings_probe(int fd, long id)
 {
     const api_session *s = g_session;
@@ -2364,6 +2421,7 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "select_device"))    { method_select_device(fd, id, line); return; }
     if (!strcmp(method, "tunnel_info"))       { method_tunnel_info(fd, id); return; }
     if (!strcmp(method, "settings_probe"))    { method_settings_probe(fd, id); return; }
+    if (!strcmp(method, "get_settings"))      { method_get_settings(fd, id); return; }
     if (!strcmp(method, "take_screenshot"))   { method_screenshot(fd, id); return; }
     if (!strcmp(method, "tap"))               { method_touch(fd, id, line, 0); return; }
     if (!strcmp(method, "swipe"))             { method_touch(fd, id, line, 1); return; }

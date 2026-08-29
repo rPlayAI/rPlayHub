@@ -63,18 +63,34 @@ Everything above the unconfirmed rows was seen in **both** directions on the wir
 `reduceMotion` / `reduceTransparency` / `colorFilter` / `textSize`, whose reads were captured and
 whose writes are inferred from the matching `set*` name.
 
-## Which service hosts them
+## Which service hosts them — `com.apple.coredevice.configuration`
 
-Still open. The capture shows the accessibility actions on one device port and the location
-actions on another (`com.apple.coredevice.locationservice`, identified by port offset against
-`reference/rsd-services-ios27.json`), but **RSD ports are assigned per session**, so a port from
-one capture does not name a service in the next.
+**Confirmed against the device, 2026-08-28.** `settings_probe` asked four candidates for
+`getreducemotion`; only one answered:
 
-`python3 host/settings.py probe` settles it: it tries each candidate service
-(`configuration`, `devicecontrol`, `deviceinfo`, `appservice`, `diagnosticsservice`) with the
-read-only `getreducemotion`, which takes no input and changes nothing. Needs the daemon up for
-`tunnel_info`. By name, `com.apple.coredevice.configuration` is the most likely — but it has not
-been confirmed, so treat that as a hypothesis, not a fact.
+```
+com.apple.coredevice.configuration   ANSWERED   {"reduceMotion": {"enabled": false}}
+com.apple.coredevice.devicecontrol   no output (rc=-3, never answered)
+com.apple.coredevice.deviceinfo      no output (rc=-4, replied without CoreDevice.output)
+com.apple.coredevice.appservice      no output (rc=-4)
+```
+
+So all the appearance/accessibility actions bind to `com.apple.coredevice.configuration`.
+Location is separate (`com.apple.coredevice.locationservice`), as the capture already showed.
+
+Note that `deviceinfo` and `appservice` *replied* but without `CoreDevice.output` (rc=-4), while
+`devicecontrol` never answered at all (rc=-3) — a service answering the envelope is not evidence
+it implements the action, which is exactly why the probe checks for output rather than for a
+reply.
+
+Re-run it any time with the daemon up:
+
+    python3 -c "import socket;s=socket.create_connection(('127.0.0.1',9876));\
+    s.sendall(b'{\"id\":1,\"method\":\"settings_probe\"}\n');print(s.recv(65536).decode())"
+
+RSD ports are assigned per session, so the port above is not stable across runs — the service
+*name* is what to resolve against, and `cdhost` now resolves it into
+`api_session.configuration_port` at startup.
 
 ## The complete action catalog
 
