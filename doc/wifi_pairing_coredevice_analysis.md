@@ -1,3 +1,34 @@
+# "no devices" — check this FIRST (2026-08-29)
+
+Before investigating anything below, check whether **usbmuxd has gone stale**. That was the whole
+of one long false trail on 2026-08-29.
+
+    dns-sd -B _apple-mobdev2._tcp local     # is the phone advertising Wi-Fi sync?
+    sudo launchctl kickstart -k system/com.apple.usbmuxd
+
+Symptoms that look damning but are not:
+
+- `cdhost` prints `no devices`; `idevice_id -l` is empty; a direct `ListDevices` over the usbmuxd
+  socket returns zero. Three independent clients agreeing looks like ground truth -- but all three
+  ask the same daemon, so they agree on its staleness too.
+- Device Hub works perfectly throughout, because it uses RemotePairing over Bonjour and never
+  touches usbmuxd.
+
+The tell: **lockdown answering on `iPhone13.local:62078` while usbmuxd claims nothing exists.**
+A device that reachable is not a missing device. Likewise, `ReadPairRecord` succeeding for a UDID
+that `ListDevices` does not return means the pairing is intact and only discovery is broken.
+
+On the day: the phone had been advertising `_apple-mobdev2._tcp` the entire time, with the same
+instance name it had when this last worked, while usbmuxd had been up **9 days 22 hours** since
+boot and had never re-registered it. `launchctl kickstart` replaced it with a 28-second-old process
+and the device came back immediately as `Network`. Nothing was wrong with the phone, the pairing,
+or the engine -- our libimobiledevice use already passes `IDEVICE_LOOKUP_NETWORK` everywhere.
+
+If a kickstart does NOT bring it back, then the pairing for this specific Mac is the suspect and a
+USB cable settles it. Only after that is the analysis below worth reading.
+
+---
+
 # CoreDevice & RemotePairing Wireless Wi-Fi Connection Architecture
 
 ## Overview
