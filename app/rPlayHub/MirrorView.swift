@@ -141,7 +141,9 @@ final class MirrorView: NSView {
         addSubview(backing)
         NSLayoutConstraint.activate([
             backing.centerXAnchor.constraint(equalTo: centerXAnchor),
-            backing.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // Below the screenshot, not centered on top of it -- Device Hub's device pane shows
+            // the mockup image, then the name/OS/button underneath it, not overlaid on top.
+            backing.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -40),
         ])
         viewScreenStack = backing
     }
