@@ -115,6 +115,16 @@ void rp_xpc_bool(rp_xpc_writer *w, bool v)
     bump(w); put_u32(w, RP_XPC_BOOL); put_u32(w, v ? 1u : 0u);
 }
 
+/* Doubles ride as their raw IEEE-754 bits, like every other 8-byte scalar here. Needed for
+ * coredevice.configuration's liquidGlass opacity, which is a fraction 0..1 -- writing it as an
+ * integer would collapse every value to 0 or 1. */
+void rp_xpc_double(rp_xpc_writer *w, double v)
+{
+    uint64_t bits;
+    memcpy(&bits, &v, sizeof bits);
+    bump(w); put_u32(w, RP_XPC_DOUBLE); put_u64(w, bits);
+}
+
 void rp_xpc_data(rp_xpc_writer *w, const void *bytes, size_t n)
 {
     bump(w);
@@ -144,6 +154,8 @@ void rp_xpc_set_bool(rp_xpc_writer *w, const char *k, bool v)
 { rp_xpc_key(w, k); rp_xpc_bool(w, v); }
 void rp_xpc_set_uuid(rp_xpc_writer *w, const char *k, const uint8_t u[16])
 { rp_xpc_key(w, k); rp_xpc_uuid(w, u); }
+void rp_xpc_set_double(rp_xpc_writer *w, const char *k, double v)
+{ rp_xpc_key(w, k); rp_xpc_double(w, v); }
 
 /* ---------------------------------------------------------------- wrapping */
 

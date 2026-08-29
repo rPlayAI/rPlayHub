@@ -83,6 +83,7 @@ void rp_xpc_string(rp_xpc_writer *w, const char *value);
 void rp_xpc_uint64(rp_xpc_writer *w, uint64_t value);
 void rp_xpc_int64(rp_xpc_writer *w, int64_t value);
 void rp_xpc_bool(rp_xpc_writer *w, bool value);
+void rp_xpc_double(rp_xpc_writer *w, double value);
 void rp_xpc_data(rp_xpc_writer *w, const void *bytes, size_t n);
 void rp_xpc_uuid(rp_xpc_writer *w, const uint8_t uuid[16]);
 void rp_xpc_null(rp_xpc_writer *w);
@@ -101,6 +102,7 @@ void rp_xpc_set_uint64(rp_xpc_writer *w, const char *key, uint64_t value);
 void rp_xpc_set_int64(rp_xpc_writer *w, const char *key, int64_t value);
 void rp_xpc_set_bool(rp_xpc_writer *w, const char *key, bool value);
 void rp_xpc_set_uuid(rp_xpc_writer *w, const char *key, const uint8_t uuid[16]);
+void rp_xpc_set_double(rp_xpc_writer *w, const char *key, double value);
 
 /* Wrap whatever was written into a RemoteXPC message. Returns the total size, or 0 on overflow.
  * `body` is the object bytes produced by the writer; `out` receives the framed message. */

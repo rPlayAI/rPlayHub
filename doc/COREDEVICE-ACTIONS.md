@@ -40,28 +40,37 @@ response
 
 **The payload key is not derivable from the action name.** It has to be taken as observed:
 
-| Setting (Device Hub row) | get / set action | payload key | value |
-|---|---|---|---|
-| Show Borders | `get/setshowborders` | `showBorders.enabled` | bool |
-| Increase Contrast | `get/setdeviceincreasecontrast` | `increaseContrast.enabled` | bool |
-| VoiceOver | `get/setvoiceover` | `voiceOverConfiguration.enabled` | bool |
-| Reduce Motion | `get/setreducemotion` | `reduceMotion.enabled` | bool |
-| Reduce Transparency | `get/setreducetransparency` | `reduceTransparency.enabled` | bool |
-| Color Filter | `get/setcolorfilter` | `colorFilter.enabled` | bool (+ mode, unconfirmed) |
-| Liquid Glass | `get/setliquidglassconfiguration` | `configuration.opacity` | double 0..1 |
-| Appearance (Light/Dark) | `get/setuserinterfacestyle` | unconfirmed | — |
-| Text Size | `get/setdevicetextsize` | unconfirmed | — |
-| — (looks and feels) | `get/setdevicelookandfeel` | `lookAndFeel.name` (e.g. `Liquid Glass`) | — |
-| Location | `setsimulatedlocation` | `latitude`, `longitude` (flat, not nested) | double |
-| Location (clear) | `clearsimulatedlocation` | none | — |
+All twelve read actions were run against the device via `get_settings` on 2026-08-28, so these
+shapes are **observed, not inferred**. There are **three different nesting conventions** — most
+wrap in a named key, but two are flat and one is an enum. Assuming one convention for all of them
+is the obvious way to send a malformed write:
 
-Rows marked **unconfirmed** were never exercised during the capture — their action names are
-certain (they are in the framework catalog below) but their payload shapes are not. `get` first
-and mirror whatever shape comes back; do not assume it matches the boolean ones.
+| Setting (Device Hub row) | get / set action | payload shape |
+|---|---|---|
+| Show Borders | `get/setshowborders` | `{showBorders: {enabled: bool}}` |
+| Increase Contrast | `get/setdeviceincreasecontrast` | `{increaseContrast: {enabled: bool}}` |
+| VoiceOver | `get/setvoiceover` | `{voiceOverConfiguration: {enabled: bool}}` |
+| Reduce Motion | `get/setreducemotion` | `{reduceMotion: {enabled: bool}}` |
+| Reduce Transparency | `get/setreducetransparency` | `{reduceTransparency: {enabled: bool}}` |
+| Color Filter | `get/setcolorfilter` | `{colorFilter: {enabled: bool}}` |
+| Liquid Glass | `get/setliquidglassconfiguration` | `{configuration: {opacity: double 0..1}}` |
+| Text Size | `get/setdevicetextsize` | `{textSize: {size: {<case>: {}}}}` — **enum**, see below |
+| Appearance (Light/Dark) | `get/setuserinterfacestyle` | `{style: "light"}` — **flat**, no wrapper |
+| Larger Accessibility Sizes | `get/setlargeraccessibilitysizesenabled` | `{enabled: bool}` — **flat** |
+| Look and Feel | `get/setdevicelookandfeel` | `{lookAndFeel: {name: "Liquid Glass"}}` |
+| (supported values) | `getsupportedlooksandfeels` | `{looksAndFeels: [{name: …}]}` — read-only |
+| Location | `setsimulatedlocation` | `{latitude: double, longitude: double}` — **flat** |
+| Location (clear) | `clearsimulatedlocation` | none |
 
-Everything above the unconfirmed rows was seen in **both** directions on the wire, except
-`reduceMotion` / `reduceTransparency` / `colorFilter` / `textSize`, whose reads were captured and
-whose writes are inferred from the matching `set*` name.
+**Text Size is an enum encoded as a single-key dictionary**, not a number or a string: the device
+returned `{textSize: {size: {large: {}}}}`. The case name is the key and its value is an empty
+dictionary — the XPC encoding of a Swift enum case with no associated value. Other case names
+(`small`, `medium`, `extraLarge`, …) have not been enumerated; `getcustomizableappearanceelements`
+is the likely place to discover the valid set.
+
+A live read of the test device (iPhone13, iOS 27.0) returned: everything boolean `false`,
+`textSize` `large`, `appearance` `light`, `lookAndFeel` `Liquid Glass` (the only supported one),
+`liquidGlass.opacity` `0.55`.
 
 ## Which service hosts them — `com.apple.coredevice.configuration`
 

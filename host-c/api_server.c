@@ -2342,6 +2342,133 @@ static void method_get_settings(int fd, long id)
     free(b.p);
 }
 
+/* Write one setting. `key` names the row, `value` is a bool for the toggles, a double for
+ * liquidGlass, or a string for appearance/textSize.
+ *
+ * The nesting is NOT uniform and is not guessable from the action name -- every shape below was
+ * read off the device with get_settings first (see doc/COREDEVICE-ACTIONS.md). Three conventions
+ * coexist: most wrap in a named key, appearance and largerAccessibilitySizes are flat, and
+ * textSize is an enum encoded as a single-key dictionary whose value is an empty dict.
+ */
+typedef enum { SET_BOOL_WRAPPED, SET_BOOL_FLAT, SET_OPACITY, SET_STYLE, SET_TEXTSIZE } set_kind;
+
+static const struct { const char *name; const char *action; const char *wrap; set_kind kind; }
+SETTINGS_SET[] = {
+    { "reduceMotion",       "setreducemotion",            "reduceMotion",           SET_BOOL_WRAPPED },
+    { "reduceTransparency", "setreducetransparency",      "reduceTransparency",     SET_BOOL_WRAPPED },
+    { "increaseContrast",   "setdeviceincreasecontrast",  "increaseContrast",       SET_BOOL_WRAPPED },
+    { "showBorders",        "setshowborders",             "showBorders",            SET_BOOL_WRAPPED },
+    { "voiceOver",          "setvoiceover",               "voiceOverConfiguration", SET_BOOL_WRAPPED },
+    { "colorFilter",        "setcolorfilter",             "colorFilter",            SET_BOOL_WRAPPED },
+    { "largerAccessibilitySizes", "setlargeraccessibilitysizesenabled", NULL,       SET_BOOL_FLAT },
+    { "liquidGlass",        "setliquidglassconfiguration", "configuration",         SET_OPACITY },
+    { "appearance",         "setuserinterfacestyle",      NULL,                     SET_STYLE },
+    { "textSize",           "setdevicetextsize",          "textSize",               SET_TEXTSIZE },
+};
+
+static void method_set_setting(int fd, long id, const char *line)
+{
+    const api_session *s = g_session;
+    if (!s->configuration_port) {
+        reply_error(fd, id, "unavailable", "the device did not offer coredevice.configuration");
+        return;
+    }
+    char key[64] = {0}, sval[64] = {0};
+    if (json_string_field(line, "key", key, sizeof key) != 0) {
+        reply_error(fd, id, "bad_request", "set_setting needs a \"key\"");
+        return;
+    }
+    int have_str = json_string_field(line, "value", sval, sizeof sval) == 0;
+    /* json_fraction's fallback doubles as "absent": opacity is a real 0..1 value, and -1 cannot
+     * be one, so a caller that omitted it is distinguishable from one that sent 0. */
+    double dval = json_fraction(line, "value", -1.0);
+    int have_num = dval >= 0.0;
+    /* No json_bool_field in this file: the toggles are the only booleans crossing the API, so
+     * match the literal rather than adding a parser that would have exactly one caller. */
+    int bval = 0;
+    {
+        const char *p = strstr(line, "\"value\"");
+        if (p) { p = strchr(p + 7, ':'); if (p) bval = strncmp(p + 1, "true", 4) == 0
+                                              || strncmp(p + 2, "true", 4) == 0; }
+    }
+
+    size_t idx;
+    for (idx = 0; idx < sizeof SETTINGS_SET / sizeof SETTINGS_SET[0]; idx++)
+        if (!strcmp(SETTINGS_SET[idx].name, key)) break;
+    if (idx == sizeof SETTINGS_SET / sizeof SETTINGS_SET[0]) {
+        reply_error(fd, id, "bad_request", "unknown setting");
+        return;
+    }
+
+    uint8_t input[256];
+    rp_xpc_writer w;
+    rp_xpc_writer_init(&w, input, sizeof input);
+    rp_xpc_dict_begin(&w);
+    switch (SETTINGS_SET[idx].kind) {
+    case SET_BOOL_WRAPPED:
+        rp_xpc_key(&w, SETTINGS_SET[idx].wrap);
+        rp_xpc_dict_begin(&w);
+        rp_xpc_set_bool(&w, "enabled", bval);
+        rp_xpc_dict_end(&w);
+        break;
+    case SET_BOOL_FLAT:
+        rp_xpc_set_bool(&w, "enabled", bval);
+        break;
+    case SET_OPACITY:
+        if (!have_num) { reply_error(fd, id, "bad_request", "liquidGlass needs a number 0..1"); return; }
+        rp_xpc_key(&w, SETTINGS_SET[idx].wrap);
+        rp_xpc_dict_begin(&w);
+        rp_xpc_set_double(&w, "opacity", dval);
+        rp_xpc_dict_end(&w);
+        break;
+    case SET_STYLE:
+        if (!have_str) { reply_error(fd, id, "bad_request", "appearance needs \"light\" or \"dark\""); return; }
+        rp_xpc_set_string(&w, "style", sval);
+        break;
+    case SET_TEXTSIZE:
+        /* {textSize: {size: {<case>: {}}}} -- the case name is a KEY, its value an empty dict. */
+        if (!have_str) { reply_error(fd, id, "bad_request", "textSize needs a case name, e.g. \"large\""); return; }
+        rp_xpc_key(&w, SETTINGS_SET[idx].wrap);
+        rp_xpc_dict_begin(&w);
+        rp_xpc_key(&w, "size");
+        rp_xpc_dict_begin(&w);
+        rp_xpc_key(&w, sval);
+        rp_xpc_dict_begin(&w);
+        rp_xpc_dict_end(&w);
+        rp_xpc_dict_end(&w);
+        rp_xpc_dict_end(&w);
+        break;
+    }
+    rp_xpc_dict_end(&w);
+    if (w.overflow) { reply_error(fd, id, "internal_error", "could not build the request"); return; }
+
+    svc_conn c;
+    if (svc_open(&c, s->tunnel_addr, s->configuration_port) != 0) {
+        reply_error(fd, id, "unavailable", "cannot reach coredevice.configuration");
+        return;
+    }
+    char action[128];
+    snprintf(action, sizeof action, "com.apple.coredevice.action.%s", SETTINGS_SET[idx].action);
+    char ua[37], ub[37];
+    make_uuid(ua); make_uuid(ub);
+    rp_xpc_obj out, reply;
+    memset(&reply, 0, sizeof reply);
+    int rc = rp_cd_invoke(&c.s, NULL, action, input, w.len, ua, ub, &out, &reply);
+    if (rc != 0) {
+        reply_error(fd, id, "device_error", "the device did not accept the setting");
+        svc_close(&c);
+        return;
+    }
+    strbuf b = {0};
+    sb_printf(&b, "{\"id\":%ld,\"ok\":true,\"result\":", id);
+    sb_xpc(&b, &out, 0);
+    sb_puts(&b, "}\n");
+    if (b.p && !b.oom) send_all(fd, b.p, b.len);
+    else reply_error(fd, id, "internal_error", "out of memory rendering the reply");
+    free(b.p);
+    svc_close(&c);
+}
+
 static void method_settings_probe(int fd, long id)
 {
     const api_session *s = g_session;
@@ -2422,6 +2549,7 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "tunnel_info"))       { method_tunnel_info(fd, id); return; }
     if (!strcmp(method, "settings_probe"))    { method_settings_probe(fd, id); return; }
     if (!strcmp(method, "get_settings"))      { method_get_settings(fd, id); return; }
+    if (!strcmp(method, "set_setting"))       { method_set_setting(fd, id, line); return; }
     if (!strcmp(method, "take_screenshot"))   { method_screenshot(fd, id); return; }
     if (!strcmp(method, "tap"))               { method_touch(fd, id, line, 0); return; }
     if (!strcmp(method, "swipe"))             { method_touch(fd, id, line, 1); return; }

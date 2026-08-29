@@ -27,9 +27,9 @@ final class InspectorPane: NSView {
     let profiles = ProfilesPanel()
     let files = FilesPanel()
     let console = ConsolePanel()
-    private let settingsStub = ComingSoonPanel(title: "Settings",
-        detail: "Device appearance and accessibility controls (Appearance, Text Size, Reduce "
-              + "Motion, ...) need new engine methods to read/set them.")
+    /// Device Hub's Settings tab -- real device appearance/accessibility switches, over
+    /// coredevice.configuration (doc/COREDEVICE-ACTIONS.md).
+    let settings = SettingsPanel()
     private let reportStub = ComingSoonPanel(title: "Report",
         detail: "A diagnostics report view, matching Device Hub's Report tab.")
 
@@ -55,13 +55,14 @@ final class InspectorPane: NSView {
 
     /// The engine connection the Apps/Profiles/Files tabs talk through. Console opens its own.
     var control: ControlClient? {
-        didSet { apps.control = control; profiles.control = control; files.control = control }
+        didSet { apps.control = control; profiles.control = control; files.control = control
+                 settings.control = control }
     }
 
     /// The panes selectable through the second (text) row, in Device Hub's Info/Apps/Profiles
     /// order, then our folded-in extras.
     private var subPanes: [NSView] { [diagnostics, apps, profiles, files, console, controls] }
-    private var allPanes: [NSView] { subPanes + [settingsStub, reportStub] }
+    private var allPanes: [NSView] { subPanes + [settings, reportStub] }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -142,7 +143,7 @@ final class InspectorPane: NSView {
         }
         // The two stubs sit directly under this pane's top (no text sub-tabs); the sub-panes
         // sit under the text row.
-        for v in [settingsStub, reportStub] {
+        for v in [settings, reportStub] {
             NSLayoutConstraint.activate([v.topAnchor.constraint(equalTo: topAnchor, constant: 8)])
         }
         for v in subPanes {
@@ -192,7 +193,7 @@ final class InspectorPane: NSView {
     private func applySelection() {
         let onInfo = !isHidden && activeIcon == Self.infoIndex
         textTabs.isHidden = !onInfo
-        settingsStub.isHidden = isHidden || activeIcon != 0
+        settings.isHidden = isHidden || activeIcon != 0
         reportStub.isHidden = isHidden || activeIcon != 1
         let sub = textTabs.selectedSegment
         for (i, v) in subPanes.enumerated() { v.isHidden = !onInfo || i != sub }

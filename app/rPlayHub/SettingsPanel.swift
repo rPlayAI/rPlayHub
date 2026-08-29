@@ -1,0 +1,322 @@
+//
+//  SettingsPanel.swift
+//  Device Hub's Settings tab: the device's own appearance and accessibility switches.
+//
+//  These are real settings on the phone, not view options -- flipping Reduce Motion here changes
+//  it in iOS Settings. They ride CoreDevice actions on `com.apple.coredevice.configuration`
+//  (engine methods `get_settings` / `set_setting`); doc/COREDEVICE-ACTIONS.md has the protocol,
+//  the per-row payload shapes and how they were established.
+//
+//  Layout follows Device Hub's, checked against its live window: rounded grouped sections like
+//  iOS Settings, each row an icon + label with its control right-aligned, and Location alone in
+//  a second group below.
+//
+
+import AppKit
+
+final class SettingsPanel: NSView {
+    /// The engine connection. Setting it loads the current values.
+    var control: ControlClient? {
+        didSet { if control != nil { reload() } }
+    }
+
+    /// Row identifiers, matching the engine's `key` exactly -- they are the API, so they are
+    /// written once here rather than duplicated per control.
+    private enum Key: String {
+        case appearance, liquidGlass, colorFilter, textSize
+        case reduceMotion, increaseContrast, showBorders, reduceTransparency, voiceOver
+    }
+
+    private var switches: [Key: NSSwitch] = [:]
+    private var popups: [Key: NSPopUpButton] = [:]
+    private var sliders: [Key: NSSlider] = [:]
+    private let status = NSTextField(labelWithString: "")
+    private let stack = NSStackView()
+
+    /// True while reload() is populating controls, so programmatic changes don't echo back to
+    /// the device as writes. Without it, loading the current values immediately re-sends every
+    /// one of them.
+    private var loading = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        build()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        build()
+    }
+
+    private func build() {
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 14
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
+
+        // Group one: appearance and accessibility, in Device Hub's own order.
+        let main = GroupBox()
+        main.addRow(icon: "circle.lefthalf.filled", title: "Appearance",
+                    control: popup(.appearance, ["Light", "Dark"]))
+        main.addRow(icon: "square.on.square.intersection.dashed", title: "Liquid Glass",
+                    control: slider(.liquidGlass, min: 0, max: 1))
+        main.addRow(icon: "camera.filters", title: "Color Filter",
+                    control: popup(.colorFilter, ["None", "On"]))
+        main.addRow(icon: "textformat.size", title: "Text Size",
+                    control: slider(.textSize, min: 0, max: Double(Self.textSizes.count - 1)))
+        main.addRow(icon: "figure.walk.motion", title: "Reduce Motion",
+                    control: toggle(.reduceMotion))
+        main.addRow(icon: "circle.righthalf.filled", title: "Increase Contrast",
+                    control: toggle(.increaseContrast))
+        main.addRow(icon: "rectangle.dashed", title: "Show Borders",
+                    control: toggle(.showBorders))
+        main.addRow(icon: "square.on.square", title: "Reduce Transparency",
+                    control: toggle(.reduceTransparency))
+        main.addRow(icon: "speaker.wave.2.circle", title: "VoiceOver",
+                    control: toggle(.voiceOver))
+        stack.addArrangedSubview(main)
+        main.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
+
+        // Location sits in its own group in Device Hub, and is not wired here yet: it needs a
+        // coordinate picker, and setsimulatedlocation takes a lat/long pair rather than a switch.
+        let locationGroup = GroupBox()
+        let placeholder = NSTextField(labelWithString: "None")
+        placeholder.textColor = .secondaryLabelColor
+        placeholder.font = .systemFont(ofSize: 12)
+        locationGroup.addRow(icon: "location.circle", title: "Location", control: placeholder)
+        stack.addArrangedSubview(locationGroup)
+        locationGroup.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
+
+        status.font = .systemFont(ofSize: 11)
+        status.textColor = .secondaryLabelColor
+        status.preferredMaxLayoutWidth = 224      // a wrapping label needs this, not a width
+        status.lineBreakMode = .byWordWrapping
+        status.maximumNumberOfLines = 3
+        stack.addArrangedSubview(status)
+    }
+
+    // MARK: - control factories
+
+    private func toggle(_ key: Key) -> NSSwitch {
+        let s = NSSwitch()
+        s.target = self
+        s.action = #selector(switchChanged(_:))
+        s.identifier = NSUserInterfaceItemIdentifier(key.rawValue)
+        switches[key] = s
+        return s
+    }
+
+    private func popup(_ key: Key, _ titles: [String]) -> NSPopUpButton {
+        let p = NSPopUpButton()
+        p.addItems(withTitles: titles)
+        p.bezelStyle = .accessoryBarAction
+        p.target = self
+        p.action = #selector(popupChanged(_:))
+        p.identifier = NSUserInterfaceItemIdentifier(key.rawValue)
+        popups[key] = p
+        return p
+    }
+
+    private func slider(_ key: Key, min lo: Double, max hi: Double) -> NSSlider {
+        let s = NSSlider(value: lo, minValue: lo, maxValue: hi,
+                         target: self, action: #selector(sliderChanged(_:)))
+        s.identifier = NSUserInterfaceItemIdentifier(key.rawValue)
+        s.isContinuous = false          // one write per gesture, not one per pixel
+        if key == .textSize {
+            s.numberOfTickMarks = Self.textSizes.count
+            s.allowsTickMarkValuesOnly = true
+        }
+        s.widthAnchor.constraint(equalToConstant: 110).isActive = true
+        sliders[key] = s
+        return s
+    }
+
+    /// The device reports Text Size as an enum case name, not a number (see
+    /// doc/COREDEVICE-ACTIONS.md), so the slider maps position <-> case. This is the order iOS
+    /// presents them in; only `large` has been seen on the wire, so an unknown name is shown
+    /// rather than guessed at.
+    private static let textSizes = ["extraSmall", "small", "medium", "large",
+                                    "extraLarge", "extraExtraLarge", "extraExtraExtraLarge"]
+
+    // MARK: - reading
+
+    func reload() {
+        guard let control else { return }
+        control.send("get_settings") { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let info):
+                self.loading = true
+                self.apply(info)
+                self.loading = false
+                self.status.stringValue = ""
+            case .failure(let e):
+                self.status.stringValue = "Could not read the device's settings: \(e)"
+            }
+        }
+    }
+
+    /// The three nesting conventions are the device's, not ours -- most rows wrap their value in
+    /// a named key, appearance is flat, and textSize is an enum encoded as a single-key
+    /// dictionary. Reading them apart here keeps that oddity in one place.
+    private func apply(_ info: [String: Any]) {
+        func enabled(_ key: String, _ wrap: String) -> Bool? {
+            guard let outer = info[key] as? [String: Any],
+                  let inner = outer[wrap] as? [String: Any] else { return nil }
+            return inner["enabled"] as? Bool
+        }
+        let bools: [(Key, String)] = [
+            (.reduceMotion, "reduceMotion"), (.increaseContrast, "increaseContrast"),
+            (.showBorders, "showBorders"), (.reduceTransparency, "reduceTransparency"),
+            (.voiceOver, "voiceOverConfiguration"), (.colorFilter, "colorFilter"),
+        ]
+        for (key, wrap) in bools {
+            guard let on = enabled(key.rawValue, wrap) else { continue }
+            if let sw = switches[key] { sw.state = on ? .on : .off }
+            if let pop = popups[key] { pop.selectItem(at: on ? 1 : 0) }
+        }
+        if let outer = info["appearance"] as? [String: Any],
+           let style = outer["style"] as? String {
+            popups[.appearance]?.selectItem(at: style.lowercased() == "dark" ? 1 : 0)
+        }
+        if let outer = info["liquidGlass"] as? [String: Any],
+           let cfg = outer["configuration"] as? [String: Any],
+           let opacity = cfg["opacity"] as? Double {
+            sliders[.liquidGlass]?.doubleValue = opacity
+        }
+        if let outer = info["textSize"] as? [String: Any],
+           let ts = outer["textSize"] as? [String: Any],
+           let size = ts["size"] as? [String: Any],
+           let name = size.keys.first {
+            if let idx = Self.textSizes.firstIndex(of: name) {
+                sliders[.textSize]?.doubleValue = Double(idx)
+            } else {
+                status.stringValue = "Unknown text size “\(name)”"
+            }
+        }
+    }
+
+    // MARK: - writing
+
+    @objc private func switchChanged(_ sender: NSSwitch) {
+        guard let key = key(of: sender) else { return }
+        write(key, value: sender.state == .on)
+    }
+
+    @objc private func popupChanged(_ sender: NSPopUpButton) {
+        guard let key = key(of: sender) else { return }
+        if key == .appearance {
+            write(key, value: sender.indexOfSelectedItem == 1 ? "dark" : "light")
+        } else {
+            write(key, value: sender.indexOfSelectedItem == 1)
+        }
+    }
+
+    @objc private func sliderChanged(_ sender: NSSlider) {
+        guard let key = key(of: sender) else { return }
+        if key == .textSize {
+            let idx = min(max(Int(sender.doubleValue.rounded()), 0), Self.textSizes.count - 1)
+            write(key, value: Self.textSizes[idx])
+        } else {
+            write(key, value: sender.doubleValue)
+        }
+    }
+
+    private func key(of view: NSView) -> Key? {
+        guard let raw = view.identifier?.rawValue else { return nil }
+        return Key(rawValue: raw)
+    }
+
+    private func write(_ key: Key, value: Any) {
+        guard !loading, let control else { return }
+        status.stringValue = ""
+        control.send("set_setting", ["key": key.rawValue, "value": value]) { [weak self] result in
+            guard let self, case .failure(let e) = result else { return }
+            // Say so and re-read: the control is now showing something the device did not
+            // accept, and silently leaving it there would misreport the phone's actual state.
+            self.status.stringValue = "\(key.rawValue) was not accepted: \(e)"
+            self.reload()
+        }
+    }
+}
+
+/// One rounded section, as Device Hub groups these rows. Rows are separated by a hairline that
+/// starts after the icon, matching the inset separators in the real app.
+private final class GroupBox: NSView {
+    private let rows = NSStackView()
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.65).cgColor
+        layer?.cornerRadius = 8
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = 0
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(rows)
+        NSLayoutConstraint.activate([
+            rows.topAnchor.constraint(equalTo: topAnchor),
+            rows.bottomAnchor.constraint(equalTo: bottomAnchor),
+            rows.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rows.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func addRow(icon: String, title: String, control: NSView) {
+        if !rows.arrangedSubviews.isEmpty {
+            let line = NSBox()
+            line.boxType = .separator
+            line.translatesAutoresizingMaskIntoConstraints = false
+            rows.addArrangedSubview(line)
+            line.leadingAnchor.constraint(equalTo: rows.leadingAnchor, constant: 32).isActive = true
+            line.trailingAnchor.constraint(equalTo: rows.trailingAnchor).isActive = true
+        }
+        let row = Row(icon: icon, title: title, control: control)
+        rows.addArrangedSubview(row)
+        row.leadingAnchor.constraint(equalTo: rows.leadingAnchor).isActive = true
+        row.trailingAnchor.constraint(equalTo: rows.trailingAnchor).isActive = true
+    }
+}
+
+private final class Row: NSView {
+    init(icon: String, title: String, control: NSView) {
+        super.init(frame: .zero)
+        let image = NSImageView()
+        image.image = NSImage(systemSymbolName: icon, accessibilityDescription: title)
+        image.contentTintColor = .secondaryLabelColor
+        image.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 12)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.setContentCompressionResistancePriority(.init(200), for: .horizontal)
+
+        control.translatesAutoresizingMaskIntoConstraints = false
+        for v in [image, label, control] { addSubview(v) }
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 32),
+            image.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            image.centerYAnchor.constraint(equalTo: centerYAnchor),
+            image.widthAnchor.constraint(equalToConstant: 16),
+            label.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 8),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            control.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            control.centerYAnchor.constraint(equalTo: centerYAnchor),
+            control.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor,
+                                             constant: 6),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
