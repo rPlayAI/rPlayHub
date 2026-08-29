@@ -2247,6 +2247,69 @@ static void method_tunnel_info(int fd, long id)
               s->udid, s->screen_w, s->screen_h);
 }
 
+/* ------------------------------------------------- settings (Device Hub's Settings tab)
+ *
+ * Appearance/accessibility are plain CoreDevice actions with NO feature identifier -- see
+ * doc/COREDEVICE-ACTIONS.md for the capture this came from and the full action/payload table.
+ *
+ * Which RSD service hosts them is not yet established, so `settings_probe` asks each candidate
+ * in turn with `getreducemotion`: it takes no input and changes nothing, so probing is free.
+ * Once one answers, that is the service, and get/set can be bound to it.
+ */
+#define RP_CD_ACTION_GETREDUCEMOTION "com.apple.coredevice.action.getreducemotion"
+
+/* Try one candidate. Returns 0 when it answered with CoreDevice.output. */
+static int settings_try(const api_session *s, long port, strbuf *b, const char *name)
+{
+    if (!port) { sb_printf(b, "{\"service\":\"%s\",\"status\":\"not advertised\"}", name); return -1; }
+    svc_conn c;
+    if (svc_open(&c, s->tunnel_addr, port) != 0) {
+        sb_printf(b, "{\"service\":\"%s\",\"port\":%ld,\"status\":\"unreachable\"}", name, port);
+        return -1;
+    }
+    char ua[37], ub[37];
+    make_uuid(ua); make_uuid(ub);
+    rp_xpc_obj out, reply;
+    memset(&reply, 0, sizeof reply);
+    int rc = rp_cd_invoke(&c.s, NULL, RP_CD_ACTION_GETREDUCEMOTION, NULL, 0, ua, ub, &out, &reply);
+    if (rc != 0) {
+        sb_printf(b, "{\"service\":\"%s\",\"port\":%ld,\"status\":\"no output (rc=%d)\"}",
+                  name, port, rc);
+        svc_close(&c);
+        return -1;
+    }
+    sb_printf(b, "{\"service\":\"%s\",\"port\":%ld,\"status\":\"ANSWERED\",\"output\":", name, port);
+    sb_xpc(b, &out, 0);
+    sb_puts(b, "}");
+    svc_close(&c);
+    return 0;
+}
+
+static void method_settings_probe(int fd, long id)
+{
+    const api_session *s = g_session;
+    struct { const char *name; long port; } cand[] = {
+        { "com.apple.coredevice.configuration",      s->configuration_port },
+        { "com.apple.coredevice.devicecontrol",      s->devicecontrol_port },
+        { "com.apple.coredevice.deviceinfo",         s->deviceinfo_port },
+        { "com.apple.coredevice.appservice",         s->app_port },
+    };
+    strbuf b = {0};
+    sb_printf(&b, "{\"id\":%ld,\"ok\":true,\"result\":{\"tried\":[", id);
+    const char *winner = NULL;
+    for (size_t i = 0; i < sizeof cand / sizeof cand[0]; i++) {
+        if (i) sb_puts(&b, ",");
+        if (settings_try(s, cand[i].port, &b, cand[i].name) == 0 && !winner)
+            winner = cand[i].name;
+    }
+    sb_puts(&b, "],\"service\":");
+    if (winner) { sb_json_string(&b, winner); } else { sb_puts(&b, "null"); }
+    sb_puts(&b, "}}\n");
+    if (b.p && !b.oom) send_all(fd, b.p, b.len);
+    else reply_error(fd, id, "internal_error", "out of memory rendering the reply");
+    free(b.p);
+}
+
 /* ------------------------------------------------------------------ server */
 
 static int listen_on(int port)
@@ -2300,6 +2363,7 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "export_crashes"))   { method_export_crashes(fd, id, line); return; }
     if (!strcmp(method, "select_device"))    { method_select_device(fd, id, line); return; }
     if (!strcmp(method, "tunnel_info"))       { method_tunnel_info(fd, id); return; }
+    if (!strcmp(method, "settings_probe"))    { method_settings_probe(fd, id); return; }
     if (!strcmp(method, "take_screenshot"))   { method_screenshot(fd, id); return; }
     if (!strcmp(method, "tap"))               { method_touch(fd, id, line, 0); return; }
     if (!strcmp(method, "swipe"))             { method_touch(fd, id, line, 1); return; }
