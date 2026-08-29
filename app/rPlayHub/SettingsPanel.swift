@@ -85,15 +85,21 @@ final class SettingsPanel: NSView {
         stack.addArrangedSubview(main)
         main.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
 
-        // Location sits in its own group in Device Hub, with a dropdown rather than a switch.
-        // The scenario list comes from the device (`availablelocationscenarios`); until that is
-        // wired the menu carries just None, which is what an unsimulated device reports anyway.
-        // Choosing None sends `clearsimulatedlocation`; a real scenario needs `setlocationscenario`
-        // or a lat/long pair, so the other entries are not offered yet rather than offered broken.
+        // Location sits in its own group in Device Hub, with a dropdown. The menu below is its
+        // real one, read off the live app by opening it and walking to the bottom: None, a
+        // separator, fourteen cities, a "Trips" section header, four trips, then Custom
+        // Coordinates. Same order, same wording.
         let locationGroup = GroupBox()
-        locationPopup.addItems(withTitles: ["None"])
+        buildLocationMenu()
         locationPopup.bezelStyle = .accessoryBarAction
         locationPopup.controlSize = .small
+        locationPopup.target = self
+        locationPopup.action = #selector(locationChanged(_:))
+        // An NSPopUpButton sizes itself to its widest menu item, so "Johannesburg, South Africa"
+        // stretched this one across the row. Device Hub's stays compact and lets the title
+        // truncate, so pin the width and do the same.
+        locationPopup.widthAnchor.constraint(equalToConstant: 96).isActive = true
+        locationPopup.cell?.lineBreakMode = .byTruncatingTail
         locationGroup.addRow(icon: "location.circle", title: "Location", control: locationPopup)
         stack.addArrangedSubview(locationGroup)
         locationGroup.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
@@ -104,6 +110,120 @@ final class SettingsPanel: NSView {
         status.lineBreakMode = .byWordWrapping
         status.maximumNumberOfLines = 3
         stack.addArrangedSubview(status)
+    }
+
+    // MARK: - location
+
+    /// Device Hub's own Location menu, in its order and wording.
+    ///
+    /// The cities are plain coordinate pairs: the capture caught Device Hub sending
+    /// `setsimulatedlocation {latitude: 37.3348, longitude: -122.009}` — Apple Park, which is its
+    /// own Cupertino entry, so that one is confirmed on the wire and the rest follow the same
+    /// shape. Only Cupertino's numbers come from Device Hub itself; the others are the standard
+    /// coordinates for those cities and may differ in the last decimal from whatever it sends.
+    private static let cities: [(String, Double, Double)] = [
+        ("Berlin, Germany", 52.5200, 13.4050),
+        ("Cupertino, CA, USA", 37.3348, -122.0090),
+        ("Hong Kong, China", 22.3193, 114.1694),
+        ("Johannesburg, South Africa", -26.2041, 28.0473),
+        ("London, England", 51.5074, -0.1278),
+        ("Mexico City, Mexico", 19.4326, -99.1332),
+        ("Mumbai, India", 19.0760, 72.8777),
+        ("New York, NY, USA", 40.7128, -74.0060),
+        ("Paris, France", 48.8566, 2.3522),
+        ("Rio de Janeiro, Brazil", -22.9068, -43.1729),
+        ("San Francisco, CA, USA", 37.7749, -122.4194),
+        ("Sydney, Australia", -33.8688, 151.2093),
+        ("Tokyo, Japan", 35.6762, 139.6503),
+        ("Warsaw, Poland", 52.2297, 21.0122),
+    ]
+
+    /// Trips are routes, not points, so they need `setlocationscenario` with an identifier the
+    /// device supplies through `availablelocationscenarios` — neither of which is wired yet.
+    /// They are shown, to match Device Hub's menu, but disabled: offering them as if they worked
+    /// would be worse than showing they are not ready.
+    private static let trips = ["City Run", "City Bicycle Ride", "Apple", "Freeway Drive"]
+
+    private func buildLocationMenu() {
+        let menu = NSMenu()
+        // Items carry no action of their own (the popup's own action fires), and with
+        // autoenablesItems on AppKit greys out anything actionless -- which greyed Custom
+        // Coordinates. Turning it off makes the isEnabled set below the only thing that decides.
+        menu.autoenablesItems = false
+        menu.addItem(withTitle: "None", action: nil, keyEquivalent: "")
+        menu.addItem(.separator())
+        for (name, _, _) in Self.cities {
+            menu.addItem(withTitle: name, action: nil, keyEquivalent: "")
+        }
+        let header = NSMenuItem(title: "Trips", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        for t in Self.trips {
+            let item = NSMenuItem(title: t, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Custom Coordinates…", action: nil, keyEquivalent: "")
+        locationPopup.menu = menu
+        locationPopup.selectItem(at: 0)
+    }
+
+    @objc private func locationChanged(_ sender: NSPopUpButton) {
+        guard !loading, let control else { return }
+        let title = sender.titleOfSelectedItem ?? "None"
+        if title == "None" {
+            control.send("clear_location") { [weak self] r in self?.report(r, "Location") }
+        } else if title == "Custom Coordinates…" {
+            askForCoordinates()
+        } else if let city = Self.cities.first(where: { $0.0 == title }) {
+            send(latitude: city.1, longitude: city.2)
+        }
+    }
+
+    private func send(latitude: Double, longitude: Double) {
+        control?.send("set_location", ["latitude": latitude, "longitude": longitude]) {
+            [weak self] r in self?.report(r, "Location")
+        }
+    }
+
+    private func askForCoordinates() {
+        let alert = NSAlert()
+        alert.messageText = "Custom Coordinates"
+        alert.informativeText = "Latitude and longitude in decimal degrees."
+        let lat = NSTextField(string: "37.3348")
+        let lon = NSTextField(string: "-122.0090")
+        let row = NSStackView(views: [label("Latitude"), lat, label("Longitude"), lon])
+        row.orientation = .vertical
+        row.alignment = .leading
+        row.spacing = 4
+        row.frame = NSRect(x: 0, y: 0, width: 220, height: 110)
+        lat.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        lon.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        alert.accessoryView = row
+        alert.addButton(withTitle: "Set")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let la = Double(lat.stringValue), let lo = Double(lon.stringValue) else {
+            locationPopup.selectItem(at: 0)
+            return
+        }
+        send(latitude: la, longitude: lo)
+    }
+
+    private func label(_ s: String) -> NSTextField {
+        let t = NSTextField(labelWithString: s)
+        t.font = .systemFont(ofSize: 11)
+        t.textColor = .secondaryLabelColor
+        return t
+    }
+
+    private func report(_ result: Result<[String: Any], Error>, _ what: String) {
+        if case .failure(let e) = result {
+            status.stringValue = "\(what) was not accepted: \(e)"
+        } else {
+            status.stringValue = ""
+        }
     }
 
     // MARK: - control factories

@@ -95,6 +95,7 @@ typedef struct {
     long        configuration_port;   /* coredevice.configuration */
     long        devicecontrol_port;   /* coredevice.devicecontrol */
     long        deviceinfo_port;      /* coredevice.deviceinfo */
+    long        location_port;        /* coredevice.locationservice: simulated location */
     const char *ddi_dir;             /* where the bundled DDI lives, or NULL to search defaults */
 
     /* Needed to negotiate the media stream: the offer carries our address, and the SSRC in it

@@ -420,6 +420,7 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
         "com.apple.coredevice.configuration",
         "com.apple.coredevice.devicecontrol",
         "com.apple.coredevice.deviceinfo",
+        "com.apple.coredevice.locationservice",
     };
     for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
         rp_xpc_obj svc, portv;
@@ -449,7 +450,8 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
                 else if (i == 13) out->sbservices_port = resolved;
                 else if (i == 14) out->configuration_port = resolved;
                 else if (i == 15) out->devicecontrol_port = resolved;
-                else out->deviceinfo_port = resolved;
+                else if (i == 16) out->deviceinfo_port = resolved;
+                else out->location_port = resolved;
             }
         } else {
             printf("    %-46s MISSING\n", want[i]);

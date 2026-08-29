@@ -2469,6 +2469,60 @@ static void method_set_setting(int fd, long id, const char *line)
     svc_close(&c);
 }
 
+/* ------------------------------------------------------------------ simulated location
+ *
+ * Device Hub's Location row, on com.apple.coredevice.locationservice (a DIFFERENT service from
+ * the appearance settings -- the capture showed them on separate ports).
+ *
+ * `setsimulatedlocation` takes latitude and longitude FLAT in CoreDevice.input, not nested in a
+ * named key the way most of the appearance actions are. Confirmed on the wire: Device Hub sent
+ * {latitude: 37.3348, longitude: -122.009} -- Apple Park, i.e. its own "Cupertino, CA, USA"
+ * menu entry, which is what establishes that the city presets are plain coordinate pairs.
+ */
+static void method_set_location(int fd, long id, const char *line, int clear)
+{
+    const api_session *s = g_session;
+    if (!s->location_port) {
+        reply_error(fd, id, "unavailable", "the device did not offer coredevice.locationservice");
+        return;
+    }
+    uint8_t input[128];
+    rp_xpc_writer w;
+    rp_xpc_writer_init(&w, input, sizeof input);
+    rp_xpc_dict_begin(&w);
+    if (!clear) {
+        double lat = json_fraction(line, "latitude", 1e9);
+        double lon = json_fraction(line, "longitude", 1e9);
+        if (lat > 1e8 || lon > 1e8) {
+            reply_error(fd, id, "bad_request", "set_location needs latitude and longitude");
+            return;
+        }
+        rp_xpc_set_double(&w, "latitude", lat);
+        rp_xpc_set_double(&w, "longitude", lon);
+    }
+    rp_xpc_dict_end(&w);
+    if (w.overflow) { reply_error(fd, id, "internal_error", "could not build the request"); return; }
+
+    svc_conn c;
+    if (svc_open(&c, s->tunnel_addr, s->location_port) != 0) {
+        reply_error(fd, id, "unavailable", "cannot reach coredevice.locationservice");
+        return;
+    }
+    const char *action = clear ? "com.apple.coredevice.action.clearsimulatedlocation"
+                               : "com.apple.coredevice.action.setsimulatedlocation";
+    char ua[37], ub[37];
+    make_uuid(ua); make_uuid(ub);
+    rp_xpc_obj out, reply;
+    memset(&reply, 0, sizeof reply);
+    int rc = rp_cd_invoke(&c.s, NULL, action, input, w.len, ua, ub, &out, &reply);
+    svc_close(&c);
+    if (rc != 0) {
+        reply_error(fd, id, "device_error", "the device did not accept the location");
+        return;
+    }
+    send_line(fd, "{\"id\":%ld,\"ok\":true,\"result\":{}}", id);
+}
+
 static void method_settings_probe(int fd, long id)
 {
     const api_session *s = g_session;
@@ -2550,6 +2604,8 @@ static void dispatch(int fd, const char *line)
     if (!strcmp(method, "settings_probe"))    { method_settings_probe(fd, id); return; }
     if (!strcmp(method, "get_settings"))      { method_get_settings(fd, id); return; }
     if (!strcmp(method, "set_setting"))       { method_set_setting(fd, id, line); return; }
+    if (!strcmp(method, "set_location"))      { method_set_location(fd, id, line, 0); return; }
+    if (!strcmp(method, "clear_location"))    { method_set_location(fd, id, line, 1); return; }
     if (!strcmp(method, "take_screenshot"))   { method_screenshot(fd, id); return; }
     if (!strcmp(method, "tap"))               { method_touch(fd, id, line, 0); return; }
     if (!strcmp(method, "swipe"))             { method_touch(fd, id, line, 1); return; }
