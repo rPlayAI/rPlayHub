@@ -370,11 +370,10 @@ final class MirrorView: NSView {
         // than as a rectangle of video. Both are pure presentation -- the picture underneath is
         // untouched, and taps still map to the full screen including behind the cutout.
         clipLayer.cornerRadius = clipSize.width * DeviceModel.cornerFraction(for: productType)
-        // Only the small pre-connect mockup has a drawn bezel outline, matching Device Hub's own
-        // placeholder graphic -- scaled the same way for the live picture, this became an
-        // 11-12pt black ring painted OVER the video (a CALayer border always draws above its
-        // sublayers' content), not anything the stream or decoder produced.
-        clipLayer.borderWidth = isGated ? max(1, clipSize.width * 0.03) : 0
+        // Applied in both states -- a real device has a visible bezel edge around its screen
+        // too, and side-by-side against Device Hub's own live view this reads closer to it than
+        // no border did.
+        clipLayer.borderWidth = max(1, clipSize.width * 0.03)
         cutoutLayer.frame = clipLayer.bounds
         if let c = DeviceModel.cutoutRect(for: productType), clipSize.width > 0 {
             let w = clipSize.width * c.w
