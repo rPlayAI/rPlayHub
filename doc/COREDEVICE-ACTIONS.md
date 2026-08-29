@@ -168,3 +168,54 @@ removeextendedattribute, getrealpath, createsession, endsession)
 - `reference/rsd-services-ios27.json`, `doc/RSD-SERVICES.md` — the service catalog the ports
   were matched against.
 - `core/rp_coredevice.h` — `rp_cd_invoke`, which already takes an action with a NULL feature.
+
+
+## Two transports, and why cdhost can go blind while Device Hub does not (2026-08-29)
+
+Worth knowing before debugging "no devices" again. There are two independent ways to reach a
+phone from this Mac, and they share nothing:
+
+| | Transport | Needs usbmuxd? |
+|---|---|---|
+| Device Hub | CoreDevice / RemotePairing | **no** |
+| cdhost | usbmux (USB, or Wi-Fi sync) | **yes** |
+
+`cdhost` starts at `idevice_get_device_list_extended`, which asks **usbmuxd**. Our libimobiledevice
+use is fully Wi-Fi-aware — every `idevice_new_with_options` passes
+`IDEVICE_LOOKUP_USBMUX | IDEVICE_LOOKUP_NETWORK`, and enumeration collapses the USB and Network
+entries for one phone into a single row — but libimobiledevice's "network" still means *a device
+usbmuxd is publishing*, discovered over Bonjour `_apple-mobdev2._tcp` (Wi-Fi sync). It does not
+mean "reachable on the network".
+
+Observed 2026-08-29: usbmuxd reporting **zero** devices and `idevice_id -l` empty, while Device Hub
+had a live tunnel and the device answered `ping6` across it in 6ms. Both true at once. The old
+workaround — open Device Hub and cdhost starts working — relied on the phone *also* having a live
+Wi-Fi-sync association for Device Hub to nudge; with only the CoreDevice pairing up, there is
+nothing to nudge and the workaround stops helping. The reliable fix is a USB cable.
+
+### Attaching to an existing tunnel (experimental, `RPLAY_ATTACH_TUNNEL=1`)
+
+Because that CoreDevice tunnel is an ordinary routed utun, anything on the machine can use it —
+which makes a usbmux-free path possible. `cdhost` can now find the tunnel and skip Layers 0-3a:
+
+    RPLAY_ATTACH_TUNNEL=1 ./host-c/cdhost              # finds the tunnel, searches for RSD
+    RPLAY_ATTACH_TUNNEL=1 RPLAY_ATTACH_RSD=52722 ...   # skip the search
+    RPLAY_ATTACH_SCAN=49152-57000                      # widen the search range
+
+**Working:** tunnel discovery (a utun with a `fd..` address and the 16000 MTU those use), deriving
+the device address (`::1` against our `::2`), and reaching RSD — `✅ RSD reachable` against Device
+Hub's own tunnel.
+
+**The RSD port has to be searched for**, because it is chosen per session and only the app that
+built the tunnel is told it. Measured on two tunnels it sits at the bottom of the open set (52722
+with 52721 beside it; 51724 on one of ours) while the ~85 service ports cluster far above
+(56104+), so the lowest handful of open ports is a short list rather than a guess.
+
+**Not working yet:** `rsd_enumerate` gets "no RSD answer after 0 message(s)" on a foreign tunnel,
+where `host/remotexpc.py` completes the same handshake against the same address and port and
+returns all 85 services. So the transport and routing are fine and the gap is in the C RemoteXPC
+handshake specifically — that is the one thing left to debug before this path is usable.
+
+Note the machine had two ULA prefixes up (Tailscale `fd7a:...` alongside CoreDevice `fd9e:...`),
+which is worth ruling in or out as a source-address-selection problem, though a plain TCP connect
+to the same port succeeds.

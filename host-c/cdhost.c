@@ -16,6 +16,8 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include <poll.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -230,6 +232,149 @@ static void *pump_device_to_host(void *arg) {
     }
 }
 #endif /* __APPLE__ — the kernel-utun path; other platforms use RPLAY_USERSPACE_NET=1 (lwIP) */
+
+/* Defined below, at Layer 3b; the attach path probes candidate ports with it. */
+static int rsd_enumerate(const char *addr, long port, api_session *out);
+
+/* ------------------------------------------------ attaching to an EXISTING CoreDevice tunnel
+ *
+ * Why this exists. Layers 0-2 start at usbmux, so no usbmux entry means no session -- and a phone
+ * can be perfectly reachable with no usbmux entry at all. Device Hub reaches it over CoreDevice
+ * RemotePairing, which never registers with usbmuxd: observed with usbmuxd reporting zero devices
+ * while Device Hub had a live tunnel and the device answered ping over it in 6ms.
+ *
+ * The tunnel it builds is an ordinary routed utun, so anything on this machine can use it. Given
+ * the device address and its RSD port, everything from Layer 3b onwards is unchanged -- it is all
+ * plain sockets. So this finds those two facts and hands them over, skipping usbmux, the
+ * CoreDeviceProxy handshake and the packet pump entirely.
+ *
+ * The catch is that the RSD port is chosen per session and only the app that built the tunnel is
+ * told it, so it has to be found: scan for open ports, then attempt the RemoteXPC handshake on the
+ * lowest few. Measured on two tunnels, RSD sits at the bottom of the open set (52722 with 52721
+ * beside it; 51724 on one of ours) while the ~85 service ports cluster far above (56104+), so the
+ * lowest handful is a short list, not a guess.
+ */
+
+/* Find a CoreDevice tunnel: a utun carrying a ULA (fd..) address with the 16000 MTU those use.
+ * Writes our address; the device is the same prefix ending ::1. Returns 0 when one is found. */
+static int find_coredevice_tunnel(char *ours, size_t ours_len, char *device, size_t device_len)
+{
+    FILE *f = popen("/sbin/ifconfig", "r");
+    if (!f) return -1;
+    char line[512], iface[64] = {0}, found_addr[128] = {0}, found_if[64] = {0};
+    long mtu = 0;
+    int have = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] != '\t' && line[0] != ' ') {          /* new interface stanza */
+            char *colon = strchr(line, ':');
+            if (colon) {
+                size_t n = (size_t)(colon - line);
+                if (n >= sizeof iface) n = sizeof iface - 1;
+                memcpy(iface, line, n); iface[n] = 0;
+            }
+            char *m = strstr(line, "mtu ");
+            mtu = m ? strtol(m + 4, NULL, 10) : 0;
+            continue;
+        }
+        if (strncmp(iface, "utun", 4) != 0) continue;
+        char *inet6 = strstr(line, "inet6 ");
+        if (!inet6) continue;
+        char a[128] = {0};
+        if (sscanf(inet6 + 6, "%127s", a) != 1) continue;
+        if (strncmp(a, "fd", 2) != 0) continue;            /* ULA only, not link-local fe80 */
+        if (mtu < 8000) continue;                          /* CoreDevice tunnels use 16000 */
+        snprintf(found_addr, sizeof found_addr, "%s", a);
+        snprintf(found_if, sizeof found_if, "%s", iface);
+        have = 1;
+        break;
+    }
+    pclose(f);
+    if (!have) return -1;
+
+    snprintf(ours, ours_len, "%s", found_addr);
+    /* The device is ::1 on the same prefix; we are ::2. */
+    char base[128];
+    snprintf(base, sizeof base, "%s", found_addr);
+    char *tail = strrchr(base, ':');
+    if (!tail) return -1;
+    *tail = 0;
+    snprintf(device, device_len, "%s:1", base);
+    printf("  found tunnel on %s: us=%s device=%s\n", found_if, ours, device);
+    return 0;
+}
+
+/* Non-blocking connect sweep. Fills `out` with open ports, ascending, and returns how many. */
+static int scan_open_ports(const char *host, int lo, int hi, int *out, int max)
+{
+    int found = 0;
+    const int BATCH = 256;
+    for (int base = lo; base <= hi && found < max; base += BATCH) {
+        int fds[BATCH], ports[BATCH], n = 0;
+        for (int p = base; p < base + BATCH && p <= hi; p++) {
+            int fd = socket(AF_INET6, SOCK_STREAM, 0);
+            if (fd < 0) continue;
+            fcntl(fd, F_SETFL, O_NONBLOCK);
+            struct sockaddr_in6 sa;
+            memset(&sa, 0, sizeof sa);
+            sa.sin6_family = AF_INET6;
+            sa.sin6_port = htons((uint16_t)p);
+            if (inet_pton(AF_INET6, host, &sa.sin6_addr) != 1) { close(fd); continue; }
+            connect(fd, (struct sockaddr *)&sa, sizeof sa);   /* EINPROGRESS expected */
+            fds[n] = fd; ports[n] = p; n++;
+        }
+        struct pollfd pfd[BATCH];
+        for (int i = 0; i < n; i++) { pfd[i].fd = fds[i]; pfd[i].events = POLLOUT; pfd[i].revents = 0; }
+        poll(pfd, (nfds_t)n, 400);
+        for (int i = 0; i < n; i++) {
+            if (pfd[i].revents & POLLOUT) {
+                int err = 0; socklen_t el = sizeof err;
+                if (getsockopt(fds[i], SOL_SOCKET, SO_ERROR, &err, &el) == 0 && err == 0
+                    && found < max)
+                    out[found++] = ports[i];
+            }
+            close(fds[i]);
+        }
+    }
+    return found;
+}
+
+/* Bring up a session on a tunnel someone else built. Returns 0 and fills addr/rsd on success. */
+static int attach_existing_tunnel(char *addr, size_t addr_len, char *ours, size_t ours_len,
+                                  long *rsd_out)
+{
+    printf("\n== attaching to an existing CoreDevice tunnel ==\n");
+    if (find_coredevice_tunnel(ours, ours_len, addr, addr_len) != 0) {
+        fprintf(stderr, "  no CoreDevice tunnel found (open Device Hub or Xcode to create one)\n");
+        return -1;
+    }
+    const char *rp = getenv("RPLAY_ATTACH_RSD");
+    if (rp && *rp) {                                   /* skip the search when told the port */
+        *rsd_out = strtol(rp, NULL, 10);
+        printf("  RSD port %ld (from RPLAY_ATTACH_RSD)\n", *rsd_out);
+        return 0;
+    }
+    int lo = 49152, hi = 57000;
+    const char *r = getenv("RPLAY_ATTACH_SCAN");
+    if (r && *r) sscanf(r, "%d-%d", &lo, &hi);
+    printf("  scanning [%s]:%d-%d for the RSD port...\n", addr, lo, hi);
+    int open_ports[64];
+    int n = scan_open_ports(addr, lo, hi, open_ports, 64);
+    printf("  %d open port(s)\n", n);
+    /* RSD sits at the bottom of the open set; the service ports cluster well above it. */
+    int tries = n < 8 ? n : 8;
+    for (int i = 0; i < tries; i++) {
+        api_session probe;
+        memset(&probe, 0, sizeof probe);
+        if (rsd_enumerate(addr, open_ports[i], &probe) > 0) {
+            *rsd_out = open_ports[i];
+            printf("  RSD found on port %ld\n", *rsd_out);
+            return 0;
+        }
+    }
+    fprintf(stderr, "  no RSD port answered; widen with RPLAY_ATTACH_SCAN=lo-hi "
+                    "or set RPLAY_ATTACH_RSD\n");
+    return -1;
+}
 
 /* Prove the routing works: an ordinary TCP connect to the device's RSD port. */
 static int g_userspace;   /* fwd: set in main from RPLAY_USERSPACE_NET */
@@ -643,21 +788,43 @@ int main(int argc, char **argv) {
      * which now wraps the idevice connection. */
     static char udid[128] = {0}, devname[256] = "?", prodver[64] = "?";
     void *idev_conn = NULL;
-    if (imd_bringup(&idev_conn, udid, sizeof udid, devname, sizeof devname, prodver, sizeof prodver) != 0)
-        return 1;
-
-    conn_t tun = { -1, NULL, idev_conn };
+    conn_t tun = { -1, NULL, NULL };
     char addr[128] = "?", ours[128] = "?"; long rsd = -1, mtu = 0;
-    if (tunnel_handshake_full(&tun, addr, sizeof addr, ours, sizeof ours, &rsd, &mtu) != 0) {
-        fprintf(stderr, "  tunnel handshake failed\n");
-        return 1;
+
+    /* Attach to a tunnel someone else already built, instead of building one over usbmux.
+     *
+     * Opt in with RPLAY_ATTACH_TUNNEL=1. This is the path for a device that is reachable but has
+     * no usbmux entry -- a phone paired to Device Hub over CoreDevice RemotePairing, which never
+     * registers with usbmuxd. Layers 0-3a are skipped wholesale: the tunnel exists, it is routed,
+     * and everything downstream is plain sockets over it. */
+    int attached = 0;
+    if (getenv("RPLAY_ATTACH_TUNNEL") && getenv("RPLAY_ATTACH_TUNNEL")[0] == '1') {
+        if (attach_existing_tunnel(addr, sizeof addr, ours, sizeof ours, &rsd) != 0) return 1;
+        attached = 1;
+        snprintf(devname, sizeof devname, "attached");
     }
-    printf("  handshake: us=%s device=%s serverRSDPort=%ld mtu=%ld\n", ours, addr, rsd, mtu);
+
+    if (!attached) {
+        if (imd_bringup(&idev_conn, udid, sizeof udid, devname, sizeof devname,
+                        prodver, sizeof prodver) != 0)
+            return 1;
+        tun.idev = idev_conn;
+        if (tunnel_handshake_full(&tun, addr, sizeof addr, ours, sizeof ours, &rsd, &mtu) != 0) {
+            fprintf(stderr, "  tunnel handshake failed\n");
+            return 1;
+        }
+        printf("  handshake: us=%s device=%s serverRSDPort=%ld mtu=%ld\n", ours, addr, rsd, mtu);
+    }
 
     g_userspace = getenv("RPLAY_USERSPACE_NET") && getenv("RPLAY_USERSPACE_NET")[0] == '1';
     usernet_enable(g_userspace);
 
-    if (g_userspace) {
+    if (attached) {
+        /* Nothing to bring up: the tunnel is already routed by whoever created it, so kernel
+         * sockets reach the device as they are. No utun, no packet pump, and therefore none of
+         * bug #7's self-exit either -- if that tunnel dies, its owner rebuilds it. */
+        printf("\n== Layer 3a: skipped (using an existing tunnel) ==\n");
+    } else if (g_userspace) {
         /* Userspace TCP/IP over the tunnel -- no root, no utun, no TUN driver (the Linux/Windows
          * and App Store path). lwIP runs the IP stack in-process over the CoreDeviceProxy
          * connection; every tunnel connection below opens an lwIP socket instead of a kernel one. */
