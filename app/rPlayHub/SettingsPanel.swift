@@ -187,35 +187,29 @@ final class SettingsPanel: NSView {
         }
     }
 
+    /// Device Hub's Custom Coordinates sheet, checked by opening its own: titled "Custom
+    /// Coordinates", two EMPTY fields labelled Latitude and Longitude, and Cancel / Apply with
+    /// Apply disabled until both are filled. It does not pre-fill the current location — an
+    /// earlier version of this filled in Cupertino, which matched neither Device Hub nor any
+    /// sensible default.
     private func askForCoordinates() {
         let alert = NSAlert()
         alert.messageText = "Custom Coordinates"
-        alert.informativeText = "Latitude and longitude in decimal degrees."
-        let lat = NSTextField(string: "37.3348")
-        let lon = NSTextField(string: "-122.0090")
-        let row = NSStackView(views: [label("Latitude"), lat, label("Longitude"), lon])
-        row.orientation = .vertical
-        row.alignment = .leading
-        row.spacing = 4
-        row.frame = NSRect(x: 0, y: 0, width: 220, height: 110)
-        lat.widthAnchor.constraint(equalToConstant: 200).isActive = true
-        lon.widthAnchor.constraint(equalToConstant: 200).isActive = true
-        alert.accessoryView = row
-        alert.addButton(withTitle: "Set")
+        let sheet = CoordinateFields()
+        alert.accessoryView = sheet.view
+        alert.addButton(withTitle: "Apply")       // first added is the rightmost, default button
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn,
-              let la = Double(lat.stringValue), let lo = Double(lon.stringValue) else {
+        sheet.apply = alert.buttons.first
+        sheet.apply?.isEnabled = false            // nothing typed yet, as in Device Hub
+        let choice = alert.runModal()
+        guard choice == .alertFirstButtonReturn,
+              let la = Double(sheet.lat.stringValue), let lo = Double(sheet.lon.stringValue) else {
+            // Cancelled, so the menu must go back to what the device is actually on rather than
+            // sitting on "Custom Coordinates…" as though something had been applied.
             locationPopup.selectItem(at: 0)
             return
         }
         send(latitude: la, longitude: lo)
-    }
-
-    private func label(_ s: String) -> NSTextField {
-        let t = NSTextField(labelWithString: s)
-        t.font = .systemFont(ofSize: 11)
-        t.textColor = .secondaryLabelColor
-        return t
     }
 
     private func report(_ result: Result<[String: Any], Error>, _ what: String) {
@@ -451,4 +445,49 @@ private final class Row: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// The two fields inside the Custom Coordinates sheet, with the live validation Device Hub does:
+/// Apply stays disabled until both hold a number. Kept as its own object because NSAlert has no
+/// place to hang a text-field delegate, and the delegate must outlive the call that builds it.
+private final class CoordinateFields: NSObject, NSTextFieldDelegate {
+    let lat = NSTextField()
+    let lon = NSTextField()
+    let view = NSView()
+    weak var apply: NSButton?
+
+    override init() {
+        super.init()
+        view.frame = NSRect(x: 0, y: 0, width: 260, height: 58)
+        let rows = NSStackView(views: [row("Latitude", lat), row("Longitude", lon)])
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = 8
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(rows)
+        NSLayoutConstraint.activate([
+            rows.topAnchor.constraint(equalTo: view.topAnchor),
+            rows.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            rows.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            rows.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        for f in [lat, lon] { f.delegate = self }
+    }
+
+    private func row(_ title: String, _ field: NSTextField) -> NSView {
+        let label = NSTextField(labelWithString: title)
+        label.alignment = .right
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 170).isActive = true
+        let h = NSStackView(views: [label, field])
+        h.orientation = .horizontal
+        h.spacing = 8
+        return h
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        apply?.isEnabled = Double(lat.stringValue) != nil && Double(lon.stringValue) != nil
+    }
 }
