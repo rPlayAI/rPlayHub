@@ -1465,7 +1465,9 @@ extension AppDelegate: NSToolbarDelegate {
         sidebarSeparator,
         deviceTitleItem, .flexibleSpace, keyboardItem, framesItem, .flexibleSpace, overflowItem,
         inspectorSeparator,
-        inspectorTabsItem,
+        // Pushes the three icon tabs to the trailing edge of the inspector's section, where
+        // Device Hub keeps them; without it they sit hard against the separator.
+        .flexibleSpace, inspectorTabsItem,
     ]
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {

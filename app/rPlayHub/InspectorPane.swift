@@ -38,7 +38,7 @@ final class InspectorPane: NSView {
     /// segmented control paints its selection with the accent colour and Device Hub's is grey.
     let iconTabs = IconTabBar(icons: [("slider.horizontal.3", "Settings"),
                                       ("doc.text", "Report"),
-                                      ("info.circle", "Info")])
+                                      ("info", "Info")])
     /// Second row, under Info only: the text-named tabs.
     private let textTabs = NSSegmentedControl()
 

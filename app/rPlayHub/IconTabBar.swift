@@ -29,13 +29,14 @@ final class IconTabBar: NSView {
 
     private var buttons: [NSButton] = []
     private let highlight = CALayer()
-    private static let itemWidth: CGFloat = 30
-    private static let itemHeight: CGFloat = 24
+    private static let itemWidth: CGFloat = 36
+    private static let itemHeight: CGFloat = 28
 
     init(icons: [(symbol: String, label: String)]) {
         super.init(frame: .zero)
         wantsLayer = true
-        highlight.cornerRadius = 6
+        // A circle, not a rounded rectangle -- Device Hub's active tab sits on a round grey
+        // disc, seen by cropping its title bar at 4x. Set in layout(), where the height is known.
         // Sampled off Device Hub's own active tab: a light grey capsule, not the accent colour.
         highlight.backgroundColor = NSColor(srgbRed: 0xE6 / 255, green: 0xE6 / 255,
                                             blue: 0xE6 / 255, alpha: 1).cgColor
@@ -45,7 +46,11 @@ final class IconTabBar: NSView {
             let b = NSButton()
             b.bezelStyle = .inline
             b.isBordered = false
-            b.image = NSImage(systemSymbolName: icon.symbol, accessibilityDescription: icon.label)
+            // Device Hub's glyphs measure 19px tall with their centres ~35px apart, both read off
+            // its title bar -- noticeably larger than a default toolbar glyph. 17pt lands there;
+            // itemWidth below carries the spacing.
+            b.image = NSImage(systemSymbolName: icon.symbol, accessibilityDescription: icon.label)?
+                .withSymbolConfiguration(.init(pointSize: 17, weight: .regular))
             b.imagePosition = .imageOnly
             b.toolTip = icon.label
             b.target = self
@@ -80,8 +85,11 @@ final class IconTabBar: NSView {
         CATransaction.setDisableActions(true)
         if let s = selected {
             highlight.isHidden = false
-            highlight.frame = NSRect(x: CGFloat(s) * Self.itemWidth + 1, y: 1,
-                                     width: Self.itemWidth - 2, height: bounds.height - 2)
+            // Square, then fully rounded: a disc centred on the item.
+            let d = min(Self.itemWidth, bounds.height) - 2
+            highlight.frame = NSRect(x: CGFloat(s) * Self.itemWidth + (Self.itemWidth - d) / 2,
+                                     y: (bounds.height - d) / 2, width: d, height: d)
+            highlight.cornerRadius = d / 2
         } else {
             highlight.isHidden = true
         }
