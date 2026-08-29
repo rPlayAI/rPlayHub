@@ -178,9 +178,14 @@ typedef struct {
  * live-looking-but-dead session (bug #7: it keeps answering tunnel_info while nothing flows),
  * exit the process. The kernel destroys the utun on exit; the app's control connection drops and
  * it reconnects; under launchd the daemon auto-restarts. A clean drop beats a silent black. */
+/* Include errno and the traffic counters. Every past round of "why did it quit this time" was a
+ * guessing game because the message named a stage and nothing else: five call sites, one string
+ * each, no way to tell a dropped connection from a transient error, and no idea whether the
+ * tunnel had ever carried anything. */
 static void pump_die(const char *reason) {
-    fprintf(stderr, "\n  tunnel died: %s -- exiting so the session does not go stale (bug #7)\n",
-            reason ? reason : "unknown");
+    int e = errno;
+    fprintf(stderr, "\n  tunnel died: %s (errno %d: %s) -- exiting so the session does not go "
+                    "stale (bug #7)\n", reason ? reason : "unknown", e, e ? strerror(e) : "none");
     _exit(1);
 }
 
@@ -189,6 +194,10 @@ static void *pump_host_to_device(void *arg) {
     uint8_t buf[70000];
     for (;;) {
         ssize_t n = read(p->utun, buf, sizeof buf);
+        /* A signal interrupting the read is not the tunnel dying. macOS's signal() asks for
+         * SA_RESTART so this should not happen, but "should not" is what made the previous
+         * unexplained exits so expensive: retrying costs nothing and removes the whole class. */
+        if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
         if (n <= 4) { pump_die("utun read ended"); }
         if (cwrite(p->tun, buf + 4, (size_t)(n - 4)) < 0) {   /* strip the 4-byte AF prefix */
             pump_die("tunnel write failed");
@@ -211,7 +220,10 @@ static void *pump_device_to_host(void *arg) {
             pump_die("tunnel read ended mid-packet");
         }
         memcpy(frame, &af, 4);
-        if (write(p->utun, frame, 4 + IPV6_HDR_LEN + plen) < 0) {
+        ssize_t w;
+        do { w = write(p->utun, frame, 4 + IPV6_HDR_LEN + plen); }
+        while (w < 0 && (errno == EINTR || errno == EAGAIN));
+        if (w < 0) {
             pump_die("utun write failed");
         }
         p->rx++;
@@ -533,6 +545,15 @@ static void own_signals(void)
     signal(SIGINT, on_terminate);
     signal(SIGTERM, on_terminate);
     signal(SIGHUP, on_terminate);
+    /* Ignore SIGPIPE here, at startup, not where the first socket is written.
+     *
+     * api_serve() sets this too, but that runs at Layer 4 -- after the packet pump threads have
+     * been running since Layer 3a, through RSD enumeration and the DDI mount. A tunnel write to a
+     * closed socket anywhere in that window raised SIGPIPE at its DEFAULT disposition and killed
+     * the process instantly, with no "tunnel died" line and no other trace: a silent exit that
+     * looks exactly like the bug #7 self-exit from outside but is not it. Disposition is
+     * process-wide, so setting it once here covers every thread and every layer. */
+    signal(SIGPIPE, SIG_IGN);
 }
 
 int main(int argc, char **argv) {
