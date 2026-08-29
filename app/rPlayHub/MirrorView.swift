@@ -112,11 +112,14 @@ final class MirrorView: NSView {
         viewScreenOS.textColor = .secondaryLabelColor
         viewScreenOS.alignment = .center
         viewScreenButton.title = "  View Screen"
-        // Matches Device Hub's own icon, identified by cropping its live button and comparing
-        // against rendered SF Symbol candidates -- it is a stock symbol, not a bundled asset
-        // (confirmed via assetutil against DeviceHub.app's Assets.car, which has none besides the
-        // app icon itself).
-        viewScreenButton.image = NSImage(systemSymbolName: "rectangle.stack.badge.person.crop",
+        // Matches Device Hub's own icon: the stock "screen sharing" symbol (an inset-filled
+        // rectangle with a filled person at its bottom-right), identified by cropping the button
+        // out of a Device Hub window capture and comparing against rendered SF Symbol candidates
+        // side by side. An earlier pass picked rectangle.stack.badge.person.crop and recorded it
+        // as confirmed; the user spotted the mismatch -- the real icon has ONE filled rectangle
+        // and no circled badge. (Device Hub bundles no icon assets of its own -- confirmed via
+        // assetutil against its Assets.car -- so every icon in it is a stock symbol.)
+        viewScreenButton.image = NSImage(systemSymbolName: "rectangle.inset.filled.and.person.filled",
                                          accessibilityDescription: "View Screen")
         viewScreenButton.imagePosition = .imageLeading
         viewScreenButton.bezelStyle = .rounded
