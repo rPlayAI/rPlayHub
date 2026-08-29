@@ -1409,10 +1409,25 @@ extension AppDelegate: NSToolbarDelegate {
     /// edge, same row as the traffic lights; not inside the inspector's content area.
     private static let inspectorTabsItem = NSToolbarItem.Identifier("inspectorTabs")
 
+    /// Device Hub's title bar is not one continuous bar: it is split into THREE sections, one per
+    /// column, divided exactly where the split view's dividers are. That is what
+    /// NSTrackingSeparatorToolbarItem does -- it follows a split divider as the panes resize, and
+    /// each section then gets its own background, so the sidebar's toolbar area reads as part of
+    /// the sidebar and the inspector's as part of the inspector.
+    ///
+    /// It also fixes the grouping: on this macOS, adjacent toolbar items are drawn together in one
+    /// rounded capsule, so with the device title sitting straight after the sidebar toggle it was
+    /// swept into the sidebar's capsule. Device Hub's title stands on its own in the middle
+    /// section; the separator is what breaks the capsule.
+    private static let sidebarSeparator = NSToolbarItem.Identifier("sidebarSeparator")
+    private static let inspectorSeparator = NSToolbarItem.Identifier("inspectorSeparator")
+
     private static let order: [NSToolbarItem.Identifier] = [
-        addDeviceItem, listItem, sidebarItem, deviceTitleItem,
-        .flexibleSpace, keyboardItem, framesItem, .flexibleSpace, overflowItem,
-        .flexibleSpace, inspectorTabsItem,
+        addDeviceItem, listItem, sidebarItem,
+        sidebarSeparator,
+        deviceTitleItem, .flexibleSpace, keyboardItem, framesItem, .flexibleSpace, overflowItem,
+        inspectorSeparator,
+        inspectorTabsItem,
     ]
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -1440,6 +1455,10 @@ extension AppDelegate: NSToolbarDelegate {
             return item
         }
         switch id {
+        case Self.sidebarSeparator:
+            return NSTrackingSeparatorToolbarItem(identifier: id, splitView: split, dividerIndex: 0)
+        case Self.inspectorSeparator:
+            return NSTrackingSeparatorToolbarItem(identifier: id, splitView: split, dividerIndex: 1)
         case Self.addDeviceItem:
             return icon("plus", "Add", "Add Device", #selector(addDeviceTapped))
         case Self.listItem:
