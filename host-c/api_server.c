@@ -62,7 +62,47 @@ static int json_string_field(const char *json, const char *key, char *out, size_
     if (*p != '"') return -1;
     p++;
     size_t i = 0;
-    while (*p && *p != '"' && i + 1 < out_cap) out[i++] = *p++;
+    /* Undo JSON string escapes.
+     *
+     * This used to copy the bytes verbatim, which quietly broke every path the macOS app sends:
+     * Foundation's JSONSerialization escapes the forward slash, so {"path":"/"} arrives as
+     * "\/" and was handed to AFC as a literal backslash-slash -- answered, correctly, with
+     * "no such path" (AFC error 8). Anything carrying a '/' was affected: file listings, reads,
+     * the .ipa and .mobileprovision paths for install, the crash export directory. Clients that
+     * do not escape slashes (the Python tools, the Linux GUI) were unaffected, which is why this
+     * survived so long. */
+    while (*p && *p != '"' && i + 1 < out_cap) {
+        if (*p != '\\') { out[i++] = *p++; continue; }
+        p++;
+        if (!*p) break;
+        switch (*p) {
+        case 'n': out[i++] = '\n'; break;
+        case 't': out[i++] = '\t'; break;
+        case 'r': out[i++] = '\r'; break;
+        case 'b': out[i++] = '\b'; break;
+        case 'f': out[i++] = '\f'; break;
+        case 'u': {
+            /* \uXXXX: only the ASCII range matters for the paths and identifiers crossing this
+             * API, so anything above 0x7F is left as '?' rather than half-encoded as UTF-8. */
+            unsigned v = 0;
+            int ok = 1;
+            for (int k = 1; k <= 4; k++) {
+                char c = p[k];
+                v <<= 4;
+                if (c >= '0' && c <= '9') v |= (unsigned)(c - '0');
+                else if (c >= 'a' && c <= 'f') v |= (unsigned)(c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F') v |= (unsigned)(c - 'A' + 10);
+                else { ok = 0; break; }
+            }
+            if (!ok) { out[i++] = 'u'; break; }
+            out[i++] = v < 0x80 ? (char)v : '?';
+            p += 4;
+            break;
+        }
+        default: out[i++] = *p; break;   /* \/ \\ \" and anything else: the character itself */
+        }
+        p++;
+    }
     out[i] = 0;
     return 0;
 }

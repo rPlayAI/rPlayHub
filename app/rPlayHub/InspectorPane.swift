@@ -30,8 +30,9 @@ final class InspectorPane: NSView {
     /// Device Hub's Settings tab -- real device appearance/accessibility switches, over
     /// coredevice.configuration (doc/COREDEVICE-ACTIONS.md).
     let settings = SettingsPanel()
-    private let reportStub = ComingSoonPanel(title: "Report",
-        detail: "A diagnostics report view, matching Device Hub's Report tab.")
+    /// Device Hub's Report tab -- the device's crash reports over AFC on
+    /// crashreportcopymobile (see ReportPanel).
+    let report = ReportPanel()
 
     /// Settings, Report, Info -- lives in the window's title bar, not in this view. Exposed so
     /// AppDelegate can put it in a toolbar item. Hand-rolled (see IconTabBar) because a
@@ -55,13 +56,13 @@ final class InspectorPane: NSView {
     /// The engine connection the Apps/Profiles/Files tabs talk through. Console opens its own.
     var control: ControlClient? {
         didSet { apps.control = control; profiles.control = control; files.control = control
-                 settings.control = control }
+                 settings.control = control; report.control = control }
     }
 
     /// The panes selectable through the second (text) row, in Device Hub's Info/Apps/Profiles
     /// order, then our folded-in extras.
     private var subPanes: [NSView] { [diagnostics, apps, profiles, files, console, controls] }
-    private var allPanes: [NSView] { subPanes + [settings, reportStub] }
+    private var allPanes: [NSView] { subPanes + [settings, report] }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -141,7 +142,7 @@ final class InspectorPane: NSView {
         }
         // The two stubs sit directly under this pane's top (no text sub-tabs); the sub-panes
         // sit under the text row.
-        for v in [settings, reportStub] {
+        for v in [settings, report] {
             NSLayoutConstraint.activate([v.topAnchor.constraint(equalTo: topAnchor, constant: 8)])
         }
         for v in subPanes {
@@ -184,7 +185,7 @@ final class InspectorPane: NSView {
         let onInfo = !isHidden && activeIcon == Self.infoIndex
         textTabs.isHidden = !onInfo
         settings.isHidden = isHidden || activeIcon != 0
-        reportStub.isHidden = isHidden || activeIcon != 1
+        report.isHidden = isHidden || activeIcon != 1
         let sub = textTabs.selectedSegment
         for (i, v) in subPanes.enumerated() { v.isHidden = !onInfo || i != sub }
         guard onInfo else { return }
