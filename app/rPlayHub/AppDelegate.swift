@@ -41,6 +41,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isRecording = false
     private var lastRecordingPath: String?
     private var retryTimer: Timer?
+    /// Next retry wait. Doubles on every failed attempt up to retryDelayMax, back to
+    /// retryDelayBase once anything connects — each retry that reaches the daemon makes it redo
+    /// device-binding/tunnel setup, so hammering a struggling daemon every 2 seconds forever
+    /// works against the recovery it is waiting for.
+    private var retryDelay: TimeInterval = AppDelegate.retryDelayBase
+    private static let retryDelayBase: TimeInterval = 2.0
+    private static let retryDelayMax: TimeInterval = 60.0
     /// True from the start of connect() until it has either got video or given up.
     private var connecting = false
     /// True once the user has clicked View Screen for the currently-selected device -- Device
@@ -718,6 +725,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func reconnect() {
+        // A deliberate (re)connect — device switch, engine coming up — starts patient again.
+        retryDelay = AppDelegate.retryDelayBase
         directStream?.stop()
         directStream = nil
         stream?.stop()
@@ -807,6 +816,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         usb = mirror
         retryTimer?.invalidate()
         retryTimer = nil
+        retryDelay = AppDelegate.retryDelayBase
         return true
     }
 
@@ -968,6 +978,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // calling connect() forever, and every call built another receiver.
                 self.retryTimer?.invalidate()
                 self.retryTimer = nil
+                self.retryDelay = AppDelegate.retryDelayBase
             } else if route == "direct" {
                 AppBuild.log("video route: direct requested but the stream did not start")
                 // Say so on screen. A black window with the reason only in a log file is what
@@ -1153,6 +1164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         retryTimer?.invalidate()
         retryTimer = nil
+        retryDelay = AppDelegate.retryDelayBase
 
         // Ask which codec the device actually chose before frames arrive — the engine reads it off
         // the RTP payload type, so it knows rather than guesses, and HEVC and H.264 need different
@@ -1175,7 +1187,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stream = nil
         deviceLabel = reason
         guard retryTimer == nil else { return }
-        retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        let delay = retryDelay
+        retryDelay = min(retryDelay * 2, AppDelegate.retryDelayMax)
+        AppBuild.log("connect failed (\(reason)); retrying in \(Int(delay))s")
+        retryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            self?.retryTimer = nil
             self?.connect()
         }
     }

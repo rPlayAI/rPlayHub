@@ -340,6 +340,21 @@ final class MirrorView: NSView {
         return CGPoint(x: min(max(fx, 0), 1), y: min(max(fy, 0), 1))
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        // "Open in New Window" reparents this view (ScreenWindow.swift), and moving a view to a
+        // different window rebinds its layers to that window's presentation context.
+        // AVSampleBufferDisplayLayer keeps ACCEPTING frames across that move -- enqueue succeeds,
+        // framesPresented keeps counting, so refreshStillIfIdle sees a healthy stream -- but its
+        // internal renderer stays tied to the old context and silently stops painting: the
+        // detached window froze on the last frame. Flushing on the move resets the renderer so
+        // the next enqueued frame actually draws. The dropped image costs one display tick of
+        // black during live video; while gated the layer is hidden anyway.
+        displayLayer.flushAndRemoveImage()
+        AppBuild.log("MirrorView moved to window '\(window?.title ?? "?")'; display layer flushed")
+    }
+
     override func layout() {
         super.layout()
         let screen = screenRect()
