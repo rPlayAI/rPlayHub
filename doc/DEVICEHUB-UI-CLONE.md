@@ -148,26 +148,142 @@ Device Hub window) instead of white. Confirmed clean against the live app in bot
 **Not yet checked on Linux** — `ImGuiTableFlags_BordersInnerH` may or may not have the same
 "fills empty space" behavior; worth verifying once building on Linux is possible again.
 
+## Canvas width, pre-connect mockup sizing, and pane backgrounds fixed (2026-08-28, later same day)
+
+A second pass after the inspector restructure above, triggered by the user comparing the live
+apps side-by-side and finding the canvas pane badly squeezed (~100pt instead of Device Hub's own
+389pt, measured directly off its live window) and the pre-connect mockup rendering huge and black
+instead of small and blue. Root causes, all on macOS (`MirrorView.swift`, `InspectorPane.swift`,
+`DiagnosticsPanel.swift`, `AppDelegate.swift`):
+
+- **`stage` (the canvas pane) had no resting-width constraint of its own** — only sidebar and
+  inspector did (`AppDelegate.buildWindow`'s pane-width loop). With the lowest `NSSplitView`
+  holding priority AND nothing to defend, any legitimate over-demand elsewhere shrank it
+  arbitrarily far. Fixed by adding `stage` to that loop with an explicit **389pt** resting width
+  (Device Hub's own canvas, measured live) and bumping inspector's from 260 to 320 (needed for our
+  six sub-tabs vs. Device Hub's three).
+- **Two wrapping labels with no width constraint** (`DiagnosticsPanel`'s status message and its
+  "Unavailable" service list) reported their full unwrapped single-line width as intrinsic content
+  size, dragging the inspector — and therefore the canvas next to it — wider still. A plain width
+  constraint does NOT fix this for a wrapping `NSTextField`; `preferredMaxLayoutWidth` is what Auto
+  Layout actually consults. Fixed both with `preferredMaxLayoutWidth = 224`.
+- **`textTabs` (the six sub-tabs) used `setWidth(_:forSegment:)` on a `.texturedRounded` segmented
+  control**, which turned out not to reliably control intrinsic content size under Auto Layout —
+  measured via Accessibility inspection (`entire contents of window` + per-element `position`/
+  `size`) that it stayed at its old (wide) size regardless. Switched to `segmentDistribution =
+  .fillEqually` plus an explicit `widthAnchor` tied to the pane's own width, which actually works.
+- **Pre-connect mockup was the wrong size**: `bounds.width * 0.12` was Device Hub's WINDOW-relative
+  ratio (94pt / 923pt window) mistakenly applied to this view's own canvas-only bounds — silently
+  halving it. Fixed to `bounds.width * 0.24` (94pt / 390pt canvas, the actual live ratio).
+- **Pre-connect mockup rendered full-canvas-sized and black instead of small and blue**, two
+  compounding bugs: (1) `presentedSize` is genuinely `(0,0)` for the entire time before
+  `deviceSize` arrives asynchronously, and the top-level guard in `screenRect()` fell back to full
+  `bounds` — which happens to be roughly phone-proportioned, so it read as "correct but huge"
+  rather than obviously wrong; fixed with a generic 9:19.5 fallback aspect while gated. (2)
+  `displayLayer` (opaque black by default, sized to fill `clipLayer`) sits above `clipLayer`'s blue
+  placeholder fill unconditionally — fixed with `displayLayer.isHidden = isGated`.
+- **`viewScreenStack` (name/OS/button) positioning lived after two video-geometry `guard` returns**
+  that fire whenever `videoSize` is `(0,0)` — true for the ENTIRE pre-View-Screen lifetime — so it
+  never ran while gated and the stack stayed at a stale/default frame. Moved earlier in `layout()`,
+  right after the cutout geometry, before those guards.
+- **Inspector background didn't match the sidebar's** (`#E4E4E4`, sampled off the live app) — it
+  had no explicit background at all and fell through to white. Fixed by giving `InspectorPane`
+  itself that background; individual sub-panels' own list/table backgrounds already matched, so
+  this just fixed the panels (Info, stubs) that don't have their own scroll/table view.
+- **View Screen's icon** now matches Device Hub's own: `rectangle.stack.badge.person.crop`,
+  identified by cropping Device Hub's live button pixel-for-pixel and comparing against rendered
+  candidates pulled from the system's SF Symbols name list (`CoreGlyphs.bundle/
+  name_availability.plist` inside an iOS Simulator runtime — 9476 public symbol names; confirmed
+  via `assetutil` against `DeviceHub.app`'s `Assets.car` that it has no bundled icon assets besides
+  the app icon itself, so every icon in it, ours included, is a stock symbol to identify, not an
+  asset to extract).
+- **The mockup's bezel border was tried gated to `isGated` only** (reasoning: at live-video size it
+  became an 11-12pt black ring painted over the picture, since `clipLayer.borderWidth` scaled with
+  `clipSize` and a `CALayer` border always draws above its sublayers). **User compared side-by-side
+  against Device Hub's own live view and asked for it back in both states** — a real device also
+  has a visible bezel edge around its screen, and no-border read further from Device Hub than
+  keeping it did. **Reverted; current code applies the border unconditionally.** Worth knowing if
+  this comes up again: the mechanism (border-over-video) is understood even though the fix was
+  rejected — don't re-derive it, just don't re-apply it without checking with the user first.
+
+All confirmed via repeated live `screencapture` + `osascript`/System Events comparison against the
+real Device Hub window, and via direct Accessibility-tree inspection (`entire contents of window`,
+`position`/`size` of every element) to settle exact pane widths when screenshots alone couldn't
+distinguish "the layout is actually wrong" from "AX reports a wrapping label's unwrapped bounds,
+not its real frame" — the latter cost significant back-and-forth before being ruled out; trust the
+screenshot over AX `size` for any element that might be word-wrapping.
+
+**Not yet done on Linux** — none of this pass touched `rplay-gui.cpp`; the equivalent ImGui layout
+(if it has an analogous "did one pane starve another" issue) hasn't been checked.
+
+## Open issues, found but not yet resolved (2026-08-28)
+
+- **"Open in New Window" (`ScreenWindow.swift`) frozen frames**: user reports the window opens
+  correctly (screen visible) but frames stop updating once detached. `ScreenWindow` reparents the
+  live `stage` view (with its one `AVSampleBufferDisplayLayer`) into a new `NSWindow` rather than
+  creating a second view, by design (see the file's own header comment) — investigation was
+  interrupted before reaching a diagnosis. Start here: reproduce with the daemon up, watch
+  `view.displayLayer.framesPresented` (already exposed, used by `refreshStillIfIdle`) before/after
+  detaching to confirm frames really stop arriving vs. just not repainting; check whether
+  `layout()`/`needsLayout` still fires for a view whose window changed, and whether `isGated` or
+  `displayLayer.isHidden` could be getting set incorrectly by the reparent triggering a spurious
+  layout pass. This session's `MirrorView.swift` changes (`displayLayer.isHidden = isGated`, the
+  moved `viewScreenStack` positioning) are recent enough to be worth ruling in or out specifically,
+  even though `ScreenWindow.swift` itself wasn't touched.
+- **`scheduleRetry` (`AppDelegate.swift`) has no backoff** — a bare `Timer.scheduledTimer(
+  withTimeInterval: 2.0, repeats: true)` that keeps calling `connect()` every 2 seconds forever
+  whenever the daemon is unreachable. Flagged, not fixed (user hadn't confirmed wanting it done
+  when this session ended). Worth doing: each retry that reaches the daemon makes it redo
+  device-binding/tunnel setup, and a tight retry loop hitting a struggling/restarting `cdhost`
+  plausibly contributes to the "tunnel died... exiting so the session does not go stale (bug #7)"
+  self-exits that made this session's live verification slow (dozens of manual sudo restarts).
+  Not proven causal, just a real design smell independent of whether it's the actual cause.
+- **Settings and Report tabs need a live capture, and none exists yet.** Checked every `.pcap` in
+  the repo (`logs/`, `reference/captures/`, `build/`) — all of them (the two "devicehub" captures
+  are byte-identical) cover only the View Screen media-stream session
+  (`mediastreamstart`/`status`/`getsupportinfo`, power assertions, `com.apple.mobile.lockdown`),
+  never Settings or Report being opened. This matters because of WHY Info/Apps/Profiles/Files never
+  needed a Device-Hub-specific capture in the first place: they're built on **libimobiledevice**,
+  which already implements the classic "lockdown" protocol (`installation_proxy`, `misagent`,
+  `AFC`, `diagnostics_relay`, `springboardservices`) as public, well-documented services used by
+  countless third-party tools — no reverse-engineering of Device Hub's own traffic was ever
+  needed for those. Settings and Report are almost certainly backed by modern, private
+  **CoreDevice** XPC services instead (`doc/LIBIMOBILEDEVICE-MIGRATION.md` is explicit that
+  CoreDevice/RemoteXPC is NOT libimobiledevice's territory), which have no such existing reference
+  — a targeted capture of Device Hub's own traffic while those specific tabs are open is the only
+  real path in. `host/capture-devicehub.sh` (needs `sudo tcpdump`) is the tool: connect the device
+  in Device Hub WITHOUT clicking View Screen, run the script against the CoreDevice tunnel utun it
+  finds automatically, then click into Settings and/or Report (instead of, or in addition to, View
+  Screen) while it captures. The user needs to run this (sudo); screenshots of both tabs' actual
+  content would also help even without a capture, to know what fields/controls to build toward.
+
 ## Remaining, in rough priority
 
-1. **Verify the Linux build** — every check this session hit the pre-existing
+1. **Settings and Report tabs** — blocked on a live capture or screenshots of Device Hub's actual
+   content for both (see "Open issues" above); nothing to build until then beyond the existing
+   `ComingSoonPanel` stubs.
+2. **"Open in New Window" frozen-frame bug** and **`scheduleRetry` backoff** — see "Open issues"
+   above; independent of each other, either can be picked up first.
+3. **Verify the Linux build** — every check this session hit the pre-existing
    `deps/ffmpeg/version` vs. C++ `<version>` collision on this Mac; needs a Linux-side
-   `make rplay-gui`. Covers all of this session's Linux changes: `+`/`-` wiring, Filter-to-bottom,
-   the inspector restructure (nested `toplevel`/`sublevel` tab bars), row styling.
-   ✅ Structurally done (design call made: text tabs for the top row too, no icon font available)
-   but **not build-verified** — reviewed by hand only.
-2. **Settings panel**: the device appearance/accessibility controls (needs engine methods to read/set
-   them — a new capability).
-3. **Sidebar Unavailable section**; remaining toolbar items: `+`, list icon, keyboard/grid pair,
+   `make rplay-gui`. Covers all of the FIRST 2026-08-28 session's Linux changes: `+`/`-` wiring,
+   Filter-to-bottom, the inspector restructure (nested `toplevel`/`sublevel` tab bars), row
+   styling. ✅ Structurally done (design call made: text tabs for the top row too, no icon font
+   available) but **not build-verified** — reviewed by hand only. The SECOND 2026-08-28 session's
+   canvas/inspector-width fixes above have not been ported to Linux at all yet.
+4. **Sidebar Unavailable section**; remaining toolbar items: `+`, list icon, keyboard/grid pair,
    `»` expander, device title repositioned left-aligned at the canvas start (not centered) — see
    the Toolbar section above for the exact catalogued order.
-4. Icon choices for Settings/Report/Info (currently `slider.horizontal.3`/`doc.text`/`info.circle`
-   SF Symbol guesses) — a designer will supply the real ones later; don't spend effort extracting
-   Device Hub's compiled `Assets.car` for this.
-5. **Click-active-tab-to-collapse** on Linux — Device Hub's Settings/Report/Info icons also toggle
+5. Icon choices for Settings/Report tab icons (currently `slider.horizontal.3`/`doc.text` SF Symbol
+   guesses — Info's `info.circle` and View Screen's `rectangle.stack.badge.person.crop` are now
+   confirmed matches, see above) — extracting Device Hub's `Assets.car` won't help (confirmed empty
+   of icon assets beyond the app icon); the method that worked for View Screen — crop the live
+   icon, compare against rendered candidates from the system SF Symbols name list — applies here
+   too, once Settings/Report are actually being built.
+6. **Click-active-tab-to-collapse** on Linux — Device Hub's Settings/Report/Info icons also toggle
    the whole inspector shut on a re-click (done on macOS, see above); ImGui's `BeginTabBar` doesn't
    naturally support that, so this needs a custom Selectable-based tab row instead if wanted.
-6. Row-shadow check on Linux — `ImGuiTableFlags_BordersInnerH` (Apps table) may or may not have
+7. Row-shadow check on Linux — `ImGuiTableFlags_BordersInnerH` (Apps table) may or may not have
    the same "fills empty space regardless of row count" behavior `gridStyleMask` had on macOS;
    worth a look once Linux building is possible again.
 
@@ -179,26 +295,29 @@ Paste this to start a fresh session focused on finishing the Device Hub clone:
 > git is the single source of truth — a Linux agent works the same tree, so `git pull` first, and
 > `commit`+`push` your changes; never rsync). Goal: make rPlayHub a pixel-faithful **Device Hub
 > clone** on macOS (`app/rPlayHub/`, Swift/AppKit) and Linux (`client-c/rplay-gui.cpp`, Dear ImGui).
-> **Read `doc/DEVICEHUB-UI-CLONE.md` first** — it has the exact target structure (validated against
-> the real Device Hub) and the priority order. Device Hub (Xcode 26) is on the user's shared
-> desktop: you can `screencapture -x` to see it and drive it with `osascript`/System Events to
-> examine each state (click its Settings/Report/ⓘ icons, the Info→Info/Apps/Profiles sub-tabs) —
-> match those precisely. Both apps build today: macOS via
-> `xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug
-> -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO build`, then run
-> `build/dd/Build/Products/Debug/rPlayHub.app` and screenshot to verify; the engine is already
-> running and the iPhone 13 live-mirrors. Linux `rplay-gui` builds on the Linux box (its Mac build
-> hits a `-I../deps/ffmpeg` vs C++ `<version>` collision — Linux/CI is clean).
+> **Read `doc/DEVICEHUB-UI-CLONE.md` first, in full** — it has the exact target structure (validated
+> against the real Device Hub), a detailed account of two sessions' worth of fixes and the specific
+> bugs behind them (worth reading even for finished items — the mechanisms recur), the currently
+> open/unresolved issues, and the priority order. Device Hub (Xcode 26) is on the user's shared
+> desktop: `screencapture -x` to see it and drive it with `osascript`/System Events to examine each
+> state precisely. Both apps build today: macOS via
+> `xcodebuild -project app/rPlayHub.xcodeproj -scheme rPlayHub -configuration Debug build`, then run
+> `~/Library/Developer/Xcode/DerivedData/rPlayHub-*/Build/Products/Debug/rPlayHub.app` and
+> screenshot to verify. Linux `rplay-gui` builds on the Linux box (its Mac build hits a
+> `-I../deps/ffmpeg` vs C++ `<version>` collision — Linux/CI is clean).
 >
-> Done already: macOS Edit+Device menus, the app-link regression fix (`usernet.h` `tun_*`
-> fallbacks), and the Apps Filter+category dropdown on both apps. First tasks, in order:
-> (1) **Engine API** for the `+`/`-` buttons — add `install_app`/`uninstall_app` and
-> `install_profile`/`remove_profile` to `host-c/api_server.c` (see `app/api/PROTOCOL.md`), then wire
-> the buttons on both front-ends. (2) **Inspector restructure** to Device Hub's two levels: a top
-> row of 3 icon tabs (Settings/Report/Info) and, under Info, text sub-tabs Info/Apps/Profiles —
-> fold our extra panels (Console, Files, Controls) in sensibly. (3) **Settings panel** (device
-> Appearance/Text Size/Reduce Motion/…): needs new engine methods to read/set them. (4) Canvas
-> **View Screen** button + static screenshot preview. (5) sidebar **Unavailable** section; toolbar
-> `+`/list/keyboard/grid/`»`. (6) app-type field in `list_apps` for the App Clips category.
+> Start with whichever of these three is actually unblocked when you pick this up (check with the
+> user — the first is blocked on something only they can do):
+> (1) **Settings and Report tabs** — blocked on the user running `host/capture-devicehub.sh` (needs
+> their sudo) while clicking into those two tabs specifically, or at minimum screenshotting their
+> content; nothing to build until then. (2) **"Open in New Window" frozen-frame bug**
+> (`ScreenWindow.swift` — see "Open issues" in the doc for where to start) and **`scheduleRetry`'s
+> unbounded 2-second reconnect loop** (`AppDelegate.swift` — needs backoff). (3) **Linux
+> build verification** — two sessions' worth of macOS-only changes (the inspector restructure, the
+> canvas/inspector-width fixes) have never been build-checked on `rplay-gui.cpp`; needs the Linux
+> agent or a Linux-side `make rplay-gui`.
+>
 > Build + screenshot after each change; keep both platforms building; push frequently so the Linux
-> agent stays in sync. The daemon needs sudo to (re)start — ask the user.
+> agent stays in sync. The daemon needs sudo to (re)start — ask the user, don't attempt it yourself.
+> It self-exits on tunnel death by design ("bug #7") and this happens often during active testing —
+> expect to ask for restarts repeatedly and budget for it, don't treat each one as a surprise.
