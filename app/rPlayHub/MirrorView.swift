@@ -112,7 +112,11 @@ final class MirrorView: NSView {
         viewScreenOS.textColor = .secondaryLabelColor
         viewScreenOS.alignment = .center
         viewScreenButton.title = "  View Screen"
-        viewScreenButton.image = NSImage(systemSymbolName: "rectangle.on.rectangle",
+        // Matches Device Hub's own icon, identified by cropping its live button and comparing
+        // against rendered SF Symbol candidates -- it is a stock symbol, not a bundled asset
+        // (confirmed via assetutil against DeviceHub.app's Assets.car, which has none besides the
+        // app icon itself).
+        viewScreenButton.image = NSImage(systemSymbolName: "rectangle.stack.badge.person.crop",
                                          accessibilityDescription: "View Screen")
         viewScreenButton.imagePosition = .imageLeading
         viewScreenButton.bezelStyle = .rounded
@@ -366,7 +370,11 @@ final class MirrorView: NSView {
         // than as a rectangle of video. Both are pure presentation -- the picture underneath is
         // untouched, and taps still map to the full screen including behind the cutout.
         clipLayer.cornerRadius = clipSize.width * DeviceModel.cornerFraction(for: productType)
-        clipLayer.borderWidth = max(1, clipSize.width * 0.03)
+        // Only the small pre-connect mockup has a drawn bezel outline, matching Device Hub's own
+        // placeholder graphic -- scaled the same way for the live picture, this became an
+        // 11-12pt black ring painted OVER the video (a CALayer border always draws above its
+        // sublayers' content), not anything the stream or decoder produced.
+        clipLayer.borderWidth = isGated ? max(1, clipSize.width * 0.03) : 0
         cutoutLayer.frame = clipLayer.bounds
         if let c = DeviceModel.cutoutRect(for: productType), clipSize.width > 0 {
             let w = clipSize.width * c.w
