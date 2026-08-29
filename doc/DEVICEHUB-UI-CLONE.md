@@ -218,26 +218,28 @@ screenshot over AX `size` for any element that might be word-wrapping.
 
 ## Open issues, found but not yet resolved (2026-08-28)
 
-- **"Open in New Window" (`ScreenWindow.swift`) frozen frames**: user reports the window opens
-  correctly (screen visible) but frames stop updating once detached. `ScreenWindow` reparents the
-  live `stage` view (with its one `AVSampleBufferDisplayLayer`) into a new `NSWindow` rather than
-  creating a second view, by design (see the file's own header comment) — investigation was
-  interrupted before reaching a diagnosis. Start here: reproduce with the daemon up, watch
-  `view.displayLayer.framesPresented` (already exposed, used by `refreshStillIfIdle`) before/after
-  detaching to confirm frames really stop arriving vs. just not repainting; check whether
-  `layout()`/`needsLayout` still fires for a view whose window changed, and whether `isGated` or
-  `displayLayer.isHidden` could be getting set incorrectly by the reparent triggering a spurious
-  layout pass. This session's `MirrorView.swift` changes (`displayLayer.isHidden = isGated`, the
-  moved `viewScreenStack` positioning) are recent enough to be worth ruling in or out specifically,
-  even though `ScreenWindow.swift` itself wasn't touched.
-- **`scheduleRetry` (`AppDelegate.swift`) has no backoff** — a bare `Timer.scheduledTimer(
-  withTimeInterval: 2.0, repeats: true)` that keeps calling `connect()` every 2 seconds forever
-  whenever the daemon is unreachable. Flagged, not fixed (user hadn't confirmed wanting it done
-  when this session ended). Worth doing: each retry that reaches the daemon makes it redo
-  device-binding/tunnel setup, and a tight retry loop hitting a struggling/restarting `cdhost`
-  plausibly contributes to the "tunnel died... exiting so the session does not go stale (bug #7)"
-  self-exits that made this session's live verification slow (dozens of manual sudo restarts).
-  Not proven causal, just a real design smell independent of whether it's the actual cause.
+- **"Open in New Window" (`ScreenWindow.swift`) frozen frames — fix implemented, needs live
+  verification (third 2026-08-28 session)**: the likely mechanism is that moving `MirrorView` to
+  a different window rebinds its layers to that window's presentation context, and
+  `AVSampleBufferDisplayLayer` keeps ACCEPTING frames across the move — enqueue succeeds,
+  `framesPresented` keeps counting, which is also why `refreshStillIfIdle` saw a "healthy" stream
+  and never rescued with a screenshot — while its internal renderer stays bound to the old
+  context and silently stops painting. `MirrorView.viewDidMoveToWindow` now calls
+  `displayLayer.flushAndRemoveImage()` (covers detach AND reattach) and logs the move. Could not
+  be reproduced/verified live — cdhost was down for the whole session — so this is a
+  best-supported-hypothesis fix, not a confirmed one: with the daemon up, click View Screen,
+  right-click → Open in New Window, and watch for both the log line and frames continuing.
+- ✅ **`scheduleRetry` backoff — done and verified (third 2026-08-28 session)**: one-shot timer
+  doubling 2s→60s per failed attempt, reset to 2s on any successful connect (USB, direct,
+  proxied) and on deliberate `reconnect()`; each scheduled retry now logs its reason + delay.
+  Verified against a dead daemon: log shows retries at exactly 2/4/8/16/32/60s, capped at 60.
+  Note for future log-chasing: a DerivedData-launched app can't find the repo root (no
+  `scripts/live.sh` above it), so `AppBuild.log` writes to `$(getconf DARWIN_USER_TEMP_DIR)/app.log`
+  instead of `logs/app.log` — an empty repo log does not mean no logging.
+- ✅ **Black-void canvas when the engine is unreachable — fixed (third 2026-08-28 session)**:
+  nothing called `updateViewScreenPrompt()` until `connect()` succeeded, so with cdhost down the
+  canvas stayed ungated and `displayLayer`'s opaque black filled the pane. The app now starts in
+  the gated state (blue mockup + "no device" + View Screen), screenshot-verified.
 - **Settings and Report tabs need a live capture, and none exists yet.** Checked every `.pcap` in
   the repo (`logs/`, `reference/captures/`, `build/`) — all of them (the two "devicehub" captures
   are byte-identical) cover only the View Screen media-stream session
@@ -262,15 +264,14 @@ screenshot over AX `size` for any element that might be word-wrapping.
 1. **Settings and Report tabs** — blocked on a live capture or screenshots of Device Hub's actual
    content for both (see "Open issues" above); nothing to build until then beyond the existing
    `ComingSoonPanel` stubs.
-2. **"Open in New Window" frozen-frame bug** and **`scheduleRetry` backoff** — see "Open issues"
-   above; independent of each other, either can be picked up first.
-3. **Verify the Linux build** — every check this session hit the pre-existing
-   `deps/ffmpeg/version` vs. C++ `<version>` collision on this Mac; needs a Linux-side
-   `make rplay-gui`. Covers all of the FIRST 2026-08-28 session's Linux changes: `+`/`-` wiring,
-   Filter-to-bottom, the inspector restructure (nested `toplevel`/`sublevel` tab bars), row
-   styling. ✅ Structurally done (design call made: text tabs for the top row too, no icon font
-   available) but **not build-verified** — reviewed by hand only. The SECOND 2026-08-28 session's
-   canvas/inspector-width fixes above have not been ported to Linux at all yet.
+2. **"Open in New Window" frozen-frame bug** — fix implemented (see "Open issues"), needs a live
+   check with the daemon up. `scheduleRetry` backoff ✅ done and verified.
+3. **Verify the Linux build** — ✅ done (third 2026-08-28 session): the Linux box (Ubuntu 22.04,
+   g++ 11.4, imgui v1.91.8, nlohmann/json v3.11.3) pulled ed50db4 and force-rebuilt `rplay-gui`,
+   `cdhost`, and `rplay-view` — zero errors, zero warnings; the hand-reviewed `rplay-gui.cpp`
+   changes were all valid as written. Build-verified only: the iPhone was unplugged on that box,
+   so the nested tab bars / Apps `+`/`-` wiring still need a live run there. The SECOND 2026-08-28
+   session's canvas/inspector-width fixes have not been ported to Linux at all yet.
 4. **Sidebar Unavailable section**; remaining toolbar items: `+`, list icon, keyboard/grid pair,
    `»` expander, device title repositioned left-aligned at the canvas start (not centered) — see
    the Toolbar section above for the exact catalogued order.
