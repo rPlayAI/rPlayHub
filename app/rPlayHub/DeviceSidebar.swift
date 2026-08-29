@@ -124,13 +124,25 @@ final class DeviceSidebar: NSView {
         table.delegate = self
         table.selectionHighlightStyle = .regular
 
+        // #FAFAFA, the same near-white as the inspector -- both of Device Hub's side panes are
+        // this colour and only the canvas between them is pure white. This view previously set no
+        // background at all, so it fell through to the window's vibrant sidebar material, which
+        // samples the desktop behind it: on a colourful wallpaper that read as a blue-grey tint
+        // that drifted with whatever was on screen, against Device Hub's flat panel.
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(srgbRed: 0xFA / 255, green: 0xFA / 255, blue: 0xFA / 255,
+                                         alpha: 1).cgColor
+        table.backgroundColor = .clear      // let the pane colour show through the rows
+
         scroll.documentView = table
-        // Autohide, and the list is sized to its rows (see listHeight), so in the normal case
-        // there is nothing to scroll and no scroller shows. Pinning the height to exactly
-        // rows*rowHeight left it a hair short of the content the table actually draws, which was
-        // enough to put a permanent scroller in a sidebar that had never had one.
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
+        // No scroller at all. The list is sized to its rows (see listHeight), so there is nothing
+        // to scroll in the normal case, and Device Hub's sidebar shows none.
+        //
+        // autohidesScrollers was not enough on its own: a legacy (always-visible) scroller kept
+        // being drawn as a grey band down the pane's right edge even with the content fitting.
+        // A trackpad or wheel still scrolls if the pane is ever too short for the list.
+        scroll.hasVerticalScroller = false
+        scroll.scrollerStyle = .overlay
         scroll.drawsBackground = false
 
         search.placeholderString = "Search"
@@ -178,9 +190,12 @@ final class DeviceSidebar: NSView {
 
     /// Match the list's height to its rows so the Unavailable header sits under the last one.
     private func resizeList() {
-        // +2 for the table's inter-row padding: an exact rows*rowHeight was fractionally under
-        // what the table draws, so the scroll view thought it had overflow and showed a scroller.
-        listHeight?.constant = rows.isEmpty ? 0 : CGFloat(rows.count) * table.rowHeight + 2
+        // A little MORE than the rows strictly need. Sizing it to exactly rows*rowHeight left the
+        // scroll view a hair short of what the table draws, so a sidebar that never had a
+        // scroller got a permanent one; +8 clears the table's inter-row padding and its bottom
+        // inset with room to spare, and costs nothing because the pane is taller than the list
+        // in every case that matters.
+        listHeight?.constant = rows.isEmpty ? 0 : CGFloat(rows.count) * table.rowHeight + 8
     }
 
     private func buildContextMenu() {
