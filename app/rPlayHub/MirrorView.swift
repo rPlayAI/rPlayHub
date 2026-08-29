@@ -46,6 +46,12 @@ final class MirrorView: NSView {
     /// status bar sits in a black band that reads as a video artifact rather than as a phone.
     private let cutoutLayer = CAShapeLayer()
 
+    /// Device Hub's empty-screen fill: a vertical gradient, not a flat colour. Sampled straight
+    /// off its live window -- (60,143,207) at the top easing to (89,172,237) at the bottom, so it
+    /// reads as a screen catching light rather than as a blue rectangle. A flat `systemBlue`
+    /// (0,122,255) was far more saturated and was the most visible difference left in the mockup.
+    private let placeholderLayer = CAGradientLayer()
+
     /// A screenshot shown in place of video while none is flowing -- what Device Hub's device
     /// pane shows before View Screen, and all it can show for a device that cannot mirror
     /// (iOS < 27). Sits above the video layer and is hidden the moment a frame arrives.
@@ -223,10 +229,15 @@ final class MirrorView: NSView {
         layer?.masksToBounds = true
 
         clipLayer.masksToBounds = true
-        // Device Hub's own placeholder, before any real screenshot exists: a plain blue
-        // rectangle inside the phone bezel, not a wallpaper mockup. Only visible while neither
+        // Device Hub's own placeholder, before any real screenshot exists: a blue-gradient
+        // screen inside the phone bezel, not a wallpaper mockup. Only visible while neither
         // stillLayer nor displayLayer has content -- both fully cover this the moment either does.
-        clipLayer.backgroundColor = NSColor.systemBlue.cgColor
+        placeholderLayer.colors = [
+            NSColor(srgbRed: 60 / 255.0, green: 143 / 255.0, blue: 207 / 255.0, alpha: 1).cgColor,
+            NSColor(srgbRed: 89 / 255.0, green: 172 / 255.0, blue: 237 / 255.0, alpha: 1).cgColor,
+        ]
+        placeholderLayer.startPoint = CGPoint(x: 0.5, y: 0)
+        placeholderLayer.endPoint = CGPoint(x: 0.5, y: 1)
         // The bezel outline -- without it the phone reads as a plain rounded rectangle rather
         // than a device. Width is set proportionally in layout(), since it must scale with the
         // mockup's own (much smaller, fixed) size before View Screen.
@@ -252,6 +263,9 @@ final class MirrorView: NSView {
         // a Metal layer, or scaling in the decoder's pixel transfer. Not a one-line layer property.
         // No timebase and no scheduling. The layer simply shows the newest decoded picture; the
         // decoder, not the layer, decides what gets decoded, and it decodes everything.
+        // First, so it sits UNDER the video and the still: both cover it completely the moment
+        // either has content, which is exactly the "only while empty" behaviour wanted.
+        clipLayer.addSublayer(placeholderLayer)
         clipLayer.addSublayer(displayLayer)
         stillLayer.contentsGravity = .resize       // the screenshot IS the screen, edge to edge
         stillLayer.isHidden = true
@@ -363,6 +377,12 @@ final class MirrorView: NSView {
         let screen = screenRect()
         clipLayer.frame = screen
         stillLayer.frame = clipLayer.bounds
+        // No implicit animation: this resizes with the pane, and letting Core Animation
+        // interpolate the gradient makes the placeholder visibly lag the bezel around it.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        placeholderLayer.frame = clipLayer.bounds
+        CATransaction.commit()
         // displayLayer sits above clipLayer's blue placeholder fill and is opaque black by
         // default (see setUpLayers) -- with no video content that painted over the placeholder
         // solid black instead of letting the blue mockup show through, even once it was sized
@@ -387,13 +407,23 @@ final class MirrorView: NSView {
         // Round the screen corners and mask the cutout, so the mirror reads as a phone rather
         // than as a rectangle of video. Both are pure presentation -- the picture underneath is
         // untouched, and taps still map to the full screen including behind the cutout.
-        clipLayer.cornerRadius = clipSize.width * DeviceModel.cornerFraction(for: productType)
+        // While gated with no device known, stand in an iPhone 13 Pro so the mockup reads as a
+        // phone. `cutout(for: nil)` is `.none`, which zeroes the corner radius and drops the
+        // notch, and that drew a bare sharp-cornered rectangle where Device Hub always shows a
+        // proper device. Applied ONLY to the placeholder: `.none` is genuinely right for a real
+        // SE, and using it as a fallback for live video would round corners off a device that
+        // has none and mask pixels it actually displays.
+        let shape = productType ?? (isGated ? "iPhone14,2" : nil)
+        clipLayer.cornerRadius = clipSize.width * DeviceModel.cornerFraction(for: shape)
         // Applied in both states -- a real device has a visible bezel edge around its screen
         // too, and side-by-side against Device Hub's own live view this reads closer to it than
         // no border did.
-        clipLayer.borderWidth = max(1, clipSize.width * 0.03)
+        // 4.7% of the body's width, measured off Device Hub by scanning a pixel row across its
+        // mockup: a 96px body with a 85px screen, so ~4.5px of bezel each side. The old 0.03 gave
+        // barely half that and read as a thin outline rather than a device edge.
+        clipLayer.borderWidth = max(1, clipSize.width * 0.047)
         cutoutLayer.frame = clipLayer.bounds
-        if let c = DeviceModel.cutoutRect(for: productType), clipSize.width > 0 {
+        if let c = DeviceModel.cutoutRect(for: shape), clipSize.width > 0 {
             let w = clipSize.width * c.w
             let h = clipSize.height * c.h
             let top = clipSize.height * c.top

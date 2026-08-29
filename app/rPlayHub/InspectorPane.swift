@@ -75,10 +75,15 @@ final class InspectorPane: NSView {
     }
 
     private func build() {
-        // The device list's own background (sampled off the live Device Hub window, #E4E4E4) --
-        // only the canvas in the middle is white; both side panes match each other.
+        // #FAFAFA, re-sampled off three separate Device Hub captures, which all agree. Only the
+        // canvas in the middle is pure white; both side panes are this near-white.
+        //
+        // An earlier pass recorded #E4E4E4 here as "sampled off the live window" and it was
+        // simply wrong -- far too dark, and wrong in the other direction too: Device Hub's lists
+        // and grouped rows are #F3F3F2, a touch DARKER than the pane they sit on, where ours had
+        // them lighter than it. Measured, not adjusted by eye.
         wantsLayer = true
-        layer?.backgroundColor = NSColor(srgbRed: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255,
+        layer?.backgroundColor = NSColor(srgbRed: 0xFA / 255, green: 0xFA / 255, blue: 0xFA / 255,
                                          alpha: 1).cgColor
 
         let icons = [("slider.horizontal.3", "Settings"), ("doc.text", "Report"), ("info.circle", "Info")]

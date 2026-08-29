@@ -71,8 +71,8 @@ final class FilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.usesAlternatingRowBackgroundColors = false
         table.style = .plain
         // Same background as the sidebar's device list and Device Hub's own lists -- sampled
-        // directly off the live Device Hub window (#E4E4E4), not white.
-        let rowBackground = NSColor(srgbRed: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255, alpha: 1)
+        // directly off the live Device Hub window (#F3F3F2) -- a touch DARKER than the pane behind it, not white.
+        let rowBackground = NSColor(srgbRed: 0xF3 / 255, green: 0xF3 / 255, blue: 0xF2 / 255, alpha: 1)
         table.backgroundColor = rowBackground
 
         let scroll = NSScrollView()

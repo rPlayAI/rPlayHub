@@ -314,16 +314,30 @@ int imd_conn_send(void *conn, const void *buf, size_t n)
 
 int imd_conn_recv(void *conn, void *buf, size_t n)
 {
-    /* Block until exactly n bytes arrive, like the raw-socket recv the pump used to use.
-     * idevice_connection_receive_timeout returns SUCCESS with 0 bytes on a timeout (a quiet
-     * tunnel between packets is normal), so a 0-byte read is NOT end-of-stream -- keep waiting.
-     * Only a non-success error (connection dropped) ends it. Treating a timeout as fatal killed
-     * the packet pump the moment the tunnel went quiet after the startup RSD burst. */
+    /* Block until exactly n bytes arrive, like the raw-socket recv the pump used to use. A quiet
+     * tunnel between packets is normal and must NOT end the stream.
+     *
+     * This used to assume a timeout came back as SUCCESS with 0 bytes, and treat every non-success
+     * as the connection dropping. That assumption was wrong: IDEVICE_E_TIMEOUT (-7) is a distinct
+     * code, and on this connection -- CoreDeviceProxy, which is SSL -- that is what a quiet window
+     * actually returns. So every 30 seconds of silence killed the packet pump, and the daemon exited
+     * via pump_die reporting "tunnel read ended (errno 0: none)". errno 0 was the tell: no syscall
+     * had failed, because the failure was a library timeout rather than a socket error.
+     *
+     * Timeouts therefore just go round again, including mid-packet (the remaining bytes are still
+     * coming). Any other error still ends it, and the code is returned rather than a bare -1 so the
+     * caller can say which one.
+     *
+     * The tradeoff, deliberately taken: if a dead connection were to report TIMEOUT forever rather
+     * than an error, the pump would wait instead of exiting -- the stale session bug #7 guards
+     * against. An idle daemon the user can restart beats one that quits every 30 seconds, and a
+     * genuinely dropped connection reports a real error, not a timeout. */
     size_t off = 0;
     while (off < n) {
         uint32_t got = 0;
         idevice_error_t e = idevice_connection_receive_timeout((idevice_connection_t)conn, (char *)buf + off, (uint32_t)(n - off), &got, 30000);
-        if (e != IDEVICE_E_SUCCESS) return -1;
+        if (e == IDEVICE_E_TIMEOUT) continue;
+        if (e != IDEVICE_E_SUCCESS) return (int)e;
         off += got;
     }
     return 0;

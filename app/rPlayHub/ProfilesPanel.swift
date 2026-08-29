@@ -69,8 +69,8 @@ final class ProfilesPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         // showed as leftover "row shadows" when a list was empty.
         table.usesAlternatingRowBackgroundColors = false
         // Same background as the sidebar's device list and Device Hub's own lists -- sampled
-        // directly off the live Device Hub window (#E4E4E4), not white.
-        let rowBackground = NSColor(srgbRed: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255, alpha: 1)
+        // directly off the live Device Hub window (#F3F3F2) -- a touch DARKER than the pane behind it, not white.
+        let rowBackground = NSColor(srgbRed: 0xF3 / 255, green: 0xF3 / 255, blue: 0xF2 / 255, alpha: 1)
         table.backgroundColor = rowBackground
         // The thin grey line between rows Device Hub's list has.
 

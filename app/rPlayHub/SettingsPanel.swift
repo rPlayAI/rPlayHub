@@ -255,7 +255,11 @@ private final class GroupBox: NSView {
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.65).cgColor
+        // #F3F3F2 -- sampled off Device Hub's own grouped rows. Slightly DARKER than the pane
+        // behind it (#FAFAFA), which is the iOS-settings look; a lighter-than-the-pane box read
+        // as a floating card instead of a grouped list.
+        layer?.backgroundColor = NSColor(srgbRed: 0xF3 / 255, green: 0xF3 / 255,
+                                         blue: 0xF2 / 255, alpha: 1).cgColor
         layer?.cornerRadius = 8
         rows.orientation = .vertical
         rows.alignment = .leading
