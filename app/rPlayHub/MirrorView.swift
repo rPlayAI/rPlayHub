@@ -111,10 +111,13 @@ final class MirrorView: NSView {
     }
 
     private func buildViewScreenPrompt() {
-        viewScreenName.font = .systemFont(ofSize: 13, weight: .semibold)
+        // 15/12, sized against Device Hub's own block rather than guessed: its device name has an
+        // ~11px cap height, which is a 15pt bold face, over an ~12pt OS line. 13/11 read notably
+        // smaller side by side.
+        viewScreenName.font = .systemFont(ofSize: 15, weight: .bold)
         viewScreenName.alignment = .center
         viewScreenName.textColor = .labelColor
-        viewScreenOS.font = .systemFont(ofSize: 11)
+        viewScreenOS.font = .systemFont(ofSize: 12)
         viewScreenOS.textColor = .secondaryLabelColor
         viewScreenOS.alignment = .center
         viewScreenButton.title = "  View Screen"
@@ -129,6 +132,11 @@ final class MirrorView: NSView {
                                          accessibilityDescription: "View Screen")
         viewScreenButton.imagePosition = .imageLeading
         viewScreenButton.bezelStyle = .rounded
+        // Device Hub's button is a mid-grey capsule, #DCDCDC sampled off its own — not the near
+        // white a stock push button paints. bezelColor is what actually tints a .rounded button;
+        // setting the layer's background instead draws underneath the bezel and does nothing.
+        viewScreenButton.bezelColor = NSColor(srgbRed: 0xDC / 255, green: 0xDC / 255,
+                                              blue: 0xDC / 255, alpha: 1)
         viewScreenButton.target = self
         viewScreenButton.action = #selector(viewScreenClicked)
 
@@ -322,9 +330,12 @@ final class MirrorView: NSView {
             // 94/923 -- Device Hub's WINDOW width, not this view's own (canvas-only) bounds. That
             // silently halved the mockup every time, since `bounds` here has always been the
             // canvas alone.
-            // 0.247 = 96pt of mockup in Device Hub's own 389pt canvas, both measured off its
-            // window. The earlier 0.24 came out ~7% narrow against it.
-            let targetWidth = min(120, max(60, bounds.width * 0.247))
+            // 96pt, measured off Device Hub's own mockup — a FIXED size, not a fraction of the
+            // canvas. A ratio (0.247 = 96/389, its canvas width) only matches while our canvas is
+            // exactly as wide as its, and ours is routinely narrower: the window restores a saved
+            // frame that overrides the 389pt resting width, so the ratio kept rendering the phone
+            // ~5pt short. Shrinks only if the canvas gets too narrow to hold it.
+            let targetWidth = min(bounds.width * 0.6, 95)
             let scale = targetWidth / content.width
             let w = content.width * scale
             let h = content.height * scale
@@ -420,10 +431,10 @@ final class MirrorView: NSView {
         // Applied in both states -- a real device has a visible bezel edge around its screen
         // too, and side-by-side against Device Hub's own live view this reads closer to it than
         // no border did.
-        // 4.7% of the body's width, measured off Device Hub by scanning a pixel row across its
-        // mockup: a 96px body with a 85px screen, so ~4.5px of bezel each side. The old 0.03 gave
-        // barely half that and read as a thin outline rather than a device edge.
-        clipLayer.borderWidth = max(1, clipSize.width * 0.047)
+        // 5.26% of the body's width: Device Hub's mockup measures 95pt across with an 85pt blue
+        // screen inside it, so exactly 5pt of bezel each side (5/95). Measured off its window --
+        // an earlier 0.03 gave half this and read as a thin outline rather than a device edge.
+        clipLayer.borderWidth = max(1, clipSize.width * 0.0526)
         cutoutLayer.frame = clipLayer.bounds
         if let c = DeviceModel.cutoutRect(for: shape), clipSize.width > 0 {
             let w = clipSize.width * c.w

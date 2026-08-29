@@ -63,24 +63,32 @@ final class SettingsPanel: NSView {
         ])
 
         // Group one: appearance and accessibility, in Device Hub's own order.
+        //
+        // The icons were originally my own plausible-looking guesses and several were wrong.
+        // These are identified against Device Hub's: each row's glyph cropped out of its live
+        // window at 5x and compared with rendered SF Symbol candidates -- the same method that
+        // settled the View Screen icon. Confirmed unchanged: Appearance, Text Size, Increase
+        // Contrast, Location. Corrected: Liquid Glass, Reduce Motion (a dotted circle overlapping
+        // a solid one, which is a symbol in its own right), Show Borders (a dashed square BEHIND
+        // a solid one), VoiceOver (the dedicated `voiceover` symbol, not a speaker).
         let main = GroupBox()
         main.addRow(icon: "circle.lefthalf.filled", title: "Appearance",
                     control: popup(.appearance, ["Light", "Dark"]))
-        main.addRow(icon: "square.on.square.intersection.dashed", title: "Liquid Glass",
+        main.addRow(icon: "square.on.square", title: "Liquid Glass",
                     control: slider(.liquidGlass, min: 0, max: 1))
         main.addRow(icon: "camera.filters", title: "Color Filter",
                     control: popup(.colorFilter, ["None", "On"]))
         main.addRow(icon: "textformat.size", title: "Text Size",
                     control: slider(.textSize, min: 0, max: Double(Self.textSizes.count - 1)))
-        main.addRow(icon: "figure.walk.motion", title: "Reduce Motion",
+        main.addRow(icon: "circle.dotted.and.circle", title: "Reduce Motion",
                     control: toggle(.reduceMotion))
         main.addRow(icon: "circle.righthalf.filled", title: "Increase Contrast",
                     control: toggle(.increaseContrast))
-        main.addRow(icon: "rectangle.dashed", title: "Show Borders",
+        main.addRow(icon: "square.on.square.dashed", title: "Show Borders",
                     control: toggle(.showBorders))
-        main.addRow(icon: "square.on.square", title: "Reduce Transparency",
+        main.addRow(icon: "square.on.square.squareshape.controlhandles", title: "Reduce Transparency",
                     control: toggle(.reduceTransparency))
-        main.addRow(icon: "speaker.wave.2.circle", title: "VoiceOver",
+        main.addRow(icon: "voiceover", title: "VoiceOver",
                     control: toggle(.voiceOver))
         stack.addArrangedSubview(main)
         main.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
