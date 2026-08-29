@@ -125,7 +125,12 @@ final class DeviceSidebar: NSView {
         table.selectionHighlightStyle = .regular
 
         scroll.documentView = table
+        // Autohide, and the list is sized to its rows (see listHeight), so in the normal case
+        // there is nothing to scroll and no scroller shows. Pinning the height to exactly
+        // rows*rowHeight left it a hair short of the content the table actually draws, which was
+        // enough to put a permanent scroller in a sidebar that had never had one.
         scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
         scroll.drawsBackground = false
 
         search.placeholderString = "Search"
@@ -173,7 +178,9 @@ final class DeviceSidebar: NSView {
 
     /// Match the list's height to its rows so the Unavailable header sits under the last one.
     private func resizeList() {
-        listHeight?.constant = CGFloat(rows.count) * table.rowHeight
+        // +2 for the table's inter-row padding: an exact rows*rowHeight was fractionally under
+        // what the table draws, so the scroll view thought it had overflow and showed a scroller.
+        listHeight?.constant = rows.isEmpty ? 0 : CGFloat(rows.count) * table.rowHeight + 2
     }
 
     private func buildContextMenu() {

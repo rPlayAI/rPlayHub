@@ -86,13 +86,14 @@ final class MirrorView: NSView {
     /// itself only known there.
     private let viewScreenName = NSTextField(labelWithString: "")
     private let viewScreenOS = NSTextField(labelWithString: "")
-    private let viewScreenButton = NSButton()
+    private let viewScreenButton = HoverButton()
     /// What showViewScreenPrompt/hideViewScreenPrompt actually show and hide.
     private var viewScreenStack: NSStackView!
 
     /// True while the picture is the small pre-connect mockup rather than the full-bleed
     /// screen/video -- `screenRect()` and `layout()` both key off this.
     private var isGated = false { didSet { needsLayout = true } }
+    private var panelTracking: NSTrackingArea?
 
     /// Called when the View Screen button is clicked. AppDelegate starts the video pipeline.
     var onViewScreen: (() -> Void)?
@@ -102,11 +103,13 @@ final class MirrorView: NSView {
         viewScreenOS.stringValue = os
         viewScreenOS.isHidden = os.isEmpty
         viewScreenStack.isHidden = false
+        viewScreenButton.isHidden = false
         isGated = true
     }
 
     func hideViewScreenPrompt() {
         viewScreenStack.isHidden = true
+        viewScreenButton.isHidden = true
         isGated = false
     }
 
@@ -121,6 +124,7 @@ final class MirrorView: NSView {
         viewScreenOS.textColor = .secondaryLabelColor
         viewScreenOS.alignment = .center
         viewScreenButton.title = "  View Screen"
+        viewScreenButton.translatesAutoresizingMaskIntoConstraints = true
         // Matches Device Hub's own icon: the stock "screen sharing" symbol (an inset-filled
         // rectangle with a filled person at its bottom-right), identified by cropping the button
         // out of a Device Hub window capture and comparing against rendered SF Symbol candidates
@@ -131,22 +135,27 @@ final class MirrorView: NSView {
         viewScreenButton.image = NSImage(systemSymbolName: "rectangle.inset.filled.and.person.filled",
                                          accessibilityDescription: "View Screen")
         viewScreenButton.imagePosition = .imageLeading
-        viewScreenButton.bezelStyle = .rounded
-        // Device Hub's button is a mid-grey capsule, #DCDCDC sampled off its own — not the near
-        // white a stock push button paints. bezelColor is what actually tints a .rounded button;
-        // setting the layer's background instead draws underneath the bezel and does nothing.
-        viewScreenButton.bezelColor = NSColor(srgbRed: 0xDC / 255, green: 0xDC / 255,
-                                              blue: 0xDC / 255, alpha: 1)
+        // Colour, shape and hover behaviour all live in HoverButton (below) -- it draws its own
+        // capsule, because a bezelled button would not take the colour.
+        viewScreenButton.title = "  View Screen"
+        viewScreenButton.translatesAutoresizingMaskIntoConstraints = true
         viewScreenButton.target = self
         viewScreenButton.action = #selector(viewScreenClicked)
 
-        let stack = NSStackView(views: [viewScreenName, viewScreenOS, viewScreenButton])
+        // The button is NOT in the stack. It has to be exactly 127x29 (Device Hub's own size) and
+        // an NSStackView sizes arranged subviews to their fitting size -- it dropped a width
+        // constraint, ignored an intrinsicContentSize override, and moved by about a point per
+        // padding space. Positioned by hand in layout() instead, like the phone mockup above it,
+        // where the frame is simply set and nothing overrides it.
+        addSubview(viewScreenButton)
+        let stack = NSStackView(views: [viewScreenName, viewScreenOS])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 6
         // Frame-based, like the phone mockup it sits under -- `layout()` places both by hand.
         stack.translatesAutoresizingMaskIntoConstraints = true
         stack.isHidden = true
+        viewScreenButton.isHidden = true
         addSubview(stack)
         viewScreenStack = stack
     }
@@ -370,6 +379,22 @@ final class MirrorView: NSView {
         return CGPoint(x: min(max(fx, 0), 1), y: min(max(fy, 0), 1))
     }
 
+    /// Device Hub lights the View Screen button while the pointer is anywhere in this panel, so
+    /// the tracking area covers the whole view rather than the button. `.inVisibleRect` keeps it
+    /// correct as the pane resizes, without recomputing a rect on every layout pass.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let panelTracking { removeTrackingArea(panelTracking) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        panelTracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { viewScreenButton.isLit = true }
+    override func mouseExited(with event: NSEvent) { viewScreenButton.isLit = false }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
@@ -480,6 +505,11 @@ final class MirrorView: NSView {
             viewScreenStack.frame = CGRect(
                 x: (bounds.width - fit.width) / 2, y: screen.maxY + 16,
                 width: fit.width, height: fit.height)
+            // 127x29 exactly, centred under the name/OS block.
+            let size = CGSize(width: 127, height: 29)
+            viewScreenButton.frame = CGRect(x: (bounds.width - size.width) / 2,
+                                            y: viewScreenStack.frame.maxY + 10,
+                                            width: size.width, height: size.height)
         }
 
         let fraction = visibleFraction
@@ -545,5 +575,86 @@ final class MirrorView: NSView {
                           fx1: Double(end.x), fy1: Double(end.y),
                           durationMS: min(elapsedMS, 2000))
         }
+    }
+}
+
+/// Device Hub's View Screen button: a #DCDCDC grey capsule that turns solid #6155F5 indigo with
+/// white text and icon.
+///
+/// What triggers it is the part worth recording, because two plausible guesses were both wrong.
+/// It is NOT hovering the button, and NOT window focus on its own: it lights while the pointer is
+/// anywhere inside the MIDDLE PANEL (the device pane), and goes grey when the pointer leaves it.
+/// Established by driving the real app -- pointer parked in the canvas well away from the button,
+/// window focused, and the button was indigo; same window focused with the pointer outside the
+/// canvas, and it was grey. So the tracking area belongs to MirrorView, not to this button, and
+/// this just renders whatever state it is handed.
+///
+/// #6155F5 is Device Hub's own tint, not the system accent: this machine's AppleAccentColor is
+/// unset, so `controlAccentColor` is the default blue and would be visibly the wrong colour.
+///
+/// Drawn rather than bezelled. `bezelColor` is documented as tinting a bezelled button but does
+/// not take on a `.rounded` button here -- measured: it kept rendering AppKit's default
+/// (228,228,228) face whatever it was set to. A borderless button with its own layer background
+/// is the only way to get both the exact colour and the capsule shape.
+final class HoverButton: NSButton {
+    /// Set by the owning view as the pointer enters and leaves the panel.
+    var isLit = false { didSet { if isLit != oldValue { apply() } } }
+    private var observers: [NSObjectProtocol] = []
+
+    static let resting = NSColor(srgbRed: 0xDC / 255, green: 0xDC / 255, blue: 0xDC / 255, alpha: 1)
+    static let active = NSColor(srgbRed: 97 / 255.0, green: 85 / 255.0, blue: 245 / 255.0, alpha: 1)
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        isBordered = false
+        wantsLayer = true
+    }
+
+    /// 127x29, measured off Device Hub's own button.
+    ///
+    /// Reported as the intrinsic size rather than set with constraints: this button lives in a
+    /// frame-based NSStackView (MirrorView positions the block by hand), which dropped a width
+    /// constraint on an arranged subview outright, and padding the title moved the width by about
+    /// a point per space -- neither could land on a specific number. The stack does honour
+    /// intrinsic content size.
+    override var intrinsicContentSize: NSSize { NSSize(width: 127, height: 29) }
+
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = bounds.height / 2        // capsule, as Device Hub's is
+        apply()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+        observers.removeAll()
+        guard let window else { return }
+        // Losing focus must drop the highlight even if the pointer never moved.
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            observers.append(NotificationCenter.default.addObserver(
+                forName: name, object: window, queue: .main) { [weak self] _ in self?.apply() })
+        }
+        apply()
+    }
+
+    deinit {
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+    }
+
+    private func apply() {
+        let lit = isLit && (window?.isKeyWindow ?? false)
+        layer?.backgroundColor = (lit ? Self.active : Self.resting).cgColor
+        contentTintColor = lit ? .white : .labelColor      // tints the SF Symbol
+        attributedTitle = NSAttributedString(string: title, attributes: [
+            .foregroundColor: lit ? NSColor.white : NSColor.labelColor,
+            .font: font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize),
+        ])
     }
 }
