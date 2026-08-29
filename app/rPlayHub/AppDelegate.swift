@@ -71,6 +71,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         enableEngineIfEmbedded()
         buildMenu()
         buildWindow()
+        // Start in the gated state. The prompt otherwise only appears once connect() succeeds,
+        // so an unreachable engine left the canvas as displayLayer's opaque black over the whole
+        // pane -- a black void where Device Hub shows its empty device pane. connect() replaces
+        // this with the real device name the moment it gets one.
+        updateViewScreenPrompt()
         connect()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.updateStatus()
