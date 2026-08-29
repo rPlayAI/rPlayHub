@@ -233,7 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        split = NSSplitView(frame: NSRect(x: 0, y: 0, width: 250 + rect.width + 260,
+        split = PaneSplitView(frame: NSRect(x: 0, y: 0, width: 250 + rect.width + 260,
                                               height: rect.height))
         split.isVertical = true
         split.dividerStyle = .thin
@@ -302,6 +302,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pane.widthAnchor.constraint(greaterThanOrEqualToConstant: width - 60).isActive = true
         }
 
+        // The card shadow that separates the columns, in place of a divider line. Cast outward
+        // from each side pane into the canvas, matching the direction Device Hub's falls.
+        for (pane, dx) in [(sidebar as NSView, CGFloat(2)), (inspector as NSView, CGFloat(-2))] {
+            pane.wantsLayer = true
+            pane.layer?.masksToBounds = false
+            pane.shadow = NSShadow()
+            pane.layer?.shadowColor = NSColor.black.cgColor
+            // Tuned against Device Hub's own ramp: its shadow bottoms out around 244 and
+            // fades over ~20pt. 0.10/6 came out darker (239) and narrower (13pt).
+            pane.layer?.shadowOpacity = 0.07
+            pane.layer?.shadowRadius = 9
+            pane.layer?.shadowOffset = CGSize(width: dx, height: 0)
+        }
+
         window.contentView = split
         window.setContentSize(NSSize(width: 250 + 389 + 320, height: 844))
         buildToolbar()
@@ -317,12 +331,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let toolbar = NSToolbar(identifier: "main")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
+        // Device Hub has no hairline under its toolbar -- measured, its rows ramp smoothly from
+        // 246 to 252 where ours drew a flat (230,230,230) line the full width of the window.
+        // titlebarSeparatorStyle alone did not remove it; the toolbar's own baseline separator
+        // has to go too.
+        toolbar.showsBaselineSeparator = false
+        window.titlebarAppearsTransparent = true
         window.toolbar = toolbar
         window.toolbarStyle = .unified
         // Device Hub shows no centred window title -- the device name is a two-line block in the
         // toolbar itself, left-aligned at the canvas. Leaving the standard title visible put a
         // second, centred copy of roughly the same text in the same row.
         window.titleVisibility = .hidden
+        // No hairline under the toolbar either -- Device Hub has none, and the default `.automatic`
+        // draws one as soon as content scrolls beneath it.
+        window.titlebarSeparatorStyle = .none
     }
 
     @objc private func toggleSidebar() {
@@ -1390,6 +1413,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+
+/// The split view Device Hub appears to use: no hairline between the columns.
+///
+/// Measured across the sidebar boundary in both windows, Device Hub has NO 1px divider. What
+/// separates its columns is a soft shadow -- the pane reads as a raised card: 250 on the sidebar,
+/// a 255 highlight at its edge, then 244 dropping into the canvas and ramping back to 253 over
+/// about twenty points. Ours drew a flat (230,230,230) hairline instead, which is why the
+/// separators looked wrong however the panes themselves were coloured.
+final class PaneSplitView: NSSplitView {
+    override var dividerColor: NSColor { .clear }
+}
 
 // MARK: - toolbar
 
