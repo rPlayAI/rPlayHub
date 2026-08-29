@@ -30,6 +30,7 @@ final class SettingsPanel: NSView {
     private var switches: [Key: NSSwitch] = [:]
     private var popups: [Key: NSPopUpButton] = [:]
     private var sliders: [Key: NSSlider] = [:]
+    private let locationPopup = NSPopUpButton()
     private let status = NSTextField(labelWithString: "")
     private let stack = NSStackView()
 
@@ -84,13 +85,16 @@ final class SettingsPanel: NSView {
         stack.addArrangedSubview(main)
         main.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
 
-        // Location sits in its own group in Device Hub, and is not wired here yet: it needs a
-        // coordinate picker, and setsimulatedlocation takes a lat/long pair rather than a switch.
+        // Location sits in its own group in Device Hub, with a dropdown rather than a switch.
+        // The scenario list comes from the device (`availablelocationscenarios`); until that is
+        // wired the menu carries just None, which is what an unsimulated device reports anyway.
+        // Choosing None sends `clearsimulatedlocation`; a real scenario needs `setlocationscenario`
+        // or a lat/long pair, so the other entries are not offered yet rather than offered broken.
         let locationGroup = GroupBox()
-        let placeholder = NSTextField(labelWithString: "None")
-        placeholder.textColor = .secondaryLabelColor
-        placeholder.font = .systemFont(ofSize: 12)
-        locationGroup.addRow(icon: "location.circle", title: "Location", control: placeholder)
+        locationPopup.addItems(withTitles: ["None"])
+        locationPopup.bezelStyle = .accessoryBarAction
+        locationPopup.controlSize = .small
+        locationGroup.addRow(icon: "location.circle", title: "Location", control: locationPopup)
         stack.addArrangedSubview(locationGroup)
         locationGroup.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
 
@@ -106,6 +110,9 @@ final class SettingsPanel: NSView {
 
     private func toggle(_ key: Key) -> NSSwitch {
         let s = NSSwitch()
+        // Device Hub's switches measure 36x18pt; an unmodified NSSwitch is 54x21, half again as
+        // wide, and stood out badly next to the rest of the row. .mini is the closest stock size.
+        s.controlSize = .mini
         s.target = self
         s.action = #selector(switchChanged(_:))
         s.identifier = NSUserInterfaceItemIdentifier(key.rawValue)
@@ -117,6 +124,7 @@ final class SettingsPanel: NSView {
         let p = NSPopUpButton()
         p.addItems(withTitles: titles)
         p.bezelStyle = .accessoryBarAction
+        p.controlSize = .small
         p.target = self
         p.action = #selector(popupChanged(_:))
         p.identifier = NSUserInterfaceItemIdentifier(key.rawValue)

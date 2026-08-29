@@ -322,7 +322,9 @@ final class MirrorView: NSView {
             // 94/923 -- Device Hub's WINDOW width, not this view's own (canvas-only) bounds. That
             // silently halved the mockup every time, since `bounds` here has always been the
             // canvas alone.
-            let targetWidth = min(120, max(60, bounds.width * 0.24))
+            // 0.247 = 96pt of mockup in Device Hub's own 389pt canvas, both measured off its
+            // window. The earlier 0.24 came out ~7% narrow against it.
+            let targetWidth = min(120, max(60, bounds.width * 0.247))
             let scale = targetWidth / content.width
             let w = content.width * scale
             let h = content.height * scale
@@ -425,7 +427,16 @@ final class MirrorView: NSView {
         cutoutLayer.frame = clipLayer.bounds
         if let c = DeviceModel.cutoutRect(for: shape), clipSize.width > 0 {
             let w = clipSize.width * c.w
-            let h = clipSize.height * c.h
+            // While gated, the notch is drawn to Device Hub's own depth rather than Apple's
+            // framebuffer mask: 0.125 of the body's width, measured off its mockup (12px of dark
+            // at the centre column on a 96px body), against 0.090 here before.
+            //
+            // The two numbers measure different things and both are right in their place. The
+            // mask (101/2532 of screen height) is the hole in the FRAMEBUFFER, which is what has
+            // to be cut out of live video. Device Hub's mockup is a picture of the physical
+            // device, whose notch is deeper -- and the bezel border, which draws over the top of
+            // the clip, was swallowing most of what little depth we had.
+            let h = isGated ? clipSize.width * 0.125 : clipSize.height * c.h
             let top = clipSize.height * c.top
             let rect = CGRect(x: (clipSize.width - w) / 2, y: top, width: w, height: h)
             // A notch hangs off the top edge, so only its bottom corners are round; an island
