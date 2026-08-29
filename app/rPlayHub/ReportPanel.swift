@@ -21,7 +21,7 @@ final class ReportPanel: NSView {
 
     /// One crash report, as the list needs it.
     private struct Report {
-        let file: String        // the on-device filename
+        let file: String        // the on-device path, relative to the AFC root
         let process: String     // what Device Hub shows in bold
         let size: Int
         let date: Date
@@ -36,20 +36,29 @@ final class ReportPanel: NSView {
     private let category = NSPopUpButton()
     private let status = NSTextField(labelWithString: "")
 
-    /// Device Hub's own bottom-bar categories. "Crashes" is its default and the only one we can
-    /// fill honestly today: the device's crash directory also holds tailspins and log archives,
-    /// which are a different kind of thing and get their own entry rather than being mixed in.
+    /// Device Hub's own four bottom-bar categories, in its order. Sorted by what the device
+    /// actually stores: a listing of this directory held 2 .ips crash reports, 17 .tailspin
+    /// archives, and five directories (DiagnosticLogs, ForceResetTailspins, ProxiedDevice-...).
     private enum Category: String, CaseIterable {
         case crashes = "Crashes"
+        case spins = "Spins"
         case logs = "Logs"
-        case all = "All"
+        case diagnostics = "Diagnostics"
 
         func matches(_ file: String) -> Bool {
-            let crash = file.hasSuffix(".ips") || file.hasSuffix(".crash") || file.hasSuffix(".panic")
+            let f = file.lowercased()
+            let isCrash = f.hasSuffix(".ips") || f.hasSuffix(".crash") || f.hasSuffix(".panic")
+            let isSpin = f.hasSuffix(".tailspin") || f.hasSuffix(".spin")
+                || f.contains("spindump") || f.contains("blockage")
+            let isDiag = f.hasPrefix("sysdiagnose") || f.hasSuffix(".tar.gz")
+                || f.hasSuffix(".diag") || f.hasSuffix(".stacks")
             switch self {
-            case .crashes: return crash
-            case .logs:    return !crash
-            case .all:     return true
+            case .crashes:     return isCrash
+            case .spins:       return isSpin
+            case .diagnostics: return isDiag
+            // Everything that is not one of the three named kinds -- the .log/.txt files under
+            // DiagnosticLogs, and anything new the device starts writing.
+            case .logs:        return !isCrash && !isSpin && !isDiag
             }
         }
     }
@@ -71,6 +80,8 @@ final class ReportPanel: NSView {
         table.rowHeight = 48                 // Device Hub's rows: two lines plus padding
         table.dataSource = self
         table.delegate = self
+        table.target = self
+        table.doubleAction = #selector(openSelected)
         table.usesAlternatingRowBackgroundColors = false
         table.style = .plain
         // #F3F3F2, as everywhere else: a touch darker than the pane behind it.
@@ -132,23 +143,39 @@ final class ReportPanel: NSView {
         guard let control else { return }
         hasLoaded = true
         status.stringValue = "Reading crash reports…"
-        control.send("list_dir", ["service": "crash", "path": "/"]) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let info):
-                let entries = info["entries"] as? [[String: Any]] ?? []
-                self.all = entries.compactMap { e in
-                    guard let name = e["name"] as? String, (e["is_dir"] as? Bool) != true
-                    else { return nil }
-                    let mtime = (e["mtime"] as? Double) ?? 0
-                    return Report(file: name,
-                                  process: Self.processName(from: name),
-                                  size: (e["size"] as? Int) ?? 0,
-                                  date: Date(timeIntervalSince1970: mtime))
-                }.sorted { $0.date > $1.date }        // newest first, as Device Hub lists them
+        // The root holds the crashes and tailspins; the log files live one level down in
+        // DiagnosticLogs, so the Logs category would be permanently empty without reading it too.
+        // Best-effort: a device without that directory simply contributes nothing.
+        all = []
+        var pending = 2
+        func finish() {
+            pending -= 1
+            if pending == 0 {
+                self.all.sort { $0.date > $1.date }   // newest first, as Device Hub lists them
                 self.applyFilter()
-            case .failure(let e):
-                self.status.stringValue = "Could not read crash reports: \(e)"
+            }
+        }
+        for path in ["/", "/DiagnosticLogs"] {
+            control.send("list_dir", ["service": "crash", "path": path]) { [weak self] result in
+                guard let self else { return }
+                if case .success(let info) = result {
+                    let entries = info["entries"] as? [[String: Any]] ?? []
+                    // Keep the subdirectory in the path, or reading a DiagnosticLogs entry back
+                    // would look for it at the root and miss.
+                    let prefix = path == "/" ? "" : String(path.dropFirst()) + "/"
+                    self.all += entries.compactMap { e in
+                        guard let name = e["name"] as? String, (e["is_dir"] as? Bool) != true
+                        else { return nil }
+                        let mtime = (e["mtime"] as? Double) ?? 0
+                        return Report(file: prefix + name,
+                                      process: Self.processName(from: name),
+                                      size: (e["size"] as? Int) ?? 0,
+                                      date: Date(timeIntervalSince1970: mtime))
+                    }
+                } else if case .failure(let e) = result, path == "/" {
+                    self.status.stringValue = "Could not read crash reports: \(e)"
+                }
+                finish()
             }
         }
     }
@@ -171,6 +198,42 @@ final class ReportPanel: NSView {
             name = String(name[name.startIndex..<cut])
         }
         return name.isEmpty ? file : name
+    }
+
+    /// Device Hub opens the report when you click it. This fetches the file over the same AFC
+    /// service, writes it beside the app's other scratch files, and hands it to the system --
+    /// which lands a .ips or .log in the default text editor, and leaves a .tailspin (an 18 MB
+    /// binary archive on this device) to whatever is registered for it rather than pushing
+    /// megabytes of binary into a text window.
+    @objc private func openSelected() {
+        let row = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
+        guard row >= 0, row < shown.count, let control else { return }
+        let report = shown[row]
+        status.stringValue = "Opening \(report.file)…"
+        control.send("read_file", ["service": "crash", "path": "/" + report.file]) {
+            [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let info):
+                guard let b64 = info["data_b64"] as? String,
+                      let data = Data(base64Encoded: b64) else {
+                    self.status.stringValue = "\(report.file) came back unreadable."
+                    return
+                }
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(report.file)
+                do {
+                    try data.write(to: url)
+                    NSWorkspace.shared.open(url)
+                    self.status.stringValue = ""
+                } catch {
+                    self.status.stringValue = "Could not save \(report.file): \(error)"
+                }
+            case .failure(let e):
+                // The 64 MB cap and "is a directory" both surface here, so say which file.
+                self.status.stringValue = "Could not open \(report.file): \(e)"
+            }
+        }
     }
 
     @objc private func refilter() { applyFilter() }

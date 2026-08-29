@@ -48,6 +48,9 @@ final class InspectorPane: NSView {
     /// (clicking any icon) restores the last tab rather than always resetting to Info.
     private var activeIcon = infoIndex
 
+    /// Called whenever this pane is shown or hidden, so the window can resize to suit.
+    var onVisibilityChanged: (() -> Void)?
+
     /// The device whose details the Info tab should show.
     var udid: String? {
         didSet { diagnostics.udid = udid }
@@ -158,6 +161,7 @@ final class InspectorPane: NSView {
         isHidden = hidden
         iconTabs.selected = hidden ? nil : activeIcon
         applySelection()
+        onVisibilityChanged?()
     }
 
     /// Re-clicking the already-active icon collapses this pane instead of just reselecting it --
@@ -175,6 +179,7 @@ final class InspectorPane: NSView {
         }
         iconTabs.selected = isHidden ? nil : activeIcon
         applySelection()
+        onVisibilityChanged?()
     }
 
     @objc private func subTabChanged() {

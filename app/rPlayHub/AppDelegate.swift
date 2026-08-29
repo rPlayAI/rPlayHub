@@ -316,6 +316,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pane.layer?.shadowOffset = CGSize(width: dx, height: 0)
         }
 
+        inspector.onVisibilityChanged = { [weak self] in self?.fitWindowToPanes() }
+        // Never let the window get narrow enough for the toolbar to overflow: the three icon tabs
+        // are the only way to reopen a collapsed inspector, and once they move into the system
+        // overflow menu that route is gone -- which is exactly how the window got stuck at 641pt.
+        window.minSize = NSSize(width: 820, height: 480)
+
         window.contentView = split
         window.setContentSize(NSSize(width: 250 + 389 + 320, height: 844))
         buildToolbar()
@@ -661,8 +667,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
+
+    /// Keep the window wide enough for whatever panes are showing.
+    ///
+    /// Hiding the inspector lets the window shrink to fit what is left, which is what should
+    /// happen -- but showing it again did NOT grow the window back, so the pane reappeared at
+    /// zero width and looked like it had failed to open. Worse, at that narrower width the
+    /// toolbar overflows and the three icon tabs move into the system overflow menu, so the
+    /// usual way to bring the inspector back is itself out of reach: the app is stuck until the
+    /// View menu or a manual resize rescues it.
+    private func fitWindowToPanes() {
+        let needed = 250.0 + 389.0 + (inspector.isHidden ? 0 : 320.0)
+        guard window.frame.width < needed else { return }
+        var f = window.frame
+        f.size.width = needed
+        // Keep it on screen: grow leftward if there is no room to the right.
+        if let screen = window.screen ?? NSScreen.main {
+            let visible = screen.visibleFrame
+            if f.maxX > visible.maxX { f.origin.x = max(visible.minX, visible.maxX - f.width) }
+        }
+        window.setFrame(f, display: true, animate: false)
+    }
+
     @objc private func toggleControls(_ sender: NSMenuItem) {
         inspector.setHidden(!inspector.isHidden)
+        fitWindowToPanes()
         sender.title = inspector.isHidden ? "Show Controls" : "Hide Controls"
     }
 
