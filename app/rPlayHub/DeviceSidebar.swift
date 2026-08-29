@@ -63,8 +63,17 @@ final class DeviceSidebar: NSView {
     /// Exposed so the toolbar's filter button can focus it rather than duplicating it.
     let search = NSSearchField()
     private let sectionLabel = NSTextField(labelWithString: "Available")
+    /// Device Hub closes the device list with an "Unavailable" header, below the rows, for
+    /// devices it can see but cannot use. We have nothing to put under it yet -- the daemon
+    /// reports only usable devices -- but the header is part of the list's shape, and Device Hub
+    /// shows it even when that section is empty.
+    private let unavailableLabel = NSTextField(labelWithString: "Unavailable")
     private var allRows: [DeviceRow] = []
     private var rows: [DeviceRow] = []
+    /// The list is sized to its rows, not stretched to fill the pane, so the Unavailable header
+    /// lands directly under the last device the way Device Hub's does rather than being pushed
+    /// to the bottom of the window.
+    private var listHeight: NSLayoutConstraint!
     /// True while `update` is repopulating, so restored selections are not read as user clicks.
     private var reloading = false
 
@@ -127,7 +136,9 @@ final class DeviceSidebar: NSView {
         sectionLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         sectionLabel.textColor = .secondaryLabelColor
 
-        for v in [search, sectionLabel, scroll] as [NSView] {
+        unavailableLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        unavailableLabel.textColor = .secondaryLabelColor
+        for v in [search, sectionLabel, scroll, unavailableLabel] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -142,10 +153,27 @@ final class DeviceSidebar: NSView {
             scroll.topAnchor.constraint(equalTo: sectionLabel.bottomAnchor, constant: 4),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            // Never taller than the pane leaves room for: a long list still scrolls.
+            scroll.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -28),
+
+            // The list stops above the Unavailable header rather than filling the pane, so the
+            // header sits directly under the rows as Device Hub's does.
+            unavailableLabel.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 8),
+            unavailableLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            unavailableLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor,
+                                                     constant: -8),
         ])
 
+        listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
+        listHeight.priority = .defaultHigh   // yields to the <= pane-height limit above
+        listHeight.isActive = true
+
         buildContextMenu()
+    }
+
+    /// Match the list's height to its rows so the Unavailable header sits under the last one.
+    private func resizeList() {
+        listHeight?.constant = CGFloat(rows.count) * table.rowHeight
     }
 
     private func buildContextMenu() {
@@ -196,6 +224,7 @@ final class DeviceSidebar: NSView {
                 || $0.udid.lowercased().contains(q)
         }
         table.reloadData()
+        resizeList()
         if let previous, let i = rows.firstIndex(where: { $0.udid == previous }) {
             table.selectRowIndexes([i], byExtendingSelection: false)
         } else if !rows.isEmpty, table.selectedRow < 0 {
@@ -214,6 +243,7 @@ final class DeviceSidebar: NSView {
         reloading = true
         defer { reloading = false }
         table.reloadData()
+        resizeList()
         // Keep the selection on the same device across refreshes; otherwise select the first.
         if let previous, let i = rows.firstIndex(where: { $0.udid == previous }) {
             table.selectRowIndexes([i], byExtendingSelection: false)
@@ -234,6 +264,7 @@ final class DeviceSidebar: NSView {
         patch(&allRows)
         patch(&rows)
         table.reloadData()
+        resizeList()
     }
 
     func selectedRow() -> DeviceRow? {
