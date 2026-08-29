@@ -1030,6 +1030,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let model = d["product_type"] as? String ?? "iPhone"
                     let os = d["os_version"] as? String ?? "?"
                     self.deviceLabel = "\(model) · iOS \(os)"
+                    // The C engine's list_devices DOES include product_type (the "no product
+                    // type" comment above is only true of the old Python one) -- set the crop's
+                    // notch/island shape from it directly rather than only through the
+                    // DeviceInfo.fetch fallback below, which never runs when this is already
+                    // known and so never set this either. Confirmed live: without this, the
+                    // canvas never draws Device Hub's notch mask over the status bar.
+                    if let pt = d["product_type"] as? String, self.view.productType != pt {
+                        self.view.productType = pt
+                    }
                     // The real screen size, which is smaller than the coded frame: the encoder
                     // pads up to 16-pixel alignment. MirrorView crops and maps clicks with it.
                     //
