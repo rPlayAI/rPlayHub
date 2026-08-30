@@ -69,10 +69,14 @@ final class ConsolePanel: NSView {
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
 
-        let buttons = NSStackView(views: [toggle, clearButton, filter])
+        let buttons = NSStackView(views: [toggle, clearButton])
         buttons.orientation = .horizontal
         buttons.spacing = 6
-        let stack = NSStackView(views: [buttons, scroll, status])
+        // Filter along the bottom, below the log and the status line, matching the Apps and
+        // Report tabs. The hairline Device Hub draws above its bottom Filter row.
+        let divider = NSBox()
+        divider.boxType = .separator
+        let stack = NSStackView(views: [buttons, scroll, status, divider, filter])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -87,11 +91,13 @@ final class ConsolePanel: NSView {
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
             buttons.widthAnchor.constraint(equalTo: scroll.widthAnchor),
             status.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            divider.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            filter.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
         // The inspector holds its 260-point width at priority 700; anything in here that resists
         // compression at the default 750 would win and grow the pane across the window, pushing
         // the screen out. Everything yields instead and truncates or scrolls.
-        for v in [self, stack, buttons, status, scroll] + buttons.arrangedSubviews {
+        for v in [self, stack, buttons, status, scroll, filter] + buttons.arrangedSubviews {
             v.setContentCompressionResistancePriority(.init(100), for: .horizontal)
             v.setContentHuggingPriority(.init(100), for: .horizontal)
         }
