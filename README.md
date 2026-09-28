@@ -146,7 +146,7 @@ Start them in either order — the app retries and shows what it is waiting for 
 Package it:
 
 ```
-./scripts/package-dmg.sh                 # build/rPlayHub-0.1.0.dmg (ad-hoc; see app/DISTRIBUTION.md)
+./scripts/package-dmg.sh                 # build/rPlayHub-0.1.1.dmg (ad-hoc; see app/DISTRIBUTION.md)
 ```
 
 No phone and no root — replay a recording through the real protocol, which is how the app gets
