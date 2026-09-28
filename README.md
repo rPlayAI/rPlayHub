@@ -7,9 +7,6 @@ Think of it as **`adb` for iPhone**, plus a GUI in the shape of Apple's Device H
 and a live **View Screen** window you can click and drag in. It is a development tool, not a
 consumer product.
 
-Sibling project: `~/rplay` (another iOS mirroring/control implementation). rplay-hub is the
-development-tooling counterpart, and shares its vendored AirPlay SDK support code.
-
 ## Goals, in priority order
 
 1. **Mirroring + control GUI** — a Device Hub-style View Screen: live screen, click-to-tap,
@@ -38,9 +35,7 @@ CarPlay is not part of this project; it was only where the earliest experiments 
 
 ## Layout
 
-Folder conventions follow `~/carplay-dev`, which adopted from `~/rplay` first and reorganized its
-folders: `app/` split by subsystem, adopted sources recorded in `refs/`, third-party in `deps/`,
-tooling in `scripts/`.
+`app/` is split by subsystem, third-party code lives in `deps/`, tooling in `scripts/`.
 
 - **`app/`** — **rPlayHub**, the native macOS app: an Xcode project, Swift + AppKit, live View Screen
   with click-to-tap. Builds clean; shipped as a notarized DMG. See `app/README.md`,
@@ -52,14 +47,11 @@ tooling in `scripts/`.
   `hwdecoder.h` as the platform decoder seam (VideoToolbox on macOS, ffmpeg/SDL on Linux and
   Windows). `make -C core test` runs its tests against real recordings.
 - **`host-c/`** — the C host: usbmux and lockdown so far.
-- **`refs/carplay-dev/`** — carplay-dev's app sources, a simplified adoption of `~/rplay`'s.
 - **`deps/AccessorySDK/`** — vendored pairing + crypto kit (SRP, `PairingUtils`, OPACK, TLV8,
   ChaCha20-Poly1305, Curve25519/Ed25519, Bonjour, CFLite). See its `PROVENANCE.md`.
-- **`refs/rplay/`** — what we adopted from `~/rplay` and where it went (`MANIFEST.md`), plus its
-  architecture docs and findings under `doc/`.
 - **`scripts/`** — `package-dmg.sh` (build + sign + notarize), `mock_engine.py` (replay a recording
   as if it were the engine, so the app can be developed with no phone and no root),
-  `mirror_check.py` (verify a running engine), `tarplay_client.py` (rplay's reference client).
+  `mirror_check.py` (verify a running engine).
 - **`doc/`** — protocol RE: `REMOTEPAIRING-PROTOCOL.md`, `COREDEVICE-SCREEN-STREAMING.md`.
 - **`KICKOFF.md`** — paste into a new AI session to continue.
 
