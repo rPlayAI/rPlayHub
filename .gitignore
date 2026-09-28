@@ -54,3 +54,7 @@ core/test_rp_remotexpc
 core/test_rp_media_offer
 core/test_rp_rtp
 core/test_rp_bigreply
+
+# Snapshot builds. A prebuilt, code-signed .app does not belong in the source tree:
+# releases carry the DMG, and a committed binary goes stale and invites running it unchecked.
+builds/
