@@ -152,3 +152,12 @@ transport (usbmux | RemotePairing | relay)  →  TunnelLink (raw IPv6 + addresse
 See [BUILD.md](BUILD.md) — the daemon (`make -C host-c`), the app (`xcodebuild`), and
 `scripts/live.sh` which does both. It also records the two things that reliably go wrong: building
 as root breaks code signing, and selecting a signing identity by name can pick a revoked one.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+This project links **libimobiledevice** (LGPL-2.1+) and builds against **FFmpeg**, and ships
+`patches/ffmpeg-rvra.patch` against the latter. Those components remain under their own licences;
+GPL-3.0 was chosen because the engine links them statically, which obliges us to keep the whole
+work under a compatible copyleft licence rather than a permissive one.
