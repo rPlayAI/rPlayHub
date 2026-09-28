@@ -12,6 +12,7 @@ __pycache__/
 *.h264
 *.png
 !doc/**/*.png
+!app/rPlayHub/Assets.xcassets/**/*.png
 *.pcap
 
 # recordings and run logs (logs/ also holds device UDIDs)
