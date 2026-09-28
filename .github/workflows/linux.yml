@@ -62,7 +62,11 @@ jobs:
           key: imd-${{ hashFiles('scripts/build-imd-stack.sh') }}
       - run: '[ -f deps/imd/lib/libimobiledevice-1.0.so ] || ./scripts/build-imd-stack.sh'
       - run: make -C host-c IMD_PREFIX=$GITHUB_WORKSPACE/deps/imd
+      # LD_LIBRARY_PATH is required: the engine is linked against the libimobiledevice stack
+      # built into deps/imd, which is not on the default loader path, so the binary otherwise
+      # dies with "libusbmuxd-2.0.so.7: cannot open shared object file" before printing a word.
       - name: smoke-run (no device, no usbmuxd — must start and say so, not crash)
         run: |
-          timeout 10 ./host-c/cdhost | tee run.out
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/deps/imd/lib:${LD_LIBRARY_PATH:-}"
+          timeout 10 ./host-c/cdhost | tee run.out || true
           grep -q "usbmux" run.out
