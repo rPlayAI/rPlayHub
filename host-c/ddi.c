@@ -389,9 +389,15 @@ static uint8_t *tss_extract_ticket(const char *resp, size_t rlen, size_t *tlen)
 
 static const char *find_ddi_dir(const char *given, char *buf, size_t cap)
 {
-    const char *candidates[3]; int n = 0;
+    const char *candidates[4]; int n = 0;
     if (given && *given) candidates[n++] = given;
     const char *env = getenv("RPLAY_DDI"); if (env && *env) candidates[n++] = env;
+    /* Where scripts/fetch-ddi.sh puts it -- the way to get one without Xcode, e.g. on Linux. */
+    char fetched[1024] = "";
+    const char *xdg = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
+    if (xdg && *xdg) snprintf(fetched, sizeof fetched, "%s/rplayhub/iOS_DDI", xdg);
+    else if (home && *home) snprintf(fetched, sizeof fetched, "%s/.local/share/rplayhub/iOS_DDI", home);
+    if (fetched[0]) candidates[n++] = fetched;
     candidates[n++] = "/Library/Developer/DeveloperDiskImages/iOS_DDI";
     for (int i = 0; i < n; i++) {
         char p[1200]; snprintf(p, sizeof p, "%s/Restore/BuildManifest.plist", candidates[i]);
@@ -407,7 +413,7 @@ int cdhost_ddi_activate(const char *addr, long port, const char *ddi_dir_in)
 
     char ddi_dir[1200];
     if (!find_ddi_dir(ddi_dir_in, ddi_dir, sizeof ddi_dir)) {
-        fprintf(stderr, "  DDI files not found (set RPLAY_DDI to the iOS_DDI directory)\n");
+        fprintf(stderr, "  DDI files not found: run scripts/fetch-ddi.sh, or set RPLAY_DDI to an iOS_DDI directory\n");
         return RP_DDI_NO_DDI;
     }
 

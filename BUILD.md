@@ -27,6 +27,18 @@ system.
 Only the tunnel needs root. Nothing else does, which is why the app is a separate process — see
 "Why two processes" below.
 
+### The Developer Disk Image
+
+After every phone reboot the engine mounts Apple's Developer Disk Image, and it needs the image
+files on disk. A Mac with Xcode has them; on Linux (or a Mac without Xcode) fetch them once:
+
+```sh
+./scripts/fetch-ddi.sh    # -> ~/.local/share/rplayhub/iOS_DDI, where the engine looks
+```
+
+They are Apple's, so they are downloaded rather than kept in this repository. Details, other
+sources and troubleshooting: [doc/DDI.md](doc/DDI.md).
+
 ### TLS backend
 
 ```sh

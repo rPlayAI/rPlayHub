@@ -912,7 +912,7 @@ int main(int argc, char **argv) {
         if (drc == RP_DDI_ALREADY)      printf("  already mounted\n");
         else if (drc == RP_DDI_OK)      printf("  mounted (no Xcode/Device Hub needed)\n");
         else if (drc == RP_DDI_LOCKED)  printf("  the device is locked -- unlock it, then reconnect\n");
-        else if (drc == RP_DDI_NO_DDI)  printf("  DDI files not bundled; mount via Xcode/Device Hub, or set RPLAY_DDI\n");
+        else if (drc == RP_DDI_NO_DDI)  printf("  no DDI files: run scripts/fetch-ddi.sh (or set RPLAY_DDI), or mount via Xcode/Device Hub\n");
         else                            printf("  could not mount the DDI (rc=%d); mirroring may not work\n", drc);
     }
 

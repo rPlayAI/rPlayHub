@@ -36,6 +36,9 @@ Not affiliated with or endorsed by Apple. Device Hub, iPhone and iOS are Apple's
 - **iOS 27 or later on the iPhone — for every version of rPlayHub**, on every platform. rPlayHub
   speaks the CoreDevice protocol as iOS 27 ships it; earlier iOS releases are not supported.
 - The phone paired and trusted with the computer once (the usual "Trust This Computer" prompt).
+- **Developer Mode** on, and Apple's **Developer Disk Image**. The engine mounts the image itself
+  after every phone reboot; on a Mac with Xcode it finds the files already, and on **Linux** you
+  download them once with `./scripts/fetch-ddi.sh`. See **[doc/DDI.md](doc/DDI.md)**.
 
 **On an older iPhone?** Use **rPlay**, the project rPlayHub belongs to. rPlay mirrors **every iOS
 version**, over **USB or wireless**, and controls the phone over **Bluetooth**.
