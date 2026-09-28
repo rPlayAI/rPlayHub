@@ -1,7 +1,7 @@
 # CoreDevice / DeviceHub screen streaming — protocol notes
 
 Date: 2026-07-26. Investigated on macOS Tahoe + Xcode 27 beta (27A5218g), against an
-**iPhone 13 Pro on iOS 27** (`COREDEVICE-ID-REDACTED`) and an iPhone 12 Pro on 26.5.2.
+**iPhone 13 Pro on iOS 27** and an iPhone 12 Pro on 26.5.2.
 
 **Why we care:** CarCast *is* a screen-streaming receiver (CarPlay/AirPlay). CoreDevice is Apple
 solving the same problem — get a phone's framebuffer onto another machine, live, with input — but
@@ -258,7 +258,7 @@ the tooling as `scripts/coredevice-capture/sample-capture.txt`.
 CoreDevice.coreDeviceVersion            -> dict{ originalComponentsCount,
                                                  components[] (doubles),
                                                  stringValue "642.0.1" }
-CoreDevice.deviceIdentifier             -> "COREDEVICE-ID-REDACTED"
+CoreDevice.deviceIdentifier             -> "<device-uuid>"
 CoreDevice.CoreDeviceDDIProtocolVersion -> int
 CoreDevice.invocationIdentifier         -> UUID (per-RPC correlation id)
 ```
@@ -797,7 +797,7 @@ call Apple for every session. Still a dependency — but bounded, and much less 
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer
-D=COREDEVICE-ID-REDACTED
+D=<device-uuid>            # xcrun devicectl list devices
 
 xcrun devicectl device info details --device $D | grep -iE "Tunnel|Transport"
 xcrun devicectl device info details --device $D | grep -oE "com\.apple\.[a-zA-Z0-9._]+" | sort -u

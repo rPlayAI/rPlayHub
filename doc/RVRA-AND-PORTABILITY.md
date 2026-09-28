@@ -259,7 +259,7 @@ frames 0-44 being bit-exact means any divergence is attributable to the resampli
 ## A method note
 
 `strings` returns **nothing** for `reference/binaries/AVConference` — zero lines, including symbols
-`KICKOFF.md` quotes from that very file. An earlier search here therefore "established" that RVRA
+`AGENTS.md` quotes from that very file. An earlier search here therefore "established" that RVRA
 was absent from AVConference, which was a false negative that nearly closed off this whole line of
 inquiry. The strings live in `__cstring` and need `otool -s __TEXT __cstring` to reach.
 

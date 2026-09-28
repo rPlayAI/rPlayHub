@@ -150,7 +150,7 @@ commit. Compare against those before concluding something regressed.
 The Python engine still serves the same contract:
 
 ```
-sudo python3 host/mirror.py DEVICE-UDID-REDACTED
+sudo python3 host/mirror.py <udid>
 ffplay -fflags nobuffer -flags low_delay tcp://127.0.0.1:9877
 python3 scripts/mirror_check.py --tap
 ```

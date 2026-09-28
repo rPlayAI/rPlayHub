@@ -7,8 +7,7 @@ running and to what) should be re-checked rather than assumed.
 ## State
 
 Branch `rendering-resolution-switch`, 33 commits ahead of main, **nothing pushed**. Known-good
-build in `builds/known-good-20260802-2349`. Mirroring is clean on the iPhone 13 Pro (iOS 27,
-UDID `DEVICE-UDID-REDACTED`) over wifi; iOS 26 binds but cannot mirror.
+build in `builds/known-good-20260802-2349`. Mirroring is clean on the iPhone 13 Pro (iOS 27) over wifi; iOS 26 binds but cannot mirror.
 
 ## What got built
 
@@ -96,7 +95,7 @@ If Restart/Shutdown work happens instead (it is the cheapest real feature left, 
 
 ## Loose ends
 
-- **Bug #7, stale tunnel** (KICKOFF.md): the daemon keeps serving a dead session after its device
+- **Bug #7, stale tunnel** (AGENTS.md): the daemon keeps serving a dead session after its device
   leaves/rejoins wifi — `tunnel_info`/`stream_info` answer, displayservice connect times out,
   viewers get silence indistinguishable from an idle encoder. No liveness check exists;
   restarting cdhost is the fix. The measurer preflights exactly this and names it.
@@ -112,7 +111,7 @@ If Restart/Shutdown work happens instead (it is the cheapest real feature left, 
 Paste into a fresh session:
 
 ```
-Read KICKOFF.md first, then doc/BITRATE-EXPERIMENT-HANDOFF.md (handoff from the previous
+Read AGENTS.md first, then doc/BITRATE-EXPERIMENT-HANDOFF.md (handoff from the previous
 session), doc/RVRA-AND-PORTABILITY.md before touching video, doc/RSD-SERVICES.md before adding
 any device feature.
 
@@ -133,7 +132,7 @@ Facts:
    more than Device Hub's on the same phone? The difference lives in the negotiation.
 3. Restart/Shutdown remain unblocked via com.apple.mobile.diagnostics_relay.shim.remote
    (doc/RSD-SERVICES.md) -- cheapest real feature left. iOS 26 binds but cannot mirror.
-4. Known bug #7 (KICKOFF.md): the daemon keeps serving a dead session after its device leaves
+4. Known bug #7 (AGENTS.md): the daemon keeps serving a dead session after its device leaves
    wifi -- tunnel_info/stream_info answer, displayservice connect times out, viewers get
    silence. No liveness check; restarting cdhost is the fix.
 5. Two corrupt scratch captures sit in build/: apple-notrailer.h265 is byte-identical to

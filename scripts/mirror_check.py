@@ -3,7 +3,7 @@
 
 Start the engine first (it needs root for the utun):
 
-    sudo python3 host/mirror.py DEVICE-UDID-REDACTED
+    sudo python3 host/mirror.py <udid>
 
 then, as a normal user:
 

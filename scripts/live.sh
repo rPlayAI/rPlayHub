@@ -3,7 +3,7 @@
 # Live mirroring and control: start the engine against a real phone and open rPlayHub.
 #
 #   ./scripts/live.sh                              # first mirroring-capable device
-#   ./scripts/live.sh DEVICE-UDID-REDACTED
+#   ./scripts/live.sh <udid>
 #   ./scripts/live.sh --codec h264                 # ask the device for H.264 instead of HEVC
 #
 # Any extra arguments are passed straight through to host/mirror.py.

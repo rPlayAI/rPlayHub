@@ -16,7 +16,7 @@ cd "$ROOT"
 [ $# -ge 1 ] || { echo "usage: $0 <label> [cdhost flags...]" >&2; exit 1; }
 
 LABEL="$1"; shift
-UDID="${RVRA_UDID:-DEVICE-UDID-REDACTED}"
+UDID="${RVRA_UDID:?set RVRA_UDID to the device UDID}"
 OUT="build/rvra-bitrate"
 mkdir -p "$OUT"
 

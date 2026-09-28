@@ -59,7 +59,7 @@ CarPlay is not part of this project; it was only where the earliest experiments 
   as if it were the engine, so the app can be developed with no phone and no root),
   `mirror_check.py` (verify a running engine).
 - **`doc/`** — protocol RE: `REMOTEPAIRING-PROTOCOL.md`, `COREDEVICE-SCREEN-STREAMING.md`.
-- **`KICKOFF.md`** — paste into a new AI session to continue.
+- **`AGENTS.md`** — paste into a new AI session to continue.
 
 ## Quick start
 

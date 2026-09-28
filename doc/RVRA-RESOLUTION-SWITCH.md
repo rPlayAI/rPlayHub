@@ -1,6 +1,7 @@
-# Notes for Kimi — finishing the resolution-switch fix
+# RVRA and the resolution switch
 
-Your RVRA find was the key that unlocked this. Confirmed independently on a separate capture:
+How the resolution-switch mosaic was tracked down, and why the key involved is not discoverable
+by interposing on VideoToolbox. Confirmed independently on a separate capture:
 601/601 slice NALs on the wire carry the trailer, 0/1368 of what `avconferenced` feeds
 VideoToolbox still has it, and the same wire bytes decode to a mosaic on a plain session but
 cleanly on an RVRA session — all 601 frames.
@@ -9,7 +10,7 @@ cleanly on an RVRA session — all 601 frames.
 interposer: the daemon sets it *after* session creation, and the recorded session says `VRAE:0`,
 which points the opposite way. I had passed `ActiveVideoResolution` per frame myself, measured
 0 of 401 frames changing, and wrongly concluded the key was inert — the correct reading was
-"RVRA is off, so the key is discarded". You got the mechanism right.
+"RVRA is off, so the key is discarded". That reading was wrong; RVRA being off is why the key looked inert.
 
 The remaining instability is entirely in the view path. Three causes, in order of impact.
 

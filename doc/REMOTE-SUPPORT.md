@@ -4,7 +4,7 @@ Question asked: can a phone attached somewhere else — another Mac's USB port, 
 internet — drive rPlayHub, so "a USB sitting across the internet" works?
 
 **Verdict up front: yes for everything we ship, and the architecture already pays for it.**
-The CoreDevice tunnel is just a stream of raw IPv6 packets (`KICKOFF.md`), so a remote link is
+The CoreDevice tunnel is just a stream of raw IPv6 packets (`AGENTS.md`), so a remote link is
 one new transport below `TunnelLink` and nothing above it — RSD, screen, HID, screenshots,
 recording — changes at all. Two of the three useful shapes are designed already; one is even
 prototyped on paper. The one genuinely unvalidated goal is making *Apple's own tools* see a
