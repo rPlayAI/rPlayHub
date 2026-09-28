@@ -18,7 +18,7 @@ Mac side stays in sync.
 
 ## 1. Clone from GitHub
 
-Repo: **`github.com/rPlayAI/rplay-hub`** (private). Working branch: **`rendering-resolution-switch`**
+Repo: **`github.com/rPlayAI/rPlayHub`** (private). Working branch: **`rendering-resolution-switch`**
 (88+ commits ahead of `main`; `main` is stale — do not use it).
 
 Authenticate first (the repo is private), any one of:
@@ -28,7 +28,7 @@ gh auth login                      # GitHub CLI, easiest
 ```
 Then:
 ```bash
-git clone -b rendering-resolution-switch https://github.com/rPlayAI/rplay-hub.git
+git clone -b rendering-resolution-switch https://github.com/rPlayAI/rPlayHub.git
 cd rplay-hub
 ```
 
