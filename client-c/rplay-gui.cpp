@@ -23,6 +23,7 @@
 
 extern "C" {
 #include "stream-core.h"
+#include "audio.h"
 }
 
 #include <atomic>
@@ -814,6 +815,8 @@ static void menu_device()
                                 : "recording stopped: " + jstr(r.value("path", json())));
         });
     }
+    bool sound = !audio_muted();
+    if (ImGui::MenuItem("Play iPhone Audio", NULL, &sound)) audio_set_muted(!sound);
     if (ImGui::MenuItem("Press Home"))
         g_api.request("press_button", {{"button", "home"}},
                       [](bool ok, json) { if (!ok) set_status("home failed"); });
@@ -1075,6 +1078,8 @@ int main(int argc, char **argv)
     ImGui_ImplSDLRenderer2_Init(g_ren);
 
     g_api.start();
+    /* The phone's sound (port 9878), on its own thread; it reconnects by itself like the video. */
+    audio_start(g_host, 9878);
 
     bool quit = false;
     while (!quit) {

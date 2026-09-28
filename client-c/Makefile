@@ -43,11 +43,12 @@ IMGUI_SRC := $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_draw.cpp $(IMGUI_DIR)/img
              $(IMGUI_DIR)/backends/imgui_impl_sdlrenderer2.cpp
 CXXFLAGS += $(CFLAGS) -std=c++17 -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -I../deps/json
 
-rplay-gui: rplay-gui.cpp stream-core.c stream-core.h
+rplay-gui: rplay-gui.cpp stream-core.c stream-core.h audio.c audio.h
 	$(CC) $(CFLAGS) -c stream-core.c -o stream-core.o
-	$(CXX) $(CXXFLAGS) -o $@ rplay-gui.cpp stream-core.o $(IMGUI_SRC) $(LIBS)
+	$(CC) $(CFLAGS) -c audio.c -o audio.o
+	$(CXX) $(CXXFLAGS) -o $@ rplay-gui.cpp stream-core.o audio.o $(IMGUI_SRC) $(LIBS)
 
 clean:
-	rm -f rplay-view rplay-gui stream-core.o
+	rm -f rplay-view rplay-gui stream-core.o audio.o
 
 .PHONY: clean

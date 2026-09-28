@@ -1,3 +1,4 @@
 rplay-view
 rplay-gui
 stream-core.o
+audio.o
