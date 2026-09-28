@@ -44,6 +44,7 @@
 		1A0000000000000000000026 /* TCPSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000016 /* TCPSocket.swift */; };
 		1A0000000000000000000027 /* DeviceSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000019 /* DeviceSidebar.swift */; };
 		1A0000000000000000000028 /* ControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000000000000000000001A /* ControlPanel.swift */; };
+		1A00000000000000000000F2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A00000000000000000000F1 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -87,6 +88,7 @@
 		1A0000000000000000000018 /* rPlayHub.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = rPlayHub.entitlements; sourceTree = "<group>"; };
 		1A0000000000000000000019 /* DeviceSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSidebar.swift; sourceTree = "<group>"; };
 		1A000000000000000000001A /* ControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanel.swift; sourceTree = "<group>"; };
+		1A00000000000000000000F1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -156,6 +158,7 @@
 				1A0000000000000000000016 /* TCPSocket.swift */,
 				1A0000000000000000000019 /* DeviceSidebar.swift */,
 				1A000000000000000000001A /* ControlPanel.swift */,
+				1A00000000000000000000F1 /* Assets.xcassets */,
 				1A0000000000000000000017 /* Info.plist */,
 				1A0000000000000000000018 /* rPlayHub.entitlements */,
 			);
@@ -220,6 +223,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1A00000000000000000000F2 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -326,6 +330,7 @@
 		1A000000000000000000000E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = rPlayHub/rPlayHub.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -351,6 +356,7 @@
 		1A000000000000000000000F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = rPlayHub/rPlayHub.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
