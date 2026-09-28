@@ -6,8 +6,8 @@
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-yellow)](LICENSE)
 
 **scrcpy for iOS** — and a **cross-platform clone of Apple's Device Hub**. Mirror and control an
-iPhone from **macOS or Linux**, with **Windows and Raspberry Pi** next: live screen,
-click-to-tap, drag-to-swipe, app and profile management, crash reports and the device's own
+iPhone from **macOS or Linux**, with **Windows and Raspberry Pi** next: live screen
+and sound, click-to-tap, drag-to-swipe, app and profile management, crash reports and the device's own
 settings.
 
 Apple's Device Hub ships inside Xcode and runs on macOS only. rPlayHub is a from-scratch
@@ -17,7 +17,7 @@ does this for Android over `adb`, rPlayHub does it for iPhone over CoreDevice �
 on the phone.
 
 **It is for everyone, not just developers.** Use it as an **iPhone Mirroring app**: your
-iPhone's screen live in a window on your computer, and your mouse working as your finger — tap,
+iPhone's screen live in a window on your computer, its sound through your speakers, and your mouse working as your finger — tap,
 swipe, scroll, open apps. Like Apple's iPhone Mirroring, but on Linux too, and with the phone
 still usable in your hand while it is mirrored. Plug the phone in, trust the computer once, and
 it is there. Developers get the rest of Device Hub on top:
@@ -69,6 +69,8 @@ Working today, and what the DMG above ships:
 
 - **Live mirroring and control** — HEVC screen video over the CoreDevice tunnel, with clicks and
   drags mapped to the device's own coordinate space.
+- **Sound** — the phone's audio plays on the computer, as in Device Hub 27: AAC-ELD over the
+  same tunnel, decoded by AudioToolbox on macOS and FFmpeg on Linux.
 - **Device management** — install and remove apps and configuration profiles, browse the Media
   partition, read crash reports, spins and logs, stream the console.
 - **Device settings** — appearance, text size, reduce motion, VoiceOver, simulated location and
