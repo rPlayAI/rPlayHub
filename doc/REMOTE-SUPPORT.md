@@ -1,7 +1,7 @@
 # Remote iPhone support — research (2026-08-22)
 
 Question asked: can a phone attached somewhere else — another Mac's USB port, or across the
-internet — drive rplay-hub, so "a USB sitting across the internet" works?
+internet — drive rPlayHub, so "a USB sitting across the internet" works?
 
 **Verdict up front: yes for everything we ship, and the architecture already pays for it.**
 The CoreDevice tunnel is just a stream of raw IPv6 packets (`KICKOFF.md`), so a remote link is

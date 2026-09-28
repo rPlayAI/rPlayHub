@@ -1,4 +1,4 @@
-# Building rplay-hub
+# Building rPlayHub
 
 Two products, built separately:
 

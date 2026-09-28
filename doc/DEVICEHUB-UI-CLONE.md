@@ -346,7 +346,7 @@ to the `SettingsPanel` on both front-ends.
 
 Paste this to start a fresh session focused on finishing the Device Hub clone:
 
-> Continue rplay-hub on branch `rendering-resolution-switch` (GitHub: rPlayAI/rPlayHub, private;
+> Continue rPlayHub on branch `rendering-resolution-switch` (GitHub: rPlayAI/rPlayHub, private;
 > git is the single source of truth — a Linux agent works the same tree, so `git pull` first, and
 > `commit`+`push` your changes; never rsync). Goal: make rPlayHub a pixel-faithful **Device Hub
 > clone** on macOS (`app/rPlayHub/`, Swift/AppKit) and Linux (`client-c/rplay-gui.cpp`, Dear ImGui).

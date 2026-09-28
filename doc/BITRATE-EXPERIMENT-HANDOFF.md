@@ -116,7 +116,7 @@ Read KICKOFF.md first, then doc/BITRATE-EXPERIMENT-HANDOFF.md (handoff from the 
 session), doc/RVRA-AND-PORTABILITY.md before touching video, doc/RSD-SERVICES.md before adding
 any device feature.
 
-Project constraint: do not modify or add files outside ~/rplay-hub. Run recipe unchanged:
+Project constraint: do not modify or add files outside ~/rPlayHub. Run recipe unchanged:
 sudo ./host-c/cdhost (pick device in sidebar) + xcodebuild of app/rPlayHub.xcodeproj.
 
 Facts:

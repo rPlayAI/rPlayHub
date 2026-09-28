@@ -39,7 +39,7 @@ There are two distinct paths for connecting to an iPhone wirelessly over Wi-Fi w
 
 ### Path A: Wireless Lockdown / CoreDeviceProxy (Port 62078)
 
-Implemented & verified in [`scripts/test_wifi_lockdown_session.py`](file:///Users/you/experimental/rplay-hub/scripts/test_wifi_lockdown_session.py):
+Implemented & verified in [`scripts/test_wifi_lockdown_session.py`](file:///Users/you/experimental/rPlayHub/scripts/test_wifi_lockdown_session.py):
 
 ```
 +-------------------------------------------------------------------------------+
@@ -79,7 +79,7 @@ Implemented & verified in [`scripts/test_wifi_lockdown_session.py`](file:///User
 
 ### Path B: Direct RemotePairing Protocol (mDNS / Bonjour)
 
-Documented in [`doc/REMOTEPAIRING-PROTOCOL.md`](file:///Users/you/experimental/rplay-hub/doc/REMOTEPAIRING-PROTOCOL.md):
+Documented in [`doc/REMOTEPAIRING-PROTOCOL.md`](file:///Users/you/experimental/rPlayHub/doc/REMOTEPAIRING-PROTOCOL.md):
 
 1. **mDNS Discovery**:
    - `_remotepairing._tcp` (control channel)
@@ -96,10 +96,10 @@ Documented in [`doc/REMOTEPAIRING-PROTOCOL.md`](file:///Users/you/experimental/r
 
 ### Key Scripts in Workspace:
 
-- **[`scripts/test_wifi_lockdown_session.py`](file:///Users/you/experimental/rplay-hub/scripts/test_wifi_lockdown_session.py)**: Direct lockdown session + TLS + CoreDeviceProxy start over Wi-Fi.
-- **[`scripts/test_wifi_tls_handshake.py`](file:///Users/you/experimental/rplay-hub/scripts/test_wifi_tls_handshake.py)**: Wireless TLS handshake verification with pair record.
-- **[`scripts/test_pair_record_usbmuxd.py`](file:///Users/you/experimental/rplay-hub/scripts/test_pair_record_usbmuxd.py)**: Pair record extraction via `usbmuxd` protocol.
-- **[`scripts/browse_bonjour_devices.py`](file:///Users/you/experimental/rplay-hub/scripts/browse_bonjour_devices.py)**: Bonjour browse for `_remotepairing._tcp` services.
+- **[`scripts/test_wifi_lockdown_session.py`](file:///Users/you/experimental/rPlayHub/scripts/test_wifi_lockdown_session.py)**: Direct lockdown session + TLS + CoreDeviceProxy start over Wi-Fi.
+- **[`scripts/test_wifi_tls_handshake.py`](file:///Users/you/experimental/rPlayHub/scripts/test_wifi_tls_handshake.py)**: Wireless TLS handshake verification with pair record.
+- **[`scripts/test_pair_record_usbmuxd.py`](file:///Users/you/experimental/rPlayHub/scripts/test_pair_record_usbmuxd.py)**: Pair record extraction via `usbmuxd` protocol.
+- **[`scripts/browse_bonjour_devices.py`](file:///Users/you/experimental/rPlayHub/scripts/browse_bonjour_devices.py)**: Bonjour browse for `_remotepairing._tcp` services.
 
 ---
 

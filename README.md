@@ -1,4 +1,4 @@
-# rplay-hub
+# rPlayHub
 
 A from-scratch **CoreDevice host** that mirrors and controls an iPhone — screenshot, live HEVC
 screen video, touch/HID injection — with **no Xcode and no Apple daemons in the runtime path**.
@@ -7,10 +7,18 @@ Think of it as **`adb` for iPhone**, plus a GUI in the shape of Apple's Device H
 and a live **View Screen** window you can click and drag in. It is a development tool, not a
 consumer product.
 
+## Download
+
+A signed and notarized DMG is on the [releases page](https://github.com/rPlayAI/rPlayHub/releases).
+macOS 14 or later, Apple silicon. Open it and drag rPlayHub to Applications.
+
+The app talks to a small engine (`cdhost`) that it starts for you. Building that from source is
+covered in [BUILD.md](BUILD.md).
+
 ## Goals, in priority order
 
 1. **Mirroring + control GUI** — a Device Hub-style View Screen: live screen, click-to-tap,
-   drag-to-swipe. This is the next thing to build.
+   drag-to-swipe. Working today; this is what the DMG above ships.
 2. **`adb`-shaped client/server** — a long-running server that keeps device tunnels warm and
    multiplexes many devices, with a thin CLI and a GUI as clients.
 3. **Remote iPhone** — a phone on another network usable from here, both for our own
@@ -47,8 +55,6 @@ CarPlay is not part of this project; it was only where the earliest experiments 
   `hwdecoder.h` as the platform decoder seam (VideoToolbox on macOS, ffmpeg/SDL on Linux and
   Windows). `make -C core test` runs its tests against real recordings.
 - **`host-c/`** — the C host: usbmux and lockdown so far.
-- **`deps/AccessorySDK/`** — vendored pairing + crypto kit (SRP, `PairingUtils`, OPACK, TLV8,
-  ChaCha20-Poly1305, Curve25519/Ed25519, Bonjour, CFLite). See its `PROVENANCE.md`.
 - **`scripts/`** — `package-dmg.sh` (build + sign + notarize), `mock_engine.py` (replay a recording
   as if it were the engine, so the app can be developed with no phone and no root),
   `mirror_check.py` (verify a running engine).

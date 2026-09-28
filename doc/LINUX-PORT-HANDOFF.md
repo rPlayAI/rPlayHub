@@ -141,7 +141,7 @@ quality margin rather than viability.
 
 Paste this to start the next session:
 
-> Continue rplay-hub on branch `rendering-resolution-switch` (no git remote is configured, so
+> Continue rPlayHub on branch `rendering-resolution-switch` (no git remote is configured, so
 > nothing is pushed anywhere). Read `doc/LINUX-PORT-HANDOFF.md` first, then
 > `doc/RVRA-AND-PORTABILITY.md` — RVRA is the single blocker for portable video. Summary: the C
 > engine is fully portable and non-root via lwIP userspace TCP/IP (`RPLAY_USERSPACE_NET=1`), now

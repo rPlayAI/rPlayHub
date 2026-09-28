@@ -1,6 +1,6 @@
 # Linux port — agent onboarding
 
-You are an agent (e.g. Claude Code) starting fresh on a **Linux** machine to port rplay-hub. This
+You are an agent (e.g. Claude Code) starting fresh on a **Linux** machine to port rPlayHub. This
 is your setup + first-tasks guide. Read `doc/LINUX-PORT-HANDOFF.md` next for the deeper state, and
 `doc/RVRA-AND-PORTABILITY.md` before touching the video path.
 
@@ -29,7 +29,7 @@ gh auth login                      # GitHub CLI, easiest
 Then:
 ```bash
 git clone -b rendering-resolution-switch https://github.com/rPlayAI/rPlayHub.git
-cd rplay-hub
+cd rPlayHub
 ```
 
 ## 2. Fetch the vendored deps (gitignored — NOT in the repo)

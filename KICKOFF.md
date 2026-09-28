@@ -1,10 +1,10 @@
-# rplay-hub — new session kickoff prompt
+# rPlayHub — new session kickoff prompt
 
-Paste the block below as the first message in a new session (run from `~/rplay-hub`).
+Paste the block below as the first message in a new session (run from `~/rPlayHub`).
 
 ---
 
-We're building **rplay-hub**: a from-scratch CoreDevice host that mirrors and controls an iPhone —
+We're building **rPlayHub**: a from-scratch CoreDevice host that mirrors and controls an iPhone —
 screenshot, live HEVC screen video, touch/HID injection — with NO Xcode and no Apple daemons in the
 runtime path. It is **`adb` for iPhone plus a Device Hub-style GUI**: a device list and a live
 **View Screen** window you can click and drag in. A development tool, not a consumer product.
@@ -17,7 +17,7 @@ site (the Mac App Store is not possible with the current design — see `app/DIS
 CarPlay is NOT part of this project (it was only where the earliest experiments happened). Sibling
 project: `~/rplay`.
 
-**Constraint: do not modify or add files outside `~/rplay-hub`.** Copy what you need in, then edit
+**Constraint: do not modify or add files outside `~/rPlayHub`.** Copy what you need in, then edit
 the copy.
 
 ## What's here

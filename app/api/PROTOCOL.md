@@ -1,7 +1,7 @@
 # Control API — newline-delimited JSON
 
 Adopted from `~/rplay`'s contract (`refs/rplay/doc/sdk-api.md`) so its existing Python client and MCP
-wrapper drive rplay-hub unchanged. Implemented today by `host/mirror.py`; `app/api/SDKServer.swift`
+wrapper drive rPlayHub unchanged. Implemented today by `host/mirror.py`; `app/api/SDKServer.swift`
 is the cloned Swift implementation of the same contract, still wired to rplay's own backend.
 
 Two sockets, both **localhost only** — this is full device control, so it must not be reachable off

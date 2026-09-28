@@ -1,6 +1,6 @@
 # cdhost — CoreDevice host in C
 
-The C side of rplay-hub. Same protocol as the Python harness in `../host/`, verified live against
+The C side of rPlayHub. Same protocol as the Python harness in `../host/`, verified live against
 the same iPhone (iPhone13,3, iOS 26.5.2).
 
 C and Swift are the shipping languages: **C** for the portable protocol core, **Swift** for the

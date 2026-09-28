@@ -34,10 +34,16 @@ mkdir -p "$STAGE"
 
 if [[ -n "$SIGN_ID" ]]; then
     # Hardened runtime is required for notarization and is already on in the project.
+    # CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO is not optional here. Left at its default, Xcode
+    # adds com.apple.security.get-task-allow -- the entitlement that lets a debugger attach --
+    # even to a Release build, and the notary service rejects the upload outright for it:
+    #   "The executable requests the com.apple.security.get-task-allow entitlement."
+    # The .entitlements file never mentions it, so it looks like it comes from nowhere.
     xcodebuild -project "$PROJECT" -scheme "$APP_NAME" -configuration Release \
         -derivedDataPath "$DD" \
         CODE_SIGN_STYLE=Manual \
         CODE_SIGN_IDENTITY="$SIGN_ID" \
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
         OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime" \
         build
 else
