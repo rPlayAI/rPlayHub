@@ -81,6 +81,9 @@ struct media_session {
     int fwd_fd;                       /* -1 unless RPLAY_RTP_FORWARD is set */
     struct sockaddr_in fwd_addr;
 
+    int      audio;           /* an audio session: payloads go to on_audio, no video feedback */
+    void   (*on_audio)(void *ctx, const uint8_t *frame, size_t len, uint32_t rtp_ts);
+
     int      negotiated;      /* the device is holding a stream slot for us */
     uint64_t packets, bytes, nals, keyframes;
     struct timespec started;
@@ -215,6 +218,22 @@ static void *recv_loop(void *arg)
         }
         rp_rtcp_note_rtp(&m->rtcp, pkt, (size_t)n, now_ms());
 
+        /* Audio: one AAC-ELD access unit per packet, so there is nothing to reassemble. Strip the
+         * RTP header -- CSRCs, extension and padding included -- and pass the frame on. */
+        if (m->audio) {
+            if (n >= 12 && (pkt[0] >> 6) == 2) {
+                size_t off = 12 + 4 * (size_t)(pkt[0] & 0x0F), end = (size_t)n;
+                if ((pkt[0] & 0x10) && off + 4 <= end)
+                    off += 4 + 4 * (size_t)((pkt[off + 2] << 8) | pkt[off + 3]);
+                if ((pkt[0] & 0x20) && end > off) end -= pkt[end - 1];
+                uint32_t ts = (uint32_t)pkt[4] << 24 | (uint32_t)pkt[5] << 16 |
+                              (uint32_t)pkt[6] << 8 | pkt[7];
+                if (off < end && m->on_audio) m->on_audio(m->ctx, pkt + off, end - off, ts);
+            }
+            DBG_WORK_DONE();
+            continue;
+        }
+
         /* Watch the extension profile: it is how this device says the coded picture shrank. */
         uint16_t prof = rp_rtp_ext_profile(pkt, (size_t)n);
         if (prof && prof != m->last_ext_profile) {
@@ -307,6 +326,9 @@ static void *rtcp_loop(void *arg)
          * of 290 landed within 5 ms of a frame — a timer, not a frame-driven send. Always alone in
          * its own datagram, never compounded with SR/RR/SDES, so it is sent here rather than
          * appended to the receiver report. */
+        /* Everything below is feedback to a video encoder. */
+        if (m->audio) continue;
+
         if (rctl_on && t - last_rctl >= 50) {
             size_t n = rp_rtcp_build_rctl(&m->rtcp, t, rctl_target, buf, sizeof buf);
             long sent = -1;
@@ -529,6 +551,8 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     m->keyframe_every_s = cfg->keyframe_every_s;
     m->on_discontinuity = cfg->on_discontinuity;
     m->on_active_rect = cfg->on_active_rect;
+    m->audio = cfg->audio;
+    m->on_audio = cfg->on_audio;
 
     m->rtp_storage = malloc((size_t)RP_RTP_REORDER_WINDOW * 1500 + RP_RTP_MAX_NAL);
     m->rxpc_reassembly = malloc(1 << 20);
@@ -591,8 +615,11 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     op.model = "Mac15,9";
     op.os_version = "2205.3.1";
     op.build = "25F80";
-    op.call_id = "1E312779-5E86-4742-9215-7522E1EB1610";
+    /* One call per stream, as Device Hub does: its audio and video offers carry different IDs. */
+    op.call_id = cfg->audio ? "6A1D3E52-8B0F-4C7A-9E21-3F5D2B7C9A40"
+                            : "1E312779-5E86-4742-9215-7522E1EB1610";
     op.ltrp_enabled = 1;
+    op.audio = cfg->audio;
     size_t offer_len = rp_build_offer(&op, offer, sizeof offer);
     if (!offer_len) goto fail;
 
@@ -610,10 +637,13 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     rp_xpc_dict_begin(&w); rp_xpc_set_int64(&w, "int", ACCESS_NETWORK_TYPE); rp_xpc_dict_end(&w);
     rp_xpc_key(&w, "AVCMediaStreamNegotiatorTransportProtocolType");
     rp_xpc_dict_begin(&w); rp_xpc_set_int64(&w, "int", TRANSPORT_PROTOCOL_TYPE); rp_xpc_dict_end(&w);
-    rp_xpc_key(&w, "CoreDeviceVideoDisplayMode");
-    rp_xpc_dict_begin(&w); rp_xpc_set_string(&w, "string", "DisplayByID"); rp_xpc_dict_end(&w);
-    rp_xpc_key(&w, "VideoStreamForDisplayID");
-    rp_xpc_dict_begin(&w); rp_xpc_set_int64(&w, "int", 1); rp_xpc_dict_end(&w);
+    /* Which display to capture. Device Hub's audio request has neither key. */
+    if (!cfg->audio) {
+        rp_xpc_key(&w, "CoreDeviceVideoDisplayMode");
+        rp_xpc_dict_begin(&w); rp_xpc_set_string(&w, "string", "DisplayByID"); rp_xpc_dict_end(&w);
+        rp_xpc_key(&w, "VideoStreamForDisplayID");
+        rp_xpc_dict_begin(&w); rp_xpc_set_int64(&w, "int", 1); rp_xpc_dict_end(&w);
+    }
     rp_xpc_key(&w, "avcMediaStreamOptionClientSessionID");
     rp_xpc_dict_begin(&w);
     {
@@ -651,7 +681,7 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
         int any = 0;
         for (size_t i = 0; i < sizeof knobs / sizeof knobs[0]; i++)
             if (getenv(knobs[i].env)) { any = 1; break; }
-        if (any) {
+        if (any && !cfg->audio) {
             rp_xpc_key(&w, "streamConfig");
             rp_xpc_dict_begin(&w);
             for (size_t i = 0; i < sizeof knobs / sizeof knobs[0]; i++) {
@@ -682,7 +712,7 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
         }
         rp_xpc_set_uint64(&w, "timeout", tmo);
     }
-    rp_xpc_set_string(&w, "type", "video");
+    rp_xpc_set_string(&w, "type", cfg->audio ? "audio" : "video");
     rp_xpc_dict_end(&w);
     if (w.overflow) goto fail;
 
@@ -700,7 +730,7 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
         pthread_create(&dbg_t, NULL, svc_watch_loop, m);   /* watch what the device says post-negotiation */
         pthread_detach(dbg_t);
     }
-    printf("  media stream negotiated, receiving on port %d\n", recv_port);
+    printf("  %s stream negotiated, receiving on port %d\n", cfg->audio ? "audio" : "media", recv_port);
     m->negotiated = 1;
 
     clock_gettime(CLOCK_MONOTONIC, &m->started);

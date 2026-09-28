@@ -11,6 +11,7 @@ the machine:
 |---|---|
 | `127.0.0.1:9876` | control. One JSON object per line in, one per line out. |
 | `127.0.0.1:9877` | video. A raw Annex-B HEVC byte stream, one per connected viewer. |
+| `127.0.0.1:9878` | audio. The device's sound, one AAC-ELD frame per record (below). |
 
 ## Envelope
 
@@ -94,6 +95,24 @@ is the concrete reason to build it, beyond cleaner video.
 ```
 Not in rplay's surface; added because "is video actually flowing" is the first question when a live
 view looks wrong.
+
+The C engine adds `"audio": {"port": 9878, "streaming", "listeners", "frames"}`.
+
+## Audio (port 9878)
+
+The device's sound, as Device Hub 27 plays it: a second `startmediastream` on the display service
+with `type: "audio"` (negotiator mode 6). The engine negotiates it when the first listener connects
+and forwards every frame untouched, as records of
+
+```
+<u16 BE length> <u32 BE RTP timestamp> <frame>
+```
+
+Each frame is one AAC-ELD access unit: 48 kHz, stereo, 480 samples (10 ms), so 100 records a
+second. A 4-byte frame is the encoder's silence frame, sent continuously while nothing plays.
+The decoder config is AudioSpecificConfig `f8 e6 50 00` (ER AAC-ELD, 48 kHz, 2 channels,
+480-sample frames); AudioToolbox wants it wrapped in an ES descriptor (see
+`app/rPlayHub/AudioStream.swift`), FFmpeg takes it as bare extradata.
 
 ### `quit` → `{"quitting": true}`
 Stops the daemon (it `_exit`s right after replying). Exists so a stuck-looking daemon can be

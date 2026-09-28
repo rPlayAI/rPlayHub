@@ -37,6 +37,10 @@ static api_session *g_session;
 /* The live stream and its viewers. Declared here because stream_info reports on them and is
  * defined above the fan-out that owns them. */
 static media_session *g_media;
+/* The audio stream and its listeners (see ensure_audio), declared here for stream_info. */
+static media_session *g_audio;
+static int audio_count;
+static uint64_t audio_frames;
 static int viewer_count;
 /* NALs dropped because a viewer could not keep up. Declared here because
  * stream_info reports it and is defined above the fan-out that maintains it. */
@@ -2098,14 +2102,17 @@ static void method_stream_info(int fd, long id)
               "\"nals\":%llu,\"rtp_packets\":%llu,\"keyframes\":%llu,\"rtp_lost\":%llu,"
               "\"loss_pct\":%.2f,\"mbps\":%.2f,\"ltr_acked\":%llu,\"rtp_malformed\":%llu,\"rtp_late\":%llu,\"rtp_dup\":%llu,"
               "\"engine\":\"cdhostd\",\"streaming\":%s,\"viewer_drops\":%llu,"
-              "\"display_service_port\":%ld,\"hid_service_port\":%ld}}",
+              "\"display_service_port\":%ld,\"hid_service_port\":%ld,"
+              "\"audio\":{\"port\":%d,\"streaming\":%s,\"listeners\":%d,\"frames\":%llu}}}",
               id, STREAM_PORT, viewer_count,
               (unsigned long long)nals, (unsigned long long)packets,
               (unsigned long long)keys, (unsigned long long)lost,
               loss_pct, mbps, (unsigned long long)acks, (unsigned long long)bad,
               (unsigned long long)late, (unsigned long long)dup,
               g_media ? "true" : "false", (unsigned long long)viewer_drops_total,
-              s->display_port, s->hid_port);
+              s->display_port, s->hid_port,
+              AUDIO_PORT, g_audio ? "true" : "false", audio_count,
+              (unsigned long long)audio_frames);
 }
 
 /* ------------------------------------------------------------------ video fan-out
@@ -2259,6 +2266,78 @@ static void ensure_media(void)
     printf("  starting the media stream (viewer connected)\n");
     g_media = media_start(&cfg, on_media_nal, NULL);
     if (!g_media) printf("  media stream failed to start\n");
+}
+
+/* ------------------------------------------------------------------ audio
+ *
+ * Device Hub 27 plays the phone's sound, and it is one more media stream on the same service:
+ * startmediastream with type "audio". The frames are forwarded untouched -- the app decodes them
+ * with the platform's AAC-ELD decoder -- so this is plumbing only. Listeners are non-blocking and
+ * a slow one loses frames rather than holding up the RTP thread, as with video. */
+static pthread_mutex_t audio_lock = PTHREAD_MUTEX_INITIALIZER;
+static int audio_fds[MAX_VIEWERS];
+
+static void on_media_audio(void *ctx, const uint8_t *frame, size_t len, uint32_t rtp_ts)
+{
+    (void)ctx;
+    if (len > 0xFFFF) return;
+    uint8_t rec[6 + 2048];
+    if (len > sizeof rec - 6) return;
+    rec[0] = (uint8_t)(len >> 8); rec[1] = (uint8_t)len;
+    rec[2] = (uint8_t)(rtp_ts >> 24); rec[3] = (uint8_t)(rtp_ts >> 16);
+    rec[4] = (uint8_t)(rtp_ts >> 8);  rec[5] = (uint8_t)rtp_ts;
+    memcpy(rec + 6, frame, len);
+    audio_frames++;
+    pthread_mutex_lock(&audio_lock);
+    for (int i = 0; i < audio_count; ) {
+        ssize_t w = send(audio_fds[i], rec, len + 6, 0);
+        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            close(audio_fds[i]);
+            audio_fds[i] = audio_fds[--audio_count];
+            continue;
+        }
+        /* A partial record would desynchronise the framing; a full buffer means the listener is
+         * not reading, so it is dropped rather than repaired. */
+        if (w >= 0 && (size_t)w != len + 6) {
+            close(audio_fds[i]);
+            audio_fds[i] = audio_fds[--audio_count];
+            continue;
+        }
+        i++;
+    }
+    pthread_mutex_unlock(&audio_lock);
+}
+
+static void audio_add(int fd)
+{
+    int fl = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    int sndbuf = 256 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof sndbuf);
+    pthread_mutex_lock(&audio_lock);
+    if (audio_count >= MAX_VIEWERS) { pthread_mutex_unlock(&audio_lock); close(fd); return; }
+    audio_fds[audio_count++] = fd;
+    pthread_mutex_unlock(&audio_lock);
+}
+
+static void ensure_audio(void)
+{
+    if (g_audio) return;
+    const api_session *s = g_session;
+    if (!s->display_port) { printf("  no displayservice port; no audio\n"); return; }
+    media_config cfg = {
+        .device_addr = s->tunnel_addr,
+        .our_addr = s->our_addr,
+        .display_port = s->display_port,
+        /* Its own SSRC: the device ties RTCP to the stream by it, and two streams sharing one
+         * would have each one's reports counted against the other. */
+        .ssrc = s->ssrc ^ 0x5A5A0001u,
+        .audio = 1,
+        .on_audio = on_media_audio,
+    };
+    printf("  starting the audio stream (listener connected)\n");
+    g_audio = media_start(&cfg, NULL, NULL);
+    if (!g_audio) printf("  audio stream failed to start\n");
 }
 
 /* Everything a player needs to talk to the device itself.
@@ -2718,6 +2797,8 @@ int api_serve(api_session *session)
 
     int api_fd = listen_on(API_PORT);
     int video_fd = want_proxy ? listen_on(STREAM_PORT) : -1;
+    /* Not fatal: without it the phone is simply silent, which is how it always was. */
+    int audio_fd = listen_on(AUDIO_PORT);
     if (api_fd < 0 || (want_proxy && video_fd < 0)) {
         fprintf(stderr, "  cannot listen on %d/%d: %s\n", API_PORT, STREAM_PORT, strerror(errno));
         fprintf(stderr, "  another cdhost is probably still running -- this one can serve nobody,\n"
@@ -2730,13 +2811,19 @@ int api_serve(api_session *session)
                "RTP directly)\n", STREAM_PORT);
     else
         printf("  video:   off (RPLAY_NO_VIDEO_PROXY=1) — players take RTP directly\n");
+    if (audio_fd >= 0)
+        printf("  audio:   127.0.0.1:%d (AAC-ELD frames, <u16 len><u32 ts><frame>)\n", AUDIO_PORT);
+    else
+        printf("  audio:   cannot listen on %d: %s\n", AUDIO_PORT, strerror(errno));
 
     for (;;) {
         fd_set rd;
         FD_ZERO(&rd);
         FD_SET(api_fd, &rd);
         if (video_fd >= 0) FD_SET(video_fd, &rd);
+        if (audio_fd >= 0) FD_SET(audio_fd, &rd);
         int maxfd = api_fd > video_fd ? api_fd : video_fd;
+        if (audio_fd > maxfd) maxfd = audio_fd;
         if (select(maxfd + 1, &rd, NULL, NULL, NULL) < 0) {
             if (errno == EINTR) continue;
             break;
@@ -2764,8 +2851,19 @@ int api_serve(api_session *session)
                 media_request_keyframe(g_media);   /* a static screen would leave it black */
             }
         }
+        if (audio_fd >= 0 && FD_ISSET(audio_fd, &rd)) {
+            int fd = accept(audio_fd, NULL, NULL);
+            if (fd >= 0) {
+                int one = 1;
+                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+                printf("  audio listener connected (%d total)\n", audio_count + 1);
+                ensure_audio();
+                audio_add(fd);
+            }
+        }
     }
     close(api_fd);
     if (video_fd >= 0) close(video_fd);
+    if (audio_fd >= 0) close(audio_fd);
     return 0;
 }

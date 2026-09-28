@@ -48,11 +48,21 @@ typedef struct {
      * sent, and from the right SSRC -- enabling it without them is worse than leaving it off,
      * because errors then anchor instead of washing out. */
     int ltrp_enabled;
+
+    /* Ask for the device's sound instead of its screen: negotiator mode 6 and an audio-settings
+     * blob. Everything else -- the plist, the tiers, the decoder name -- is shared, exactly as it
+     * is in Device Hub's own pair of offers. */
+    int audio;
 } rp_offer_params;
 
 /* Build the uncompressed protobuf blob. Returns its length, or 0 on overflow. Exposed separately
  * from the plist so it can be compared byte-for-byte against the Python and against captures. */
 size_t rp_media_blob_video(const rp_offer_params *p, uint8_t *out, size_t cap);
+
+/* The audio variant, from Device Hub 27's capture. Field 3 replaces field 5's video settings:
+ * {1: our SSRC, 4: 24191 -- the codec set Device Hub offers}. The device answers AAC-ELD,
+ * 48 kHz stereo, 480 samples per packet, on RTP payload type 101. */
+size_t rp_media_blob_audio(const rp_offer_params *p, uint8_t *out, size_t cap);
 
 /* Build the complete offer: blob -> zlib level 9 -> binary plist. Returns length, or 0. */
 size_t rp_build_offer(const rp_offer_params *p, uint8_t *out, size_t cap);

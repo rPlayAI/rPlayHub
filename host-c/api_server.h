@@ -17,6 +17,9 @@
 
 #define API_PORT    9876
 #define STREAM_PORT 9877
+/* The device's sound: AAC-ELD, 48 kHz stereo, 480 samples a frame, one frame per record --
+ * <u16 BE length><u32 BE RTP timestamp><frame>. Negotiated when the first listener connects. */
+#define AUDIO_PORT  9878
 
 /* One attached device, as usbmuxd reports it.
  *

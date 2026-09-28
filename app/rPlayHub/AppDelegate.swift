@@ -28,6 +28,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var usb: USBMirror?
     private var usbAttempts = 0
     private var directStream: DirectStream?
+    /// The phone's sound, from the engine's audio port. Runs whenever video does.
+    private var audio: AudioStream?
+    private var audioItem: NSMenuItem?
+    private static let playAudioKey = "PlayiPhoneAudio"
+    private var playAudio: Bool {
+        get { UserDefaults.standard.object(forKey: Self.playAudioKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Self.playAudioKey) }
+    }
     /// Kept so the status timer can compare what we acknowledged against what we actually decoded.
     private var videoDecoder: VideoDecoder?
     /// Last RTP loss count written to the log, so only changes are recorded.
@@ -530,6 +538,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(withTitle: "Show Controls", action: #selector(toggleControls),
                          keyEquivalent: "i")
+        viewMenu.addItem(.separator())
+        let audioItem = viewMenu.addItem(withTitle: "Play iPhone Audio",
+                                         action: #selector(togglePlayAudio), keyEquivalent: "")
+        audioItem.target = self
+        audioItem.state = playAudio ? .on : .off
+        self.audioItem = audioItem
         viewItem.submenu = viewMenu
 
         // Device menu — the actions Device Hub groups for the selected device.
@@ -587,6 +601,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSDK() {
         if let url = URL(string: Self.sdkURL) { NSWorkspace.shared.open(url) }
+    }
+
+    // MARK: - audio
+
+    /// Sound follows the picture: it starts with View Screen, and is independent of which video
+    /// route is in use, because the engine serves it either way.
+    private func startAudio() {
+        guard playAudio, audio == nil else { return }
+        let a = AudioStream()
+        a.onDisconnect = { [weak self] reason in
+            guard let self else { return }
+            AppBuild.log("audio stream ended: \(reason)")
+            self.audio = nil
+            // The engine restarts on device switches; try again while the picture still wants it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self, self.wantsVideo else { return }
+                self.startAudio()
+            }
+        }
+        do {
+            try a.start()
+            audio = a
+            AppBuild.log("audio: playing the device's sound")
+        } catch {
+            AppBuild.log("audio: not available (\(error))")
+        }
+    }
+
+    private func stopAudio() {
+        audio?.stop()
+        audio = nil
+    }
+
+    @objc private func togglePlayAudio() {
+        playAudio.toggle()
+        audioItem?.state = playAudio ? .on : .off
+        if playAudio {
+            if wantsVideo { startAudio() }
+        } else {
+            stopAudio()
+        }
     }
 
     // Device-menu actions, routed to the same handlers the control strip / right-click use.
@@ -869,6 +924,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         retryDelay = AppDelegate.retryDelayBase
         directStream?.stop()
         directStream = nil
+        stopAudio()
         stream?.stop()
         control?.close()
         stream = nil
@@ -1053,6 +1109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// connect() so the View Screen click can run it directly against the control connection
     /// connect() already established, without repeating that handshake.
     private func startVideo(_ c: ControlClient) {
+        startAudio()
         // Prefer receiving RTP ourselves, with nothing in the data path.
         //
         // The daemon only has to create the utun; once it exists the tunnel addresses are

@@ -47,6 +47,14 @@ typedef struct {
      * crops to it. Decoding is unaffected -- the full frame still decodes consistently, so the
      * reference chain is intact; only what is *shown* has to be cropped. */
     void      (*on_active_rect)(void *ctx, uint32_t width, uint32_t height);
+
+    /* Negotiate the device's SOUND instead of its screen (Device Hub 27 does both, audio first).
+     * Same service, same RTP socket and RTCP keepalive; the differences are the offer (mode 6),
+     * `type: "audio"`, and no keyframe or rate-control feedback. Each RTP payload is one AAC-ELD
+     * access unit -- 48 kHz stereo, 480 samples -- handed to on_audio as is, with its RTP
+     * timestamp. A 4-byte payload is the encoder's silence frame and decodes like any other. */
+    int         audio;
+    void      (*on_audio)(void *ctx, const uint8_t *frame, size_t len, uint32_t rtp_ts);
 } media_config;
 
 /* Called on the receive thread for every NAL, already framed with a start code.
@@ -58,6 +66,7 @@ typedef struct {
 typedef void (*media_nal_fn)(void *ctx, const uint8_t *annexb, size_t len, int is_parameter_set,
                              int is_keyframe, int end_of_frame);
 
+/* on_nal is ignored, and may be NULL, when cfg->audio is set. */
 media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *ctx);
 void media_stop(media_session *m);
 

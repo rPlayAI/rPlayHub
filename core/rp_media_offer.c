@@ -9,6 +9,10 @@
  * All measured against Apple's own offer, not invented. */
 #define DECODER_NAME            "Viceroy 1.7.0"
 #define NEGOTIATOR_MODE_VIDEO   5
+#define NEGOTIATOR_MODE_AUDIO   6
+/* Audio settings field 4, as Device Hub 27 offers it. The device answers 5632 there and picks
+ * AAC-ELD; the bits are a codec set, but only this exact value has been seen to work. */
+#define AUDIO_CODEC_SET         24191
 #define RES_ENTRY_CODEC_CAP_ID  50115
 /* The feature-list string the device negotiates against.
  *
@@ -135,6 +139,28 @@ static size_t codec_bank(uint8_t *out, size_t cap, uint32_t payload_type,
     return w.overflow ? 0 : w.len;
 }
 
+/* Fields 6 onward are the same in the audio and the video offer: decoder name, bitrate tiers,
+ * timestamp and the trailing flags. */
+static size_t blob_tail(pb *w)
+{
+    pb_fs(w, 6, DECODER_NAME);
+    pb_fv(w, 8, 0);
+    for (size_t i = 0; i < sizeof TIERS / sizeof TIERS[0]; i++) {
+        uint8_t t[64];
+        pb tw = { t, sizeof t, 0, 0 };
+        pb_fv(&tw, 1, TIERS[i].f1);
+        pb_fv(&tw, 2, TIERS[i].f2);
+        if (TIERS[i].has_f3) pb_fv(&tw, 3, TIERS[i].f3);
+        if (tw.overflow) return 0;
+        pb_fb(w, 9, t, tw.len);
+    }
+    pb_fv(w, 13, CAPTURED_VIDEO_TIMESTAMP);
+    pb_fv(w, 14, 2);
+    pb_fv(w, 16, 0);
+    pb_fv(w, 18, 1);
+    return w->overflow ? 0 : w->len;
+}
+
 size_t rp_media_blob_video(const rp_offer_params *p, uint8_t *out, size_t cap)
 {
     uint8_t hevc[256], avc[256], vs[1024];
@@ -161,22 +187,26 @@ size_t rp_media_blob_video(const rp_offer_params *p, uint8_t *out, size_t cap)
     pb_fv(&w, 1, 1);
     pb_fv(&w, 2, 1);
     pb_fb(&w, 5, vs, v.len);
-    pb_fs(&w, 6, DECODER_NAME);
-    pb_fv(&w, 8, 0);
-    for (size_t i = 0; i < sizeof TIERS / sizeof TIERS[0]; i++) {
-        uint8_t t[64];
-        pb tw = { t, sizeof t, 0, 0 };
-        pb_fv(&tw, 1, TIERS[i].f1);
-        pb_fv(&tw, 2, TIERS[i].f2);
-        if (TIERS[i].has_f3) pb_fv(&tw, 3, TIERS[i].f3);
-        if (tw.overflow) return 0;
-        pb_fb(&w, 9, t, tw.len);
-    }
-    pb_fv(&w, 13, CAPTURED_VIDEO_TIMESTAMP);
-    pb_fv(&w, 14, 2);
-    pb_fv(&w, 16, 0);
-    pb_fv(&w, 18, 1);
-    return w.overflow ? 0 : w.len;
+    return blob_tail(&w);
+}
+
+size_t rp_media_blob_audio(const rp_offer_params *p, uint8_t *out, size_t cap)
+{
+    uint8_t as[64];
+    pb a = { as, sizeof as, 0, 0 };
+    pb_fv(&a, 1, p->ssrc);
+    pb_fv(&a, 2, 0);
+    pb_fv(&a, 3, 0);
+    pb_fv(&a, 4, AUDIO_CODEC_SET);
+    pb_fv(&a, 5, 0);
+    pb_fv(&a, 6, 0);
+    if (a.overflow) return 0;
+
+    pb w = { out, cap, 0, 0 };
+    pb_fv(&w, 1, 1);
+    pb_fv(&w, 2, 1);
+    pb_fb(&w, 3, as, a.len);
+    return blob_tail(&w);
 }
 
 static size_t endpoint_info(const rp_offer_params *p, uint8_t *out, size_t cap)
@@ -247,7 +277,8 @@ static void bp_data(bplist *b, const uint8_t *d, size_t n)
 size_t rp_build_offer(const rp_offer_params *p, uint8_t *out, size_t cap)
 {
     uint8_t blob[4096], comp[4096], endp[128];
-    size_t nblob = rp_media_blob_video(p, blob, sizeof blob);
+    size_t nblob = p->audio ? rp_media_blob_audio(p, blob, sizeof blob)
+                         : rp_media_blob_video(p, blob, sizeof blob);
     if (!nblob) return 0;
 
     /* Level 9 specifically. Other levels produce a valid deflate stream that the device
@@ -278,7 +309,7 @@ size_t rp_build_offer(const rp_offer_params *p, uint8_t *out, size_t cap)
     bp_ascii(&b, "avcMediaStreamOptionCallID");               /* 3 */
     bp_ascii(&b, "avcMediaStreamOptionRemoteEndpointInfo");   /* 4 */
     bp_data(&b, comp, clen);                                  /* 5 */
-    bp_int(&b, NEGOTIATOR_MODE_VIDEO);                        /* 6 */
+    bp_int(&b, p->audio ? NEGOTIATOR_MODE_AUDIO : NEGOTIATOR_MODE_VIDEO);  /* 6 */
     bp_ascii(&b, p->call_id);                                 /* 7 */
     bp_data(&b, endp, nend);                                  /* 8 */
 

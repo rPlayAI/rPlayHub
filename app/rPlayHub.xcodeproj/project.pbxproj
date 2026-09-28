@@ -45,6 +45,7 @@
 		1A0000000000000000000027 /* DeviceSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000019 /* DeviceSidebar.swift */; };
 		1A0000000000000000000028 /* ControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000000000000000000001A /* ControlPanel.swift */; };
 		1A00000000000000000000F2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A00000000000000000000F1 /* Assets.xcassets */; };
+		1A00000000000000000000F4 /* AudioStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000000000000000000F3 /* AudioStream.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -89,6 +90,7 @@
 		1A0000000000000000000019 /* DeviceSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSidebar.swift; sourceTree = "<group>"; };
 		1A000000000000000000001A /* ControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanel.swift; sourceTree = "<group>"; };
 		1A00000000000000000000F1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		1A00000000000000000000F3 /* AudioStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStream.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -154,6 +156,7 @@
 				1A000000000000000000005E /* SimulatorList.swift */,
 				1A0000000000000000000030 /* VideoDecoder.swift */,
 				1A0000000000000000000014 /* StreamClient.swift */,
+				1A00000000000000000000F3 /* AudioStream.swift */,
 				1A0000000000000000000015 /* ControlClient.swift */,
 				1A0000000000000000000016 /* TCPSocket.swift */,
 				1A0000000000000000000019 /* DeviceSidebar.swift */,
@@ -234,6 +237,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1A00000000000000000000F4 /* AudioStream.swift in Sources */,
 				1A0000000000000000000020 /* main.swift in Sources */,
 				1A0000000000000000000021 /* AppDelegate.swift in Sources */,
 				1A0000000000000000000022 /* MirrorView.swift in Sources */,
