@@ -37,6 +37,9 @@ Not affiliated with or endorsed by Apple. Device Hub, iPhone and iOS are Apple's
   speaks the CoreDevice protocol as iOS 27 ships it; earlier iOS releases are not supported.
 - The phone paired and trusted with the computer once (the usual "Trust This Computer" prompt).
 
+**On an older iPhone?** Use **rPlay**, the project rPlayHub belongs to. rPlay mirrors **every iOS
+version**, over **USB or wireless**, and controls the phone over **Bluetooth**.
+
 ## Download
 
 A signed and notarized DMG is on the [releases page](https://github.com/rPlayAI/rPlayHub/releases).
