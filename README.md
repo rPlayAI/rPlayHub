@@ -1,15 +1,34 @@
 # rPlayHub
 
-An open-source, **cross-platform alternative to Apple's Device Hub**. Mirror and control an
-iPhone from **macOS or Linux** — live screen, click-to-tap, drag-to-swipe, app and profile
-management, crash reports and the device's own settings.
+[![Latest release](https://img.shields.io/github/v/release/rPlayAI/rPlayHub?label=download&color=2ea44f)](https://github.com/rPlayAI/rPlayHub/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B%20%7C%20Linux-lightgrey)](#platforms)
+[![iOS](https://img.shields.io/badge/iOS-27%2B-blue)](#requirements)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-yellow)](LICENSE)
+
+**scrcpy for iOS** — and a **cross-platform clone of Apple's Device Hub**. Mirror and control an
+iPhone from **macOS or Linux**, with **Windows and Raspberry Pi** next: live screen,
+click-to-tap, drag-to-swipe, app and profile management, crash reports and the device's own
+settings.
 
 Apple's Device Hub ships inside Xcode and runs on macOS only. rPlayHub is a from-scratch
 **CoreDevice host**: it speaks the protocol directly, so there is **no Xcode and no Apple daemon
-in the runtime path**, and the same engine drives a native macOS app or a Linux GUI. Think of it
-as **`adb` for iPhone**. It is a development tool, not a consumer product.
+in the runtime path**, and the same engine drives a native macOS app or a Linux GUI. Where scrcpy
+does this for Android over `adb`, rPlayHub does it for iPhone over CoreDevice — nothing to install
+on the phone.
+
+rPlayHub is part of **rPlay**, the universal mirroring project. Its sibling for Android is
+[rPlayHub for Android](https://github.com/rPlayAI/rplayhub-android), which already ships the 3D
+view and fold view described below.
+
+Not affiliated with or endorsed by Apple. Device Hub, iPhone and iOS are Apple's trademarks.
 
 ![rPlayHub mirroring an iPhone 12, with the device's app list alongside](doc/images/rplayhub.png)
+
+## Requirements
+
+- **iOS 27 or later on the iPhone — for every version of rPlayHub**, on every platform. rPlayHub
+  speaks the CoreDevice protocol as iOS 27 ships it; earlier iOS releases are not supported.
+- The phone paired and trusted with the computer once (the usual "Trust This Computer" prompt).
 
 ## Download
 
@@ -18,6 +37,18 @@ macOS 14 or later, Apple silicon. Open it and drag rPlayHub to Applications.
 
 The app talks to a small engine (`cdhost`) that it starts for you. Building that from source is
 covered in [BUILD.md](BUILD.md).
+
+## Platforms
+
+| | |
+|---|---|
+| **macOS** | Swift + AppKit, VideoToolbox — **shipping** (notarized DMG) |
+| **Linux** | the same C engine, FFmpeg decode, SDL2 + Dear ImGui (`client-c/`) — **working**, built in CI on every push; build from source for now |
+| **Raspberry Pi** | the Linux client on arm64 — **next**, with the Pi's hardware decoder |
+| **Windows** | the same engine over Winsock, FFmpeg or Media Foundation decode — **upcoming** |
+
+The engine (`host-c/`, `core/`) is portable C; what is platform-bound is the tunnel interface,
+video decode and the window shell. `app/PORTING.md` has the seams.
 
 ## Where it is, and where it is going
 
@@ -29,21 +60,25 @@ Working today, and what the DMG above ships:
   partition, read crash reports, spins and logs, stream the console.
 - **Device settings** — appearance, text size, reduce motion, VoiceOver, simulated location and
   the rest, read and written live.
-- **Linux** — the same engine behind a Dear ImGui front-end (`client-c/`), built in CI on every
-  push. Less polished than the macOS app; the protocol underneath is the same.
 
-Planned, and past what Device Hub does:
+Planned, and past what Device Hub does — the same features rPlayHub for Android ships today:
 
+- **3D view** — the iPhone as a 3D model that turns as the real one turns, driven by the
+  device's motion sensors, with the live mirror mapped onto its glass. Drag to orbit, re-centre
+  to calibrate. ([See it on Android.](https://github.com/rPlayAI/rplayhub-android#the-3d-device-twin-and-foldables))
+- **Fold view** — for a foldable iPhone: two hinged halves that follow the real hinge, shown
+  face-on for recording, with the moving half drawn as a hard cut, locked, or stylized (blurring
+  to frosted glass as it swings).
 - **Sensor-aware viewing** — orientation and motion from the device, not just its framebuffer.
-- **3D viewing** — the phone as a model you can tilt, driven by live sensor data.
 - **`adb`-shaped client/server** — one long-running server keeping tunnels warm across many
   devices, with a thin CLI and the GUIs as clients.
 - **Remote iPhone** — a phone on another network usable from here.
 
-A note on the first two: CoreDevice exposes no sensor telemetry — screen, HID, apps, profiles and
-logs, but nothing from the IMU. Those features therefore need a small companion app on the device
-feeding data back over the tunnel. That stays **optional**: without it everything above still
-works, and the host-side tool keeps needing nothing installed on the phone.
+A note on the sensor features: CoreDevice exposes no sensor telemetry — screen, HID, apps,
+profiles and logs, but nothing from the IMU or a hinge. 3D view, fold view and sensor-aware
+viewing therefore need a small companion app on the device feeding data back over the tunnel.
+That stays **optional**: without it everything else still works, and mirroring keeps needing
+nothing installed on the phone.
 
 ## Languages
 
@@ -126,7 +161,7 @@ this Mac with wifi-sync on, so usbmuxd lists it as `ConnectionType=Network`.
 
 ## Status — verified live, stated precisely
 
-- Transport → RSD (85 services) on iPhone 12 Pro (iOS 26.5.2, USB) and iPhone 13 Pro (iOS 27,
+- Transport → RSD (85 services) on iPhone 12 Pro (USB) and iPhone 13 Pro (iOS 27,
   wifi). ✅
 - Screenshot (PNG). ✅
 - Tap / swipe — really moves the UI (opened Safari). ✅
