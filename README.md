@@ -16,6 +16,13 @@ in the runtime path**, and the same engine drives a native macOS app or a Linux 
 does this for Android over `adb`, rPlayHub does it for iPhone over CoreDevice — nothing to install
 on the phone.
 
+**It is for everyone, not just developers.** Use it as an **iPhone Mirroring app**: your
+iPhone's screen live in a window on your computer, and your mouse working as your finger — tap,
+swipe, scroll, open apps. Like Apple's iPhone Mirroring, but on Linux too, and with the phone
+still usable in your hand while it is mirrored. Plug the phone in, trust the computer once, and
+it is there. Developers get the rest of Device Hub on top:
+apps, profiles, logs, crash reports and the device's settings.
+
 rPlayHub is part of **rPlay**, the universal mirroring project. Its sibling for Android is
 [rPlayHub for Android](https://github.com/rPlayAI/rplayhub-android), which already ships the 3D
 view and fold view described below.
