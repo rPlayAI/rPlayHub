@@ -7,6 +7,8 @@ Think of it as **`adb` for iPhone**, plus a GUI in the shape of Apple's Device H
 and a live **View Screen** window you can click and drag in. It is a development tool, not a
 consumer product.
 
+![rPlayHub mirroring an iPhone 12, with the device's app list alongside](doc/images/rplayhub.png)
+
 ## Download
 
 A signed and notarized DMG is on the [releases page](https://github.com/rPlayAI/rPlayHub/releases).
