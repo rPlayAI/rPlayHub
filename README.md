@@ -1,11 +1,13 @@
 # rPlayHub
 
-A from-scratch **CoreDevice host** that mirrors and controls an iPhone — screenshot, live HEVC
-screen video, touch/HID injection — with **no Xcode and no Apple daemons in the runtime path**.
+An open-source, **cross-platform alternative to Apple's Device Hub**. Mirror and control an
+iPhone from **macOS or Linux** — live screen, click-to-tap, drag-to-swipe, app and profile
+management, crash reports and the device's own settings.
 
-Think of it as **`adb` for iPhone**, plus a GUI in the shape of Apple's Device Hub: a device list
-and a live **View Screen** window you can click and drag in. It is a development tool, not a
-consumer product.
+Apple's Device Hub ships inside Xcode and runs on macOS only. rPlayHub is a from-scratch
+**CoreDevice host**: it speaks the protocol directly, so there is **no Xcode and no Apple daemon
+in the runtime path**, and the same engine drives a native macOS app or a Linux GUI. Think of it
+as **`adb` for iPhone**. It is a development tool, not a consumer product.
 
 ![rPlayHub mirroring an iPhone 12, with the device's app list alongside](doc/images/rplayhub.png)
 
@@ -17,15 +19,31 @@ macOS 14 or later, Apple silicon. Open it and drag rPlayHub to Applications.
 The app talks to a small engine (`cdhost`) that it starts for you. Building that from source is
 covered in [BUILD.md](BUILD.md).
 
-## Goals, in priority order
+## Where it is, and where it is going
 
-1. **Mirroring + control GUI** — a Device Hub-style View Screen: live screen, click-to-tap,
-   drag-to-swipe. Working today; this is what the DMG above ships.
-2. **`adb`-shaped client/server** — a long-running server that keeps device tunnels warm and
-   multiplexes many devices, with a thin CLI and a GUI as clients.
-3. **Remote iPhone** — a phone on another network usable from here, both for our own
-   mirroring/control and, the harder half, **visible to Xcode**. See the "not verified" note
-   below before treating that as a feature.
+Working today, and what the DMG above ships:
+
+- **Live mirroring and control** — HEVC screen video over the CoreDevice tunnel, with clicks and
+  drags mapped to the device's own coordinate space.
+- **Device management** — install and remove apps and configuration profiles, browse the Media
+  partition, read crash reports, spins and logs, stream the console.
+- **Device settings** — appearance, text size, reduce motion, VoiceOver, simulated location and
+  the rest, read and written live.
+- **Linux** — the same engine behind a Dear ImGui front-end (`client-c/`), built in CI on every
+  push. Less polished than the macOS app; the protocol underneath is the same.
+
+Planned, and past what Device Hub does:
+
+- **Sensor-aware viewing** — orientation and motion from the device, not just its framebuffer.
+- **3D viewing** — the phone as a model you can tilt, driven by live sensor data.
+- **`adb`-shaped client/server** — one long-running server keeping tunnels warm across many
+  devices, with a thin CLI and the GUIs as clients.
+- **Remote iPhone** — a phone on another network usable from here.
+
+A note on the first two: CoreDevice exposes no sensor telemetry — screen, HID, apps, profiles and
+logs, but nothing from the IMU. Those features therefore need a small companion app on the device
+feeding data back over the tunnel. That stays **optional**: without it everything above still
+works, and the host-side tool keeps needing nothing installed on the phone.
 
 ## Languages
 

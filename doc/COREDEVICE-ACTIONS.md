@@ -2,7 +2,7 @@
 
 What Device Hub actually sends to change a device setting, plus the complete list of actions
 Apple's own frameworks know about. Established 2026-08-28 from a live capture plus the framework
-binaries; see `doc/DEVICEHUB-UI-CLONE.md` for how this fits the UI clone.
+binaries.
 
 ## It is not usbmux
 
