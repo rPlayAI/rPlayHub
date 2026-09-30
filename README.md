@@ -36,7 +36,7 @@ The macOS app:
 The Linux client, the same layout: an iPhone 13 Pro mirrored in the middle, its info, battery
 and storage on the right.
 
-![rPlayHub on Linux mirroring an iPhone 13 Pro, with the Info tab alongside](doc/images/rplayhub-linux.png)
+![rPlayHub on Linux mirroring an iPhone 13 Pro, with the Info tab alongside](doc/images/rplayhub-linux-gui.png)
 
 ## Requirements
 
