@@ -14,7 +14,7 @@ FFMPEG_DIR ?= ../deps/ffmpeg
 
 # The Linux client's version: what scripts/package-deb.sh stamps on the .deb and the release tag
 # (linux-v<version>) carries. Independent of the macOS app's MARKETING_VERSION.
-RPLAYHUB_VERSION := 0.1.2
+RPLAYHUB_VERSION := 0.1.3
 
 CFLAGS += -Wall -Wextra -O2
 LIBS   := $(shell pkg-config --libs sdl2)

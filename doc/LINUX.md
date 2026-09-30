@@ -14,7 +14,7 @@ Download the `.deb` from the [latest Linux release](https://github.com/rPlayAI/r
 and install it:
 
 ```sh
-sudo apt install ./rplayhub_0.1.2-1_amd64.deb
+sudo apt install ./rplayhub_0.1.3-1_amd64.deb
 ```
 
 It installs:

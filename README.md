@@ -48,7 +48,7 @@ version**, over **USB or wireless**, and controls the phone over **Bluetooth**.
 | | |
 |---|---|
 | **macOS 14+** (Apple silicon) | [rPlayHub 0.1.1](https://github.com/rPlayAI/rPlayHub/releases/tag/v0.1.1) — signed and notarized DMG; open it and drag rPlayHub to Applications |
-| **Linux x86_64** (Ubuntu 22.04+, Debian 12+) | [rPlayHub for Linux 0.1.2](https://github.com/rPlayAI/rPlayHub/releases/tag/linux-v0.1.2) — `.deb`; `sudo apt install ./rplayhub_0.1.2-1_amd64.deb`, then see [doc/LINUX.md](doc/LINUX.md) |
+| **Linux x86_64** (Ubuntu 22.04+, Debian 12+) | [rPlayHub for Linux 0.1.3](https://github.com/rPlayAI/rPlayHub/releases/tag/linux-v0.1.3) — `.deb`; `sudo apt install ./rplayhub_0.1.3-1_amd64.deb`, then see [doc/LINUX.md](doc/LINUX.md) |
 
 The app talks to a small engine (`cdhost`). On macOS the app starts it for you, and building it
 from source is covered in [BUILD.md](BUILD.md). On Linux the package installs both, and

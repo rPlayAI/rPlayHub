@@ -266,11 +266,24 @@ static json api_call(const std::string &method, const json &params = json::objec
     close(fd);
     if (reply.empty()) return {{"ok", false}, {"error", "empty reply from engine"}};
     try {
-        return json::parse(reply);
+        json r = json::parse(reply);
+        /* The engine reports failures as {"error": {"code": ..., "message": ...}}; every caller
+         * reads r["error"] as a string, so lift the message out here and keep the code beside
+         * it. Leaves a string error (our own, above) as it is. */
+        if (r.contains("error") && r["error"].is_object()) {
+            json err = r["error"];
+            r["error_code"] = err.value("code", "");
+            std::string msg = err.value("message", "");
+            if (msg.empty()) msg = err.value("code", "error");
+            r["error"] = msg;
+        }
+        return r;
     } catch (const std::exception &e) {
         return {{"ok", false}, {"error", std::string("bad json: ") + e.what()}};
     }
 }
+
+static void show_toast(const std::string &msg, uint64_t duration_ms);
 
 static std::mutex                        g_ui_cb_mu;
 static std::vector<std::function<void()>> g_ui_callbacks;
@@ -288,7 +301,16 @@ static void drain_ui_callbacks()
         std::lock_guard<std::mutex> lk(g_ui_cb_mu);
         batch.swap(g_ui_callbacks);
     }
-    for (auto &fn : batch) fn();
+    /* A reply whose shape the handler did not expect must not take the whole window down: report
+     * it and carry on. */
+    for (auto &fn : batch) {
+        try {
+            fn();
+        } catch (const std::exception &e) {
+            fprintf(stderr, "ui callback: %s\n", e.what());
+            show_toast(std::string("Unexpected reply from the engine: ") + e.what(), 8000);
+        }
+    }
 }
 
 static void api_async(const std::string &method, const json &params,
@@ -3578,8 +3600,12 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-scale") && i + 1 < argc) cli_scale = std::strtof(argv[++i], nullptr);
         else if (!strcmp(argv[i], "--system-titlebar")) g_system_titlebar = true;
         else if (!strcmp(argv[i], "--auto-connect")) g_view_screen = true;
+        else if (!strcmp(argv[i], "--help")) {
+            printf("usage: %s [-h host] [-p video_port] [-A api_port] [--no-audio] [-r 0|1] [-scale F] [--system-titlebar] [--auto-connect]\n", argv[0]);
+            return 0;
+        }
         else {
-            fprintf(stderr, "usage: %s [-h host] [-p video_port] [-A api_port] [--no-audio] [-r 0|1] [-scale F] [--system-titlebar]\n", argv[0]);
+            fprintf(stderr, "usage: %s [-h host] [-p video_port] [-A api_port] [--no-audio] [-r 0|1] [-scale F] [--system-titlebar] [--auto-connect]\n", argv[0]);
             return 2;
         }
     }
