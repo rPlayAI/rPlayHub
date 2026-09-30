@@ -12,6 +12,10 @@
 
 FFMPEG_DIR ?= ../deps/ffmpeg
 
+# The Linux client's version: what scripts/package-deb.sh stamps on the .deb and the release tag
+# (linux-v<version>) carries. Independent of the macOS app's MARKETING_VERSION.
+RPLAYHUB_VERSION := 0.1.2
+
 CFLAGS += -Wall -Wextra -O2
 LIBS   := $(shell pkg-config --libs sdl2)
 
@@ -20,8 +24,10 @@ ifneq ($(wildcard $(FFMPEG_DIR)/libavcodec/libavcodec.a),)
   # the system ffmpeg headers live there too, and silently shadowing the patched ones with
   # them only works while the two versions happen to match.
   CFLAGS += -I$(FFMPEG_DIR)
+  # -lz: the patched tree is configured --enable-zlib so libavcodec has the PNG decoder the GUI
+  # uses for app icons.
   LIBS   += $(FFMPEG_DIR)/libavcodec/libavcodec.a $(FFMPEG_DIR)/libswresample/libswresample.a \
-            $(FFMPEG_DIR)/libavutil/libavutil.a -lm -lpthread
+            $(FFMPEG_DIR)/libavutil/libavutil.a -lm -lpthread -lz
 else
   $(warning $(FFMPEG_DIR) not built -- linking SYSTEM ffmpeg; RVRA streams will garble under motion. Run scripts/build-ffmpeg-rvra.sh.)
   CFLAGS += $(shell pkg-config --cflags libavcodec libavutil)

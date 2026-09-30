@@ -11,6 +11,11 @@ They talk over `127.0.0.1:9876` (JSON lines) and `:9877` (Annex-B video), so eit
 rebuilt and restarted without the other. `scripts/live.sh` builds and runs both together and is
 the usual way in.
 
+**Linux** builds the same daemon plus the SDL2 + Dear ImGui GUI in `client-c/`, and packages
+both as a `.deb`. The dependencies, the three `scripts/` that build FFmpeg (RVRA-patched) and the
+libimobiledevice stack, the `make` lines and `scripts/package-deb.sh` are all in
+[doc/LINUX.md](doc/LINUX.md).
+
 ---
 
 ## The daemon

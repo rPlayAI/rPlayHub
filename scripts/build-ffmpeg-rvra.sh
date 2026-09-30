@@ -42,7 +42,7 @@ else
 fi
 
 if [[ ! -f ffbuild/config.mak ]]; then
-    ./configure --disable-doc --disable-autodetect --disable-network \
+    ./configure --disable-doc --disable-autodetect --disable-network --enable-zlib \
                 --disable-ffplay --disable-ffprobe
 fi
 make -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"

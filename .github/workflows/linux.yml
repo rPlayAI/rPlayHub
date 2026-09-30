@@ -12,7 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y pkg-config nasm libsdl2-dev
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config nasm libsdl2-dev zlib1g-dev
+          libx11-dev libxext-dev libgl-dev
       - name: cache RVRA ffmpeg
         uses: actions/cache@v4
         with:
@@ -70,3 +71,35 @@ jobs:
           export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/deps/imd/lib:${LD_LIBRARY_PATH:-}"
           timeout 10 ./host-c/cdhost | tee run.out || true
           grep -q "usbmux" run.out
+
+  # The Debian package, built the way a release is: the GUI on the RVRA ffmpeg, the engine on a
+  # libimobiledevice stack the script builds against the distribution's OpenSSL, and lintian over
+  # the result. Uploaded as an artifact so a push can be installed and tried.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config nasm libsdl2-dev zlib1g-dev
+          libx11-dev libxext-dev libgl-dev libssl-dev libcurl4-openssl-dev
+          autoconf automake libtool dpkg-dev fakeroot lintian
+      - name: cache RVRA ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: deps/ffmpeg
+          key: ffmpeg-rvra-${{ hashFiles('patches/ffmpeg-rvra.patch', 'scripts/build-ffmpeg-rvra.sh') }}
+      - run: ./scripts/build-ffmpeg-rvra.sh
+      - name: cache gui deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps/imgui
+            deps/json
+          key: gui-${{ hashFiles('scripts/fetch-gui-deps.sh') }}
+      - run: ./scripts/fetch-gui-deps.sh
+      - run: git clone --branch STABLE-2_2_1_RELEASE https://github.com/lwip-tcpip/lwip.git deps/lwip
+      - run: ./scripts/package-deb.sh
+      - run: sudo apt install -y ./build/deb/rplayhub_*.deb && rplayhub --help && rplayhub-engine --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rplayhub-deb
+          path: build/deb/rplayhub_*.deb

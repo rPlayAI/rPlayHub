@@ -45,18 +45,21 @@ version**, over **USB or wireless**, and controls the phone over **Bluetooth**.
 
 ## Download
 
-A signed and notarized DMG is on the [releases page](https://github.com/rPlayAI/rPlayHub/releases).
-macOS 14 or later, Apple silicon. Open it and drag rPlayHub to Applications.
+| | |
+|---|---|
+| **macOS 14+** (Apple silicon) | [rPlayHub 0.1.1](https://github.com/rPlayAI/rPlayHub/releases/tag/v0.1.1) — signed and notarized DMG; open it and drag rPlayHub to Applications |
+| **Linux x86_64** (Ubuntu 22.04+, Debian 12+) | [rPlayHub for Linux 0.1.2](https://github.com/rPlayAI/rPlayHub/releases/tag/linux-v0.1.2) — `.deb`; `sudo apt install ./rplayhub_0.1.2-1_amd64.deb`, then see [doc/LINUX.md](doc/LINUX.md) |
 
-The app talks to a small engine (`cdhost`) that it starts for you. Building that from source is
-covered in [BUILD.md](BUILD.md).
+The app talks to a small engine (`cdhost`). On macOS the app starts it for you, and building it
+from source is covered in [BUILD.md](BUILD.md). On Linux the package installs both, and
+[doc/LINUX.md](doc/LINUX.md) is the install, run and build guide.
 
 ## Platforms
 
 | | |
 |---|---|
 | **macOS** | Swift + AppKit, VideoToolbox — **shipping** (notarized DMG) |
-| **Linux** | the same C engine, FFmpeg decode, SDL2 + Dear ImGui (`client-c/`) — **working**, built in CI on every push; build from source for now |
+| **Linux** | the same C engine, FFmpeg decode, SDL2 + Dear ImGui (`client-c/`) — **shipping** (`.deb`, see [doc/LINUX.md](doc/LINUX.md)); built in CI on every push |
 | **Raspberry Pi** | the Linux client on arm64 — **next**, with the Pi's hardware decoder |
 | **Windows** | the same engine over Winsock, FFmpeg or Media Foundation decode — **upcoming** |
 
@@ -133,7 +136,7 @@ CarPlay is not part of this project; it was only where the earliest experiments 
 
 ## Quick start
 
-The app plus the engine — this is the product:
+On Linux: [doc/LINUX.md](doc/LINUX.md). On macOS, the app plus the engine — this is the product:
 
 ```
 sudo python3 host/mirror.py <udid>       # engine (needs root for the tunnel): :9877 video, :9876 control

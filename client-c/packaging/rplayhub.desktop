@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=rPlayHub
+Comment=Mirror and control an iPhone
+Exec=rplayhub
+Icon=rplayhub
+Terminal=false
+Categories=Utility;
+Keywords=iphone;ios;mirror;device hub;scrcpy;phone;

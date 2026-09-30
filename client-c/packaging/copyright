@@ -1,0 +1,25 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: rplayhub
+Source: https://github.com/rPlayAI/rPlayHub
+
+Files: *
+Copyright: 2026 rPlayAI
+License: GPL-3.0+
+Comment: rplayhub (the GUI) and cdhost (the engine) are built from this repository.
+ The GUI statically links FFmpeg's libavcodec, libswresample, libswscale and libavutil
+ (LGPL-2.1+, built from the 8.1.2 release with the repository's RVRA patch, no GPL or
+ nonfree components enabled), Dear ImGui and nlohmann/json (MIT). The engine statically
+ links libimobiledevice, libimobiledevice-glue, libusbmuxd, libplist and libtatsu
+ (LGPL-2.1+) and lwIP (BSD-3-Clause). Their source is available from the projects
+ named in scripts/build-ffmpeg-rvra.sh and scripts/build-imd-stack.sh.
+
+Files: usr/share/rplayhub/fonts/*
+Copyright: The Inter Project Authors
+License: OFL-1.1
+
+License: GPL-3.0+
+ On Debian systems the full text of the GNU General Public License version 3 can be
+ found in /usr/share/common-licenses/GPL-3.
+
+License: OFL-1.1
+ SIL Open Font License 1.1, https://scripts.sil.org/OFL.
