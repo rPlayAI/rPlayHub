@@ -29,7 +29,14 @@ view and fold view described below.
 
 Not affiliated with or endorsed by Apple. Device Hub, iPhone and iOS are Apple's trademarks.
 
-![rPlayHub mirroring an iPhone 12, with the device's app list alongside](doc/images/rplayhub.png)
+The macOS app:
+
+![rPlayHub on macOS mirroring an iPhone 12, with the device's app list alongside](doc/images/rplayhub.png)
+
+The Linux client, the same layout: an iPhone 13 Pro mirrored in the middle, its info, battery
+and storage on the right.
+
+![rPlayHub on Linux mirroring an iPhone 13 Pro, with the Info tab alongside](doc/images/rplayhub-linux.png)
 
 ## Requirements
 
