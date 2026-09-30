@@ -8,11 +8,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <libavcodec/avcodec.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <libavcodec/avcodec.h>
 
 uint64_t now_ms(void);
 

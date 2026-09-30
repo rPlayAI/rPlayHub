@@ -1,0 +1,216 @@
+#pragma once
+
+// A second SDL window showing one display of the phone: a virtual display
+// (Desktop Mode, an app in a window of its own) or the phone's own screen
+// popped out bare. It has its own renderer and texture, fits the picture to
+// the window on black, and turns mouse and keyboard input into agent messages
+// tagged with its display id. Dear ImGui is not involved: it is picture only.
+
+#include "imgui.h"
+#include <SDL2/SDL.h>
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace rplayhub {
+
+enum class FrameFormat {
+    NONE,
+    I420,
+    NV12,
+    RGBA,
+};
+
+struct DecodedFrame {
+    int width = 0;
+    int height = 0;
+    int displayWidth = 0;
+    int displayHeight = 0;
+    int displayOrientation = 0;
+    int displayOrientationCorrection = 0;
+    int presentedQuadrants() const {
+        int raw = (displayOrientationCorrection % 2 == 0) ? (displayOrientation + displayOrientationCorrection) : displayOrientation;
+        return ((raw % 4) + 4) % 4;
+    }
+    int correctionQuadrants() const { return ((displayOrientationCorrection % 4) + 4) % 4; }
+    FrameFormat format = FrameFormat::NONE;
+    std::vector<uint8_t> planes[3];
+    int pitch[3] = {0, 0, 0};
+    uint32_t frameNumber = 0;
+    bool empty() const { return format == FrameFormat::NONE || planes[0].empty(); }
+};
+
+namespace MotionAction {
+constexpr int DOWN = 0;
+constexpr int UP = 1;
+constexpr int MOVE = 2;
+}
+
+namespace AndroidKey {
+constexpr int HOME = 3;
+constexpr int BACK = 4;
+constexpr int DPAD_UP = 19;
+constexpr int DPAD_DOWN = 20;
+constexpr int DPAD_LEFT = 21;
+constexpr int DPAD_RIGHT = 22;
+constexpr int TAB = 61;
+constexpr int ENTER = 66;
+constexpr int DEL = 67;
+constexpr int FORWARD_DEL = 112;
+}
+
+struct AgentSession {
+    std::function<void(int x, int y, int action, int32_t display_id)> on_touch;
+    std::function<void(int x, int y, float wx, float wy, int32_t display_id)> on_scroll;
+    std::function<void(int key)> on_key;
+    std::function<void(const std::string& text)> on_text;
+
+    void sendTouch(int x, int y, int action, int32_t display_id = 0) {
+        if (on_touch) on_touch(x, y, action, display_id);
+    }
+    void sendScroll(int x, int y, float wx, float wy, int32_t display_id = 0) {
+        if (on_scroll) on_scroll(x, y, wx, wy, display_id);
+    }
+    void sendKey(int key) {
+        if (on_key) on_key(key);
+    }
+    void sendText(const std::string& text) {
+        if (on_text) on_text(text);
+    }
+};
+
+// The buttons on the bar that appears along the bottom of a bare window when the pointer
+// comes near; the app decides what each does.
+enum class ChromeAction { Back, Home, Recents, VolumeDown, VolumeUp, Power, Rotate, Screenshot, Record };
+
+// What the hover chrome (title bar, bottom toolbar) needs from the app.
+struct DisplayChrome {
+    std::string regular_font, bold_font;   // TTF paths; empty = ImGui's bitmap font
+    std::string cjk_font;                  // merged in for title glyphs outside Latin
+    int cjk_face = 0;
+    float scale = 1.0f;
+    std::function<void(ChromeAction)> on_action;
+    std::function<bool()> recording;
+};
+
+class DisplayWindow {
+public:
+    DisplayWindow(int32_t display_id, const std::string& title, int width, int height, bool decorated);
+    ~DisplayWindow();
+
+    DisplayWindow(const DisplayWindow&) = delete;
+    DisplayWindow& operator=(const DisplayWindow&) = delete;
+
+    bool valid() const { return window_ != nullptr; }
+    int32_t displayId() const { return display_id_; }
+    Uint32 windowId() const { return window_ ? SDL_GetWindowID(window_) : 0; }
+    bool decorated() const { return decorated_; }
+    const std::string& package() const { return package_; }
+    void setPackage(const std::string& p) { package_ = p; }
+    void setTitle(const std::string& title);
+    // Height of a bare phone window of the given width: the screen (aspect w/h) plus the
+    // chassis bezel above and below it, so the chassis fills the window exactly.
+    static int bareHeightForWidth(int width, float screen_aspect);
+    // Give the window its hover chrome: the macOS-style title bar and the bottom toolbar,
+    // shown while the pointer is in or near the window. Without it the window is picture only.
+    void setChrome(const DisplayChrome& chrome);
+    void requestClose(const char* why);
+    void clearPicture() { have_frame_ = false; }   // the device went away: show the dark chassis
+    const std::string& closeReason() const { return close_reason_; }
+
+    bool pinned() const { return pinned_; }
+    void setPinned(bool on);
+    bool hasFocus() const;
+
+    // True when this event belongs to this window and was consumed.
+    bool handleEvent(const SDL_Event& e, AgentSession* session);
+    bool closeRequested() const { return close_requested_; }
+
+    // Upload the frame if it is new and draw it.
+    void render(const DecodedFrame& frame);
+    bool saveScreenshotBmp(const std::string& path);
+
+private:
+    // Bare window, no frame: a strip along the top drags it, the edges resize it, a close dot
+    // appears when the pointer nears the top. On X11 the window has an alpha channel and the
+    // corners are painted transparent, which is what rounds them.
+    static SDL_HitTestResult hitTest(SDL_Window* win, const SDL_Point* pt, void* data);
+    void cutCorners(int out_w, int out_h, float px_per_unit);
+    bool argb_ = false;
+    void mapToDisplay(int mx, int my, int& dx, int& dy) const;
+
+    // Hover chrome: while the pointer is in or near the window it becomes a normal window
+    // like the main window's phone viewer (title bar, phone in its bezel, control strip),
+    // drawn with its own Dear ImGui context; otherwise it is the bare picture.
+    void buildChromeFonts();
+    float updateChromeAlpha(int win_w, int win_h);   // fade toward shown/hidden; returns the alpha
+    void renderChrome(int win_w, int win_h, int out_w, int out_h);
+    bool overChrome(int x, int y) const;
+    // Where the picture sits inside the chassis of the normal window, in window units.
+    void chassisPicture(float W, float H, float& px, float& py, float& pw, float& ph) const;
+    // Where the screen sits when the chassis fills the whole window (bare mode).
+    void barePicture(float W, float H, float& px, float& py, float& pw, float& ph) const;
+    // The phone's own window gets the chassis and the control strip; Desktop Mode and app
+    // windows are plain rectangles (doc/mirror-and-youtube.png) with just a title bar.
+    bool isPhone() const { return display_id_ == 0; }
+    float titleBarHeight() const { return 52.0f * chrome_.scale; }   // macOS unified-toolbar height
+    float toolbarHeight() const { return isPhone() ? 64.0f * chrome_.scale : 0.0f; }
+    DisplayChrome chrome_;
+    ImGuiContext* ui_ = nullptr;
+    ImFont* ui_font_ = nullptr;
+    ImFont* ui_font_bold_ = nullptr;
+    std::string title_;
+    std::string font_title_;          // the title the atlas was built for
+    float chrome_alpha_ = 0.0f;       // 0 = hidden, 1 = fully shown
+
+    std::chrono::steady_clock::time_point chrome_clock_{};
+    // The window is created at its final size and never changes it: the phone sits in a
+    // "frame box" (bare_w_ x bare_h_ at grow_dx_, grow_dy_) with room around it for the
+    // title bar, the strip and the side margins. Outside the phone the window is
+    // transparent (ARGB) until the bars fade in, and an X input shape passes clicks in the
+    // transparent margins through to whatever is behind. Nothing ever moves or resizes.
+    bool framed_ = false;             // the window already includes the margins
+    int bare_w_ = 0, bare_h_ = 0;     // the phone's box inside the window
+    int grow_dx_ = 0, grow_dy_ = 0;   // where that box starts
+    int grown_w_ = 0, grown_h_ = 0;   // the window size for that box
+    bool input_full_ = true;          // the input shape covers the whole window (bars shown)
+    void frameFromBare(int bw, int bh);            // grown_w_/h_ and grow_dx_/dy_ from a phone box
+    void layoutFromWindow(int win_w, int win_h);   // the phone box from the window's size
+    void applyInputShape(bool full);
+    void fitWindowToFrame();                       // the picture turned: portrait window <-> landscape
+    int tex_landscape_ = -1;                       // orientation parity of the last texture
+    float tex_aspect_ = 0.0f;                      // presented aspect of the last texture
+    int turn_ = 0;                                 // quadrants the frame is turned back by when drawn
+    // The picture as the viewer sees it: the texture turned by turn_
+    float presentedAspect() const { return (turn_ % 2 == 1) ? static_cast<float>(tex_h_) / tex_w_ : static_cast<float>(tex_w_) / tex_h_; }
+    void moveResize(int w, int h, int x, int y);   // one X request, so the window does not hop
+
+    int32_t display_id_;
+    bool decorated_;
+    std::string package_;
+    SDL_Window* window_ = nullptr;
+    SDL_Renderer* renderer_ = nullptr;
+    SDL_Texture* texture_ = nullptr;
+    int tex_w_ = 0, tex_h_ = 0;
+    FrameFormat tex_format_ = FrameFormat::NONE;
+    uint32_t uploaded_frame_ = 0;
+    bool have_frame_ = false;
+    // Geometry of the last draw, for input mapping
+    SDL_Rect image_rect_{0, 0, 0, 0};
+    int disp_w_ = 0, disp_h_ = 0, disp_rot_ = 0;
+    bool touch_down_ = false;
+    bool pinned_ = false;
+    bool close_requested_ = false;
+    std::string close_reason_;
+
+    SDL_Cursor* cursor_arrow_ = nullptr;
+    SDL_Cursor* cursor_resize_ew_ = nullptr;
+    SDL_Cursor* cursor_resize_ns_ = nullptr;
+    SDL_Cursor* cursor_resize_nwse_ = nullptr;
+    SDL_Cursor* cursor_resize_nesw_ = nullptr;
+    bool cursor_overridden_ = false;
+};
+
+} // namespace rplayhub

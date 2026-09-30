@@ -41,12 +41,28 @@ IMGUI_DIR ?= ../deps/imgui
 IMGUI_SRC := $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_draw.cpp $(IMGUI_DIR)/imgui_tables.cpp \
              $(IMGUI_DIR)/imgui_widgets.cpp $(IMGUI_DIR)/backends/imgui_impl_sdl2.cpp \
              $(IMGUI_DIR)/backends/imgui_impl_sdlrenderer2.cpp
-CXXFLAGS += $(CFLAGS) -std=c++17 -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -I../deps/json
+UI_SRC    := ui/window_effects.cc ui/display_window.cc ui/twin_view.cc ui/fold_view.cc ui/png_decode.cc
+UI_HDR    := ui/theme.h ui/icons.h ui/window_effects.h ui/display_window.h ui/twin_view.h ui/fold_view.h ui/png_decode.h
 
-rplay-gui: rplay-gui.cpp stream-core.c stream-core.h audio.c audio.h
+GUI_LIBS  := $(LIBS)
+ifneq ($(wildcard $(FFMPEG_DIR)/libswscale/libswscale.a),)
+  GUI_LIBS := $(FFMPEG_DIR)/libswscale/libswscale.a $(GUI_LIBS)
+else
+  CFLAGS   += $(shell pkg-config --cflags libswscale 2>/dev/null)
+  GUI_LIBS += $(shell pkg-config --libs libswscale 2>/dev/null)
+endif
+
+CXXFLAGS += $(CFLAGS) -std=c++17 -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -I../deps/json -Iui
+
+ifeq ($(shell pkg-config --exists x11 xext gl 2>/dev/null && echo 1),1)
+  CXXFLAGS += -DRPLAYHUB_HAVE_X11 $(shell pkg-config --cflags x11 xext gl)
+  GUI_LIBS += $(shell pkg-config --libs x11 xext gl)
+endif
+
+rplay-gui: rplay-gui.cpp $(UI_SRC) $(UI_HDR) stream-core.c stream-core.h audio.c audio.h
 	$(CC) $(CFLAGS) -c stream-core.c -o stream-core.o
 	$(CC) $(CFLAGS) -c audio.c -o audio.o
-	$(CXX) $(CXXFLAGS) -o $@ rplay-gui.cpp stream-core.o audio.o $(IMGUI_SRC) $(LIBS)
+	$(CXX) $(CXXFLAGS) -o $@ rplay-gui.cpp $(UI_SRC) stream-core.o audio.o $(IMGUI_SRC) $(GUI_LIBS)
 
 clean:
 	rm -f rplay-view rplay-gui stream-core.o audio.o
