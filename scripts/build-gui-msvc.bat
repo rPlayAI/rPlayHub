@@ -75,7 +75,7 @@ link /nologo /SUBSYSTEM:CONSOLE ^
     deps\ffmpeg-dist\lib\avutil.lib ^
     deps\ffmpeg-dist\lib\swscale.lib ^
     deps\ffmpeg-dist\lib\swresample.lib ^
-    ws2_32.lib shell32.lib comdlg32.lib user32.lib gdi32.lib ole32.lib advapi32.lib bcrypt.lib secur32.lib winmm.lib ^
+    ws2_32.lib shell32.lib comdlg32.lib user32.lib gdi32.lib ole32.lib advapi32.lib bcrypt.lib secur32.lib winmm.lib dwmapi.lib ^
     /OUT:client-c\rplay-gui.exe
 if errorlevel 1 exit /b 1
 

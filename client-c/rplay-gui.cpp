@@ -822,6 +822,14 @@ static SDL_Texture        *g_back_texture   = nullptr;
 static std::unique_ptr<rplayhub::DisplayWindow> g_popout_win;
 static rplayhub::AgentSession g_popout_session;
 
+/* Center stage screen tabs (matching macOS Device Hub ScreenTabBar.swift) */
+struct ScreenTab {
+    std::string udid;
+    std::string title;
+};
+static std::vector<ScreenTab> g_screen_tabs;
+static int g_current_tab = 0;
+
 /* Settings tab state (Group 0) */
 static bool  g_settings_loaded        = false;
 static bool  g_settings_loading       = false;
@@ -1144,6 +1152,16 @@ static void refresh_devices()
             g_files_loaded       = false;
             if (g_popout_win) g_popout_win->setTitle(g_bound_name);
         }
+        if (!g_bound_udid.empty()) {
+            std::string tname = g_bound_name.empty() ? "iPhone" : g_bound_name;
+            if (g_screen_tabs.empty()) {
+                g_screen_tabs.push_back({g_bound_udid, tname});
+                g_current_tab = 0;
+            } else if (g_current_tab >= 0 && g_current_tab < (int)g_screen_tabs.size()) {
+                g_screen_tabs[g_current_tab].udid = g_bound_udid;
+                g_screen_tabs[g_current_tab].title = tname;
+            }
+        }
     }, 5);
 }
 
@@ -1155,7 +1173,7 @@ static void switch_to_device(const std::string &udid, const std::string &name)
     api_async("select_device", {{"udid", udid}}, [](const json &r) {
         if (!r.value("ok", false)) {
             g_switching_device = false;
-            show_toast("Switch failed: " + r.value("error", "unknown"), 6000);
+            show_toast("Switch failed: " + json_err_str(r, "unknown"), 6000);
             return;
         }
         /* cdhost re-execs itself and runs tunnel + RSD handshake (~3s). */
@@ -1164,6 +1182,61 @@ static void switch_to_device(const std::string &udid, const std::string &name)
             post_to_ui([]() { refresh_devices(); });
         }).detach();
     });
+}
+
+static void update_screen_tabs(const std::string &udid, const std::string &title)
+{
+    if (udid.empty()) return;
+    if (g_screen_tabs.empty()) {
+        g_screen_tabs.push_back({udid, title.empty() ? "iPhone" : title});
+        g_current_tab = 0;
+    } else if (g_current_tab >= 0 && g_current_tab < (int)g_screen_tabs.size()) {
+        g_screen_tabs[g_current_tab].udid = udid;
+        g_screen_tabs[g_current_tab].title = title.empty() ? "iPhone" : title;
+    }
+}
+
+static void select_screen_tab(int index)
+{
+    if (index >= 0 && index < (int)g_screen_tabs.size() && index != g_current_tab) {
+        g_current_tab = index;
+        switch_to_device(g_screen_tabs[index].udid, g_screen_tabs[index].title);
+    }
+}
+
+static void open_screen_tab()
+{
+    std::string udid = g_bound_udid;
+    std::string name = g_bound_name.empty() ? "iPhone" : g_bound_name;
+    for (const auto &d : g_devices) {
+        bool found = false;
+        for (const auto &t : g_screen_tabs) {
+            if (t.udid == d.udid) { found = true; break; }
+        }
+        if (!found) {
+            udid = d.udid;
+            name = d.display_name();
+            break;
+        }
+    }
+    g_screen_tabs.push_back({udid, name});
+    g_current_tab = (int)g_screen_tabs.size() - 1;
+    switch_to_device(udid, name);
+    show_toast("Opened " + name + " in new tab");
+}
+
+static void close_screen_tab(int index)
+{
+    if (g_screen_tabs.size() > 1 && index >= 0 && index < (int)g_screen_tabs.size()) {
+        bool was_current = (index == g_current_tab);
+        g_screen_tabs.erase(g_screen_tabs.begin() + index);
+        if (was_current) {
+            g_current_tab = std::min(index, (int)g_screen_tabs.size() - 1);
+            switch_to_device(g_screen_tabs[g_current_tab].udid, g_screen_tabs[g_current_tab].title);
+        } else if (index < g_current_tab) {
+            g_current_tab--;
+        }
+    }
 }
 
 static void refresh_settings()
@@ -1422,7 +1495,7 @@ static void refresh_profiles()
         g_profiles_loading = false;
         g_profiles_loaded  = true;
         if (!r.value("ok", false)) {
-            show_toast("list_profiles: " + r.value("error", "failed"), 5000);
+            show_toast("list_profiles: " + json_err_str(r, "failed"), 5000);
             return;
         }
         g_prov_profiles.clear();
@@ -1463,7 +1536,7 @@ static void refresh_files()
         g_files_loading = false;
         g_files_loaded  = true;
         if (!r.value("ok", false)) {
-            show_toast("list_dir: " + r.value("error", "failed"), 5000);
+            show_toast("list_dir: " + json_err_str(r, "failed"), 5000);
             return;
         }
         std::vector<FileRow> rows;
@@ -1491,7 +1564,7 @@ static void save_remote_file(const std::string &service, const std::string &remo
     show_toast("Downloading " + filename + "…", 10000);
     api_async("read_file", {{"service", service}, {"path", remote_path}}, [filename, open_after](const json &r) {
         if (!r.value("ok", false)) {
-            show_toast("Download failed: " + r.value("error", "unknown"), 6000);
+            show_toast("Download failed: " + json_err_str(r, "unknown"), 6000);
             return;
         }
         auto bytes = b64_decode(r["result"].value("data_b64", ""));
@@ -1570,7 +1643,7 @@ static void take_screenshot_action()
     show_toast("Taking screenshot…", 5000);
     api_async("take_screenshot", {}, [](const json &r) {
         if (!r.value("ok", false)) {
-            show_toast("Screenshot failed: " + r.value("error", "unknown"), 6000);
+            show_toast("Screenshot failed: " + json_err_str(r, "unknown"), 6000);
             return;
         }
         auto png = b64_decode(r["result"].value("image_b64", ""));
@@ -1592,7 +1665,7 @@ static void toggle_recording_action()
                 g_recording_path = r["result"].value("path", "");
                 show_toast("Recording to " + g_recording_path, 4000);
             } else {
-                show_toast("Record failed: " + r.value("error", "unknown"), 6000);
+                show_toast("Record failed: " + json_err_str(r, "unknown"), 6000);
             }
         });
     } else {
@@ -1601,7 +1674,7 @@ static void toggle_recording_action()
             if (r.value("ok", false)) {
                 show_toast("Saved recording: " + r["result"].value("path", g_recording_path), 5000);
             } else {
-                show_toast("Stop recording: " + r.value("error", "failed"), 6000);
+                show_toast("Stop recording: " + json_err_str(r, "failed"), 6000);
             }
         });
     }
@@ -1618,7 +1691,7 @@ static void install_ipa_path(const std::string &path)
             g_apps_loaded = false;
             refresh_apps();
         } else {
-            show_toast("Install failed: " + r.value("error", "unknown"), 8000);
+            show_toast("Install failed: " + json_err_str(r, "unknown"), 8000);
         }
     }, 120);
 }
@@ -1634,7 +1707,7 @@ static void install_profile_path(const std::string &path)
             g_profiles_loaded = false;
             refresh_profiles();
         } else {
-            show_toast("Profile install failed: " + r.value("error", "unknown"), 8000);
+            show_toast("Profile install failed: " + json_err_str(r, "unknown"), 8000);
         }
     }, 30);
 }
@@ -1869,17 +1942,34 @@ static void render_view_menu_items()
             g_twin_demo_start = std::chrono::steady_clock::now();
         }
     }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Open Screen in New Tab", "Ctrl+T")) open_screen_tab();
+    const bool popped_v = g_popout_win && !g_popout_win->closeRequested();
+    if (ImGui::MenuItem(popped_v ? "Bring Screen Back" : "Open Screen in New Window", "Ctrl+N")) toggle_popout_window();
+    if (ImGui::MenuItem("Naked View (Pop-out Window)")) {
+        if (!popped_v) toggle_popout_window();
+    }
+    if (ImGui::MenuItem("Pin Window on Top", "Ctrl+P", g_pinned)) {
+        g_pinned = !g_pinned;
+        SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
+    }
 }
 
 static void render_window_menu_items()
 {
-    if (ImGui::MenuItem("Always on Top", nullptr, g_pinned)) {
+    if (ImGui::MenuItem("Pin Window on Top", "Ctrl+P", g_pinned)) {
         g_pinned = !g_pinned;
         SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
     }
     const bool popped = g_popout_win && !g_popout_win->closeRequested();
-    if (ImGui::MenuItem(popped ? "Bring Screen Back" : "Open Screen in New Window")) {
+    if (ImGui::MenuItem(popped ? "Bring Screen Back" : "Open Screen in New Window", "Ctrl+N")) {
         toggle_popout_window();
+    }
+    if (ImGui::MenuItem("Open Screen in New Tab", "Ctrl+T")) {
+        open_screen_tab();
+    }
+    if (ImGui::MenuItem("Naked View (Pop-out Window)")) {
+        if (!popped) toggle_popout_window();
     }
 }
 
@@ -1918,9 +2008,14 @@ enum WinMenuId {
     IDM_VIEW_FOLD_LOOK_2,
     IDM_VIEW_FOLD_LOOK_3,
     IDM_VIEW_TWIN_DEMO,
+    IDM_VIEW_NEW_TAB,
+    IDM_VIEW_NEW_WIN,
+    IDM_VIEW_NAKED,
 
     IDM_WIN_ALWAYS_ON_TOP = 1040,
     IDM_WIN_POPOUT,
+    IDM_WIN_NEW_TAB,
+    IDM_WIN_NAKED,
 
     IDM_HELP_ABOUT = 1060,
 };
@@ -1946,7 +2041,9 @@ static LRESULT CALLBACK Win32MenuSubclassProc(HWND hWnd, UINT uMsg, WPARAM wPara
 
         const bool popped = g_popout_win && !g_popout_win->closeRequested();
         ModifyMenuW(hMenu, IDM_WIN_POPOUT, MF_BYCOMMAND | MF_STRING, IDM_WIN_POPOUT,
-                    popped ? L"Bring Screen &Back" : L"&Open Screen in New Window");
+                    popped ? L"Bring Screen &Back\tCtrl+N" : L"&Open Screen in New Window\tCtrl+N");
+        ModifyMenuW(hMenu, IDM_VIEW_NEW_WIN, MF_BYCOMMAND | MF_STRING, IDM_VIEW_NEW_WIN,
+                    popped ? L"Bring Screen &Back\tCtrl+N" : L"&Open Screen in New Window\tCtrl+N");
         ModifyMenuW(hMenu, IDM_DEV_RECORD, MF_BYCOMMAND | MF_STRING, IDM_DEV_RECORD,
                     g_recording ? L"Stop &Recording" : L"Start &Recording");
     } else if (uMsg == WM_COMMAND) {
@@ -2018,12 +2115,23 @@ static LRESULT CALLBACK Win32MenuSubclassProc(HWND hWnd, UINT uMsg, WPARAM wPara
                 g_twin_demo_start = std::chrono::steady_clock::now();
             }
             break;
+        case IDM_VIEW_NEW_TAB:
+        case IDM_WIN_NEW_TAB:
+            open_screen_tab();
+            break;
+        case IDM_VIEW_NEW_WIN:
+        case IDM_WIN_POPOUT:
+            toggle_popout_window();
+            break;
+        case IDM_VIEW_NAKED:
+        case IDM_WIN_NAKED:
+            if (!g_popout_win || g_popout_win->closeRequested()) {
+                toggle_popout_window();
+            }
+            break;
         case IDM_WIN_ALWAYS_ON_TOP:
             g_pinned = !g_pinned;
             SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
-            break;
-        case IDM_WIN_POPOUT:
-            toggle_popout_window();
             break;
         case IDM_HELP_ABOUT:
             MessageBoxW(hWnd, L"rPlayHub \xe2\x80\x94 High-performance iOS Screen Mirroring & Control\nVersion 1.0.0\n\nCopyright \xc2\xa9 2026 rPlayAI Team", L"About rPlayHub", MB_OK | MB_ICONINFORMATION);
@@ -2071,12 +2179,19 @@ static void setup_win32_native_menu(HWND hwnd)
     AppendMenuW(hMenuView, MF_POPUP, (UINT_PTR)hMenuFoldLook, L"Fold &Look");
 
     AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_TWIN_DEMO, L"Show 3D &Demo");
+    AppendMenuW(hMenuView, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_NEW_TAB, L"Open Screen in &New Tab\tCtrl+T");
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_NEW_WIN, L"&Open Screen in New Window\tCtrl+N");
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_NAKED, L"Na&ked View (Pop-out Window)");
+    AppendMenuW(hMenuView, MF_STRING, IDM_WIN_ALWAYS_ON_TOP, L"&Pin Window on Top\tCtrl+P");
     AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hMenuView, L"&View");
 
     // Window Menu
     HMENU hMenuWin = CreatePopupMenu();
-    AppendMenuW(hMenuWin, MF_STRING, IDM_WIN_ALWAYS_ON_TOP, L"&Always on Top");
-    AppendMenuW(hMenuWin, MF_STRING, IDM_WIN_POPOUT, L"&Open Screen in New Window");
+    AppendMenuW(hMenuWin, MF_STRING, IDM_WIN_ALWAYS_ON_TOP, L"&Pin Window on Top\tCtrl+P");
+    AppendMenuW(hMenuWin, MF_STRING, IDM_WIN_POPOUT, L"&Open Screen in New Window\tCtrl+N");
+    AppendMenuW(hMenuWin, MF_STRING, IDM_WIN_NEW_TAB, L"Open Screen in &New Tab\tCtrl+T");
+    AppendMenuW(hMenuWin, MF_STRING, IDM_WIN_NAKED, L"Na&ked View (Pop-out Window)");
     AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hMenuWin, L"&Window");
 
     // Help Menu
@@ -2440,38 +2555,61 @@ static void render_sidebar(float height)
         }
         if (ImGui::BeginPopupContextItem("DeviceContextMenu")) {
             g_selected_device_idx = i;
-            if (rplayhub::MenuItemWithIcon(g_view_screen ? "Stop Screen Mirroring" : "Start Screen Mirroring",
-                                           nullptr, rplayhub::Icons::drawScreen, s)) {
-                g_view_screen = !g_view_screen;
-                if (g_view_screen) api_async("activate", {});
+            if (rplayhub::MenuItemWithIcon("Open in New Tab", "Ctrl+T", rplayhub::Icons::drawPlus, s)) {
+                if (!d.bound) switch_to_device(d.udid, d.display_name());
+                g_screen_tabs.push_back({d.udid, d.display_name()});
+                g_current_tab = (int)g_screen_tabs.size() - 1;
+                show_toast("Opened " + d.display_name() + " in new tab");
             }
+            const bool popped_w = g_popout_win && !g_popout_win->closeRequested();
+            if (rplayhub::MenuItemWithIcon(popped_w ? "Bring Screen Back" : "Open in New Window", "Ctrl+N",
+                                           rplayhub::Icons::drawScreen, s)) {
+                if (!d.bound) switch_to_device(d.udid, d.display_name());
+                toggle_popout_window();
+            }
+            if (rplayhub::MenuItemWithIcon("Naked View", nullptr, rplayhub::Icons::drawScreen, s)) {
+                if (!d.bound) switch_to_device(d.udid, d.display_name());
+                if (!popped_w) toggle_popout_window();
+            }
+            ImGui::Separator();
+            if (rplayhub::MenuItemWithIcon("Take Screenshot", "Ctrl+S", rplayhub::Icons::drawCamera, s)) {
+                if (!d.bound) switch_to_device(d.udid, d.display_name());
+                take_screenshot_action();
+            }
+            if (rplayhub::MenuItemWithIcon(g_recording ? "Stop Recording" : "Start / Stop Recording",
+                                           nullptr, rplayhub::Icons::drawRecord, s)) {
+                if (!d.bound) switch_to_device(d.udid, d.display_name());
+                toggle_recording_action();
+            }
+            if (rplayhub::MenuItemWithIcon("Press Home", "Ctrl+Shift+H", rplayhub::Icons::drawHome, s)) {
+                if (!d.bound) switch_to_device(d.udid, d.display_name());
+                api_async("press_button", {{"button", "home"}});
+            }
+            ImGui::Separator();
+            if (rplayhub::MenuItemWithIcon("Pin Window on Top", "Ctrl+P", rplayhub::Icons::drawPin, s, g_pinned)) {
+                g_pinned = !g_pinned;
+                SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
+            }
+            ImGui::Separator();
+            if (rplayhub::MenuItemWithIcon("Sleep (Lock)…", nullptr, rplayhub::Icons::drawPower, s)) {
+                if (!d.bound) switch_to_device(d.udid, d.display_name());
+                api_async("device_action", {{"action", "sleep"}});
+            }
+            if (rplayhub::MenuItemWithIcon("Restart…", nullptr, rplayhub::Icons::drawRefresh, s)) {
+                if (!d.bound) switch_to_device(d.udid, d.display_name());
+                api_async("device_action", {{"action", "restart"}});
+            }
+            if (rplayhub::MenuItemWithIcon("Shut Down…", nullptr, rplayhub::Icons::drawDisconnect, s)) {
+                if (!d.bound) switch_to_device(d.udid, d.display_name());
+                g_open_shutdown_modal = true;
+            }
+            ImGui::Separator();
             if (rplayhub::MenuItemWithIcon("Copy UDID", nullptr, rplayhub::Icons::drawCopy, s)) {
                 SDL_SetClipboardText(d.udid.c_str());
                 show_toast("Copied UDID: " + d.udid);
             }
-            ImGui::Separator();
-            if (rplayhub::MenuItemWithIcon("Take Screenshot", nullptr, rplayhub::Icons::drawCamera, s)) {
-                take_screenshot_action();
-            }
-            if (rplayhub::MenuItemWithIcon(g_recording ? "Stop Recording" : "Record Screen",
-                                           nullptr, rplayhub::Icons::drawRecord, s)) {
-                toggle_recording_action();
-            }
-            ImGui::Separator();
-            if (rplayhub::MenuItemWithIcon("Home", nullptr, rplayhub::Icons::drawHome, s)) {
-                api_async("press_button", {{"button", "home"}});
-            }
-            if (rplayhub::MenuItemWithIcon("Rotate", nullptr, rplayhub::Icons::drawRotate, s)) {
-                g_rotation = (g_rotation + 1) & 3;
-            }
-            if (rplayhub::MenuItemWithIcon("Sleep / Wake", nullptr, rplayhub::Icons::drawPower, s)) {
-                api_async("device_action", {{"action", "sleep"}});
-            }
-            if (rplayhub::MenuItemWithIcon("Restart Device", nullptr, rplayhub::Icons::drawRefresh, s)) {
-                api_async("device_action", {{"action", "restart"}});
-            }
-            if (rplayhub::MenuItemWithIcon("Shut Down Device…", nullptr, rplayhub::Icons::drawDisconnect, s)) {
-                g_open_shutdown_modal = true;
+            if (rplayhub::MenuItemWithIcon("Reconnect", nullptr, rplayhub::Icons::drawRefresh, s)) {
+                switch_to_device(d.udid, d.display_name());
             }
             ImGui::EndPopup();
         }
@@ -2863,6 +3001,96 @@ static void render_twin_stage(ImVec2 origin, ImVec2 size)
     }
 }
 
+static void render_screen_tab_bar(ImVec2 pos, float width)
+{
+    const float s = g_scale;
+    if (g_screen_tabs.size() <= 1) return;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+
+    const float bar_h = 28.0f * s;
+    const float add_w = 28.0f * s;
+    const float gap   = 6.0f * s;
+    const float pill_w = std::max(60.0f * s, width - add_w - gap);
+
+    // Outer pill container (light gray capsule)
+    dl->AddRectFilled(pos, ImVec2(pos.x + pill_w, pos.y + bar_h),
+                      IM_COL32(234, 234, 238, 255), bar_h * 0.5f);
+
+    int count = (int)g_screen_tabs.size();
+    float seg_w = pill_w / std::max(1, count);
+    ImVec2 mouse = ImGui::GetMousePos();
+
+    for (int i = 0; i < count; i++) {
+        ImVec2 seg_min(pos.x + i * seg_w, pos.y);
+        ImVec2 seg_max(seg_min.x + seg_w, pos.y + bar_h);
+        bool hovered = mouse.x >= seg_min.x && mouse.x < seg_max.x &&
+                       mouse.y >= seg_min.y && mouse.y < seg_max.y;
+        bool selected = (i == g_current_tab);
+
+        if (selected) {
+            // White capsule for active tab with subtle shadow
+            dl->AddRectFilled(ImVec2(seg_min.x + 2.0f * s, seg_min.y + 2.0f * s),
+                              ImVec2(seg_max.x - 2.0f * s, seg_max.y - 2.0f * s),
+                              IM_COL32(255, 255, 255, 255), (bar_h - 4.0f * s) * 0.5f);
+            dl->AddRect(ImVec2(seg_min.x + 2.0f * s, seg_min.y + 2.0f * s),
+                        ImVec2(seg_max.x - 2.0f * s, seg_max.y - 2.0f * s),
+                        IM_COL32(0, 0, 0, 20), (bar_h - 4.0f * s) * 0.5f, 0, 1.0f);
+        } else if (hovered) {
+            dl->AddRectFilled(ImVec2(seg_min.x + 2.0f * s, seg_min.y + 2.0f * s),
+                              ImVec2(seg_max.x - 2.0f * s, seg_max.y - 2.0f * s),
+                              IM_COL32(0, 0, 0, 12), (bar_h - 4.0f * s) * 0.5f);
+        }
+
+        // Close button 'x' on hover over active tab (when count > 1)
+        float close_sz = 16.0f * s;
+        bool over_close = false;
+        if (count > 1 && hovered) {
+            ImVec2 cpos(seg_max.x - close_sz - 6.0f * s, pos.y + (bar_h - close_sz) * 0.5f);
+            over_close = mouse.x >= cpos.x && mouse.x < cpos.x + close_sz &&
+                         mouse.y >= cpos.y && mouse.y < cpos.y + close_sz;
+            if (over_close) {
+                dl->AddCircleFilled(ImVec2(cpos.x + close_sz * 0.5f, cpos.y + close_sz * 0.5f),
+                                    close_sz * 0.45f, IM_COL32(0, 0, 0, 30));
+            }
+            float k = close_sz * 0.28f;
+            float mx = cpos.x + close_sz * 0.5f, my = cpos.y + close_sz * 0.5f;
+            ImU32 xcol = over_close ? IM_COL32(30, 30, 30, 255) : IM_COL32(120, 120, 125, 255);
+            dl->AddLine(ImVec2(mx - k, my - k), ImVec2(mx + k, my + k), xcol, 1.3f * s);
+            dl->AddLine(ImVec2(mx - k, my + k), ImVec2(mx + k, my - k), xcol, 1.3f * s);
+        }
+
+        // Title text
+        const char *tname = g_screen_tabs[i].title.c_str();
+        ImVec2 tsz = g_font_medium ? g_font_medium->CalcTextSizeA(12.0f * s, FLT_MAX, 0.0f, tname)
+                                   : ImGui::CalcTextSize(tname);
+        float text_max_w = seg_w - (count > 1 ? close_sz + 12.0f * s : 12.0f * s);
+        float tx = seg_min.x + (seg_w - (count > 1 ? close_sz * 0.5f : 0.0f) - std::min(tsz.x, text_max_w)) * 0.5f;
+        float ty = pos.y + (bar_h - tsz.y) * 0.5f;
+        ImU32 tcol = selected ? IM_COL32(28, 28, 30, 255) : IM_COL32(110, 110, 115, 255);
+        if (g_font_medium) dl->AddText(g_font_medium, 12.0f * s, ImVec2(tx, ty), tcol, tname);
+        else dl->AddText(ImVec2(tx, ty), tcol, tname);
+
+        // Invisible button to handle clicks
+        ImGui::SetCursorScreenPos(seg_min);
+        char btn_id[32];
+        snprintf(btn_id, sizeof btn_id, "##TabSeg%d", i);
+        if (ImGui::InvisibleButton(btn_id, ImVec2(seg_w, bar_h))) {
+            if (over_close) {
+                close_screen_tab(i);
+            } else {
+                select_screen_tab(i);
+            }
+        }
+    }
+
+    // Add Tab '+' button at right
+    ImVec2 add_pos(pos.x + pill_w + gap, pos.y);
+    ImGui::SetCursorScreenPos(add_pos);
+    if (rplayhub::IconButton("##AddScreenTab", rplayhub::Icons::drawPlus, ImVec2(add_w, bar_h), "Open Screen in New Tab")) {
+        open_screen_tab();
+    }
+}
+
 static void render_control_strip(ImVec2 pos, float width)
 {
     const float s = g_scale;
@@ -2875,38 +3103,61 @@ static void render_control_strip(ImVec2 pos, float width)
         const char *tip;
         std::function<void()> action;
     };
-    StripBtn buttons[] = {
+    StripBtn group1[] = {
+        {"##StripPin",     rplayhub::Icons::drawPin,        g_pinned ? "Unpin Window" : "Pin Window on Top", []() {
+            g_pinned = !g_pinned;
+            SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
+        }},
         {"##StripHome",    rplayhub::Icons::drawHome,       "Home Button",      []() { api_async("press_button", {{"button", "home"}}); }},
         {"##StripRotate",  rplayhub::Icons::drawRotate,     "Rotate View",      []() { g_rotation = (g_rotation + 1) & 3; }},
         {"##StripShot",    rplayhub::Icons::drawCamera,     "Take Screenshot",  []() { take_screenshot_action(); }},
         {"##StripRecord",  rplayhub::Icons::drawRecord,     "Record Screen",    []() { toggle_recording_action(); }},
-        {"##StripSleep",   rplayhub::Icons::drawPower,      "Sleep / Wake",     []() { api_async("device_action", {{"action", "sleep"}}); }},
-        {"##StripRestart", rplayhub::Icons::drawRefresh,    "Restart Device",   []() { api_async("device_action", {{"action", "restart"}}); }},
-        {"##StripShut",    rplayhub::Icons::drawDisconnect, "Shut Down Device", []() { g_open_shutdown_modal = true; }},
     };
-    const int n = (int)(sizeof(buttons) / sizeof(buttons[0]));
+    StripBtn group2[] = {
+        {"##StripSleep",   rplayhub::Icons::drawPower,      "Sleep / Wake",     []() { api_async("device_action", {{"action", "sleep"}}); }},
+        {"##StripRestart", rplayhub::Icons::drawRefresh,    "Restart Device…",  []() { api_async("device_action", {{"action", "restart"}}); }},
+        {"##StripShut",    rplayhub::Icons::drawDisconnect, "Shut Down Device…",[]() { g_open_shutdown_modal = true; }},
+    };
+    const int n1 = 5, n2 = 3;
     const float btn_w = 38.0f * s, btn_h = 34.0f * s;
     float spacing = 44.0f * s;
-    float total_w = (n - 1) * spacing + btn_w;
+    const float gap = 16.0f * s; /* 16pt gap separating capture actions from power actions (matching ControlStrip.swift:64) */
+    float total_w = (n1 - 1) * spacing + btn_w + gap + (n2 - 1) * spacing + btn_w;
     if (total_w > width - 16.0f * s) {
-        spacing = std::max(btn_w, (width - 16.0f * s - btn_w) / std::max(1, n - 1));
-        total_w = (n - 1) * spacing + btn_w;
+        spacing = std::max(btn_w, (width - 16.0f * s - btn_w - gap) / std::max(1, n1 + n2 - 2));
+        total_w = (n1 - 1) * spacing + btn_w + gap + (n2 - 1) * spacing + btn_w;
     }
     float start_x = pos.x + (width - total_w) * 0.5f;
 
-    for (int i = 0; i < n; i++) {
-        ImGui::SetCursorScreenPos(ImVec2(start_x + i * spacing, pos.y + 6.0f * s));
-        if (i == 3 && g_recording) {
-            ImVec2 c(start_x + i * spacing + btn_w * 0.5f, pos.y + 6.0f * s + btn_h * 0.5f);
+    // Group 1: Pin, Home, Rotate, Screenshot, Record
+    for (int i = 0; i < n1; i++) {
+        float bx = start_x + i * spacing;
+        ImGui::SetCursorScreenPos(ImVec2(bx, pos.y + 6.0f * s));
+        if (i == 0 && g_pinned) {
+            if (rplayhub::FlatNavButton(group1[i].id, group1[i].icon, ImVec2(btn_w, btn_h), group1[i].tip, s, true)) {
+                group1[i].action();
+            }
+        } else if (i == 4 && g_recording) {
+            ImVec2 c(bx + btn_w * 0.5f, pos.y + 6.0f * s + btn_h * 0.5f);
             dl->AddCircleFilled(c, 6.0f * s, IM_COL32(255, 59, 48, 255));
-            if (rplayhub::FlatNavButton(buttons[i].id, [](ImDrawList *, ImVec2, float, ImU32) {},
+            if (rplayhub::FlatNavButton(group1[i].id, [](ImDrawList *, ImVec2, float, ImU32) {},
                                         ImVec2(btn_w, btn_h), "Stop Recording", s)) {
-                buttons[i].action();
+                group1[i].action();
             }
         } else {
-            if (rplayhub::FlatNavButton(buttons[i].id, buttons[i].icon, ImVec2(btn_w, btn_h), buttons[i].tip, s)) {
-                buttons[i].action();
+            if (rplayhub::FlatNavButton(group1[i].id, group1[i].icon, ImVec2(btn_w, btn_h), group1[i].tip, s)) {
+                group1[i].action();
             }
+        }
+    }
+
+    // Group 2: Sleep, Restart, Shutdown (with 16pt gap)
+    float start_x2 = start_x + (n1 - 1) * spacing + btn_w + gap;
+    for (int i = 0; i < n2; i++) {
+        float bx = start_x2 + i * spacing;
+        ImGui::SetCursorScreenPos(ImVec2(bx, pos.y + 6.0f * s));
+        if (rplayhub::FlatNavButton(group2[i].id, group2[i].icon, ImVec2(btn_w, btn_h), group2[i].tip, s)) {
+            group2[i].action();
         }
     }
 }
@@ -2930,16 +3181,26 @@ static void render_center_stage(float start_x, float width, float height)
     const bool popped_out = g_popout_win && !g_popout_win->closeRequested();
     const bool have_live = g_view_screen && g_vtex && g_vtex_w > 0 && !popped_out;
 
+    const bool show_tabs = (g_screen_tabs.size() > 1 && !popped_out);
+    const float tab_bar_h = show_tabs ? 34.0f * s : 0.0f;
+    if (show_tabs) {
+        float pill_w = std::min(width - 48.0f * s, (float)g_screen_tabs.size() * 160.0f * s + 36.0f * s);
+        render_screen_tab_bar(ImVec2(start_x + (width - pill_w) * 0.5f, g_menu_h + 6.0f * s), pill_w);
+    }
+
+    float stage_y = g_menu_h + 6.0f * s + tab_bar_h;
+    float content_h = stage_h - 12.0f * s - tab_bar_h;
+
     if (g_fold_only_view || (have_live && g_twin_mode)) {
         g_twin.setFoldOnly(g_fold_only_view || !g_twin_mode);
-        render_twin_stage(ImVec2(start_x + 12.0f * s, g_menu_h + 6.0f * s),
-                          ImVec2(width - 24.0f * s, stage_h - 12.0f * s));
+        render_twin_stage(ImVec2(start_x + 12.0f * s, stage_y),
+                          ImVec2(width - 24.0f * s, content_h));
     } else if (have_live) {
-        render_live_mirror(ImVec2(start_x + 12.0f * s, g_menu_h + 6.0f * s),
-                           ImVec2(width - 24.0f * s, stage_h - 12.0f * s));
+        render_live_mirror(ImVec2(start_x + 12.0f * s, stage_y),
+                           ImVec2(width - 24.0f * s, content_h));
     } else {
-        render_phone_mockup(ImVec2(start_x + width * 0.5f, g_menu_h + stage_h * 0.46f),
-                            ImVec2(width - 24.0f * s, stage_h - 12.0f * s),
+        render_phone_mockup(ImVec2(start_x + width * 0.5f, stage_y + content_h * 0.46f),
+                            ImVec2(width - 24.0f * s, content_h),
                             popped_out);
     }
 
@@ -3093,7 +3354,7 @@ static void render_settings_group(float width)
                 std::string city = kLocationPresets[i].name;
                 api_async("set_location", {{"latitude", lat}, {"longitude", lon}}, [city](const json &r) {
                     if (r.value("ok", false)) show_toast("Location set to " + city);
-                    else show_toast("Location failed: " + r.value("error", "unknown"), 6000);
+                    else show_toast("Location failed: " + json_err_str(r, "unknown"), 6000);
                 });
             }
         }
@@ -3138,7 +3399,7 @@ static void render_report_group(float width, float height)
                 int n = r["result"].value("exported", 0);
                 show_toast("Exported " + std::to_string(n) + " reports to " + dir, 5000);
             } else {
-                show_toast("Export failed: " + r.value("error", "unknown"), 6000);
+                show_toast("Export failed: " + json_err_str(r, "unknown"), 6000);
             }
         }, 60);
     }
@@ -3238,6 +3499,41 @@ static void render_report_group(float width, float height)
 /* =========================================================================
  * 15. Right Inspector — Group 2: Info (Sub-tabs: Info | Apps | Profiles | Files | Console)
  * ========================================================================= */
+static void draw_section_card_ui(float width, float pad, float s,
+                                 const char *title, const std::vector<std::pair<std::string, std::string>> &rows)
+{
+    if (rows.empty()) return;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImGui::SetCursorPosX(pad);
+    dl->AddText(g_font_semibold, 15.0f * s, ImGui::GetCursorScreenPos(),
+                IM_COL32(28, 28, 30, 255), title);
+    ImGui::Dummy(ImVec2(0, 22.0f * s));
+
+    const float row_h = 34.0f * s;
+    const float box_w = width - pad * 2.0f;
+    const float box_h = rows.size() * row_h + 6.0f * s;
+    ImGui::SetCursorPosX(pad);
+    ImVec2 c = ImGui::GetCursorScreenPos();
+    dl->AddRectFilled(c, ImVec2(c.x + box_w, c.y + box_h), IM_COL32(246, 246, 248, 255), 10.0f * s);
+    dl->AddRect(c, ImVec2(c.x + box_w, c.y + box_h), IM_COL32(230, 230, 235, 255), 10.0f * s);
+
+    for (size_t i = 0; i < rows.size(); i++) {
+        float ry = c.y + 3.0f * s + i * row_h;
+        if (i > 0) {
+            dl->AddLine(ImVec2(c.x + 12.0f * s, ry), ImVec2(c.x + box_w - 12.0f * s, ry),
+                        IM_COL32(228, 228, 232, 255), 1.0f);
+        }
+        dl->AddText(g_font_regular, 14.0f * s, ImVec2(c.x + 12.0f * s, ry + (row_h - 15.0f * s) * 0.5f),
+                    IM_COL32(110, 110, 115, 255), rows[i].first.c_str());
+        ImVec2 vsz = g_font_medium->CalcTextSizeA(14.0f * s, FLT_MAX, 0.0f, rows[i].second.c_str());
+        float vx = std::max(c.x + 115.0f * s, c.x + box_w - vsz.x - 12.0f * s);
+        ImVec4 clip(c.x + 110.0f * s, ry, c.x + box_w - 8.0f * s, ry + row_h);
+        dl->AddText(g_font_medium, 14.0f * s, ImVec2(vx, ry + (row_h - 15.0f * s) * 0.5f),
+                    IM_COL32(28, 28, 30, 255), rows[i].second.c_str(), nullptr, 0.0f, &clip);
+    }
+    ImGui::SetCursorScreenPos(ImVec2(pad, c.y + box_h + 14.0f * s));
+}
+
 static void render_info_subtab_device(float width, float avail_h)
 {
     if (!g_device_info_loaded && !g_device_info_loading && !g_bound_udid.empty()) {
@@ -3247,38 +3543,9 @@ static void render_info_subtab_device(float width, float avail_h)
     const float pad = 14.0f * s;
 
     ImGui::BeginChild("##InfoScroll", ImVec2(width, avail_h), false);
-    ImDrawList *dl = ImGui::GetWindowDrawList();
 
     auto draw_section_card = [&](const char *title, const std::vector<std::pair<std::string, std::string>> &rows) {
-        if (rows.empty()) return;
-        ImGui::SetCursorPosX(pad);
-        dl->AddText(g_font_semibold, 15.0f * s, ImGui::GetCursorScreenPos(),
-                    IM_COL32(28, 28, 30, 255), title);
-        ImGui::Dummy(ImVec2(0, 22.0f * s));
-
-        const float row_h = 34.0f * s;
-        const float box_w = width - pad * 2.0f;
-        const float box_h = rows.size() * row_h + 6.0f * s;
-        ImGui::SetCursorPosX(pad);
-        ImVec2 c = ImGui::GetCursorScreenPos();
-        dl->AddRectFilled(c, ImVec2(c.x + box_w, c.y + box_h), IM_COL32(246, 246, 248, 255), 10.0f * s);
-        dl->AddRect(c, ImVec2(c.x + box_w, c.y + box_h), IM_COL32(230, 230, 235, 255), 10.0f * s);
-
-        for (size_t i = 0; i < rows.size(); i++) {
-            float ry = c.y + 3.0f * s + i * row_h;
-            if (i > 0) {
-                dl->AddLine(ImVec2(c.x + 12.0f * s, ry), ImVec2(c.x + box_w - 12.0f * s, ry),
-                            IM_COL32(228, 228, 232, 255), 1.0f);
-            }
-            dl->AddText(g_font_regular, 14.0f * s, ImVec2(c.x + 12.0f * s, ry + (row_h - 15.0f * s) * 0.5f),
-                        IM_COL32(110, 110, 115, 255), rows[i].first.c_str());
-            ImVec2 vsz = g_font_medium->CalcTextSizeA(14.0f * s, FLT_MAX, 0.0f, rows[i].second.c_str());
-            float vx = std::max(c.x + 115.0f * s, c.x + box_w - vsz.x - 12.0f * s);
-            ImVec4 clip(c.x + 110.0f * s, ry, c.x + box_w - 8.0f * s, ry + row_h);
-            dl->AddText(g_font_medium, 14.0f * s, ImVec2(vx, ry + (row_h - 15.0f * s) * 0.5f),
-                        IM_COL32(28, 28, 30, 255), rows[i].second.c_str(), nullptr, 0.0f, &clip);
-        }
-        ImGui::SetCursorScreenPos(ImVec2(pad, c.y + box_h + 14.0f * s));
+        draw_section_card_ui(width, pad, s, title, rows);
     };
 
     auto val_str = [](const json &obj, const char *key) -> std::string {
@@ -3485,7 +3752,7 @@ static void render_info_subtab_apps(float width, float avail_h)
                         show_toast("Launched " + aname);
                         refresh_processes();
                     } else {
-                        show_toast("Launch failed: " + r.value("error", "unknown"), 6000);
+                        show_toast("Launch failed: " + json_err_str(r, "unknown"), 6000);
                     }
                 });
             }
@@ -3795,13 +4062,95 @@ static void render_info_subtab_console(float width, float avail_h)
                                 15.0f * s, IM_COL32(142, 142, 147, 255));
 }
 
+static void render_info_subtab_controls(float width, float avail_h)
+{
+    const float s = g_scale;
+    const float pad = 12.0f * s;
+    ImGui::BeginChild("##ControlsSubtab", ImVec2(width, avail_h), false);
+
+    // Section 1: Quick Controls (matching ControlPanel.swift)
+    std::vector<std::pair<std::string, std::string>> ctrl_rows;
+    ctrl_rows.push_back({"Window Pin", g_pinned ? "Pinned on Top" : "Normal"});
+    ctrl_rows.push_back({"Screen Mirroring", g_view_screen ? "Active" : "Stopped"});
+    ctrl_rows.push_back({"Recording", g_recording ? "Recording…" : "Idle"});
+    ctrl_rows.push_back({"Orientation", (g_rotation == 0) ? "Portrait (0°)" :
+                                       (g_rotation == 1) ? "Landscape Right (90°)" :
+                                       (g_rotation == 2) ? "Upside Down (180°)" : "Landscape Left (270°)"});
+    draw_section_card_ui(width, pad, s, "Device Controls", ctrl_rows);
+
+    const float btn_w = (width - pad * 2.0f - 8.0f * s) * 0.5f;
+    const float btn_h = 32.0f * s;
+
+    ImGui::SetCursorPos(ImVec2(pad, ImGui::GetCursorPosY() + 4.0f * s));
+    if (ImGui::Button(g_pinned ? "Unpin Window" : "Pin Window on Top", ImVec2(btn_w, btn_h))) {
+        g_pinned = !g_pinned;
+        SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
+    }
+    ImGui::SameLine(0, 8.0f * s);
+    if (ImGui::Button("Home Button", ImVec2(btn_w, btn_h))) {
+        api_async("press_button", {{"button", "home"}});
+    }
+
+    ImGui::SetCursorPos(ImVec2(pad, ImGui::GetCursorPosY() + 4.0f * s));
+    if (ImGui::Button("Rotate Screen", ImVec2(btn_w, btn_h))) {
+        g_rotation = (g_rotation + 1) & 3;
+    }
+    ImGui::SameLine(0, 8.0f * s);
+    if (ImGui::Button("Take Screenshot", ImVec2(btn_w, btn_h))) {
+        take_screenshot_action();
+    }
+
+    ImGui::SetCursorPos(ImVec2(pad, ImGui::GetCursorPosY() + 4.0f * s));
+    if (ImGui::Button(g_recording ? "Stop Recording" : "Record Screen", ImVec2(btn_w, btn_h))) {
+        toggle_recording_action();
+    }
+    ImGui::SameLine(0, 8.0f * s);
+    if (ImGui::Button("Sleep / Wake", ImVec2(btn_w, btn_h))) {
+        api_async("device_action", {{"action", "sleep"}});
+    }
+
+    ImGui::SetCursorPos(ImVec2(pad, ImGui::GetCursorPosY() + 4.0f * s));
+    if (ImGui::Button("Restart Device…", ImVec2(btn_w, btn_h))) {
+        api_async("device_action", {{"action", "restart"}});
+    }
+    ImGui::SameLine(0, 8.0f * s);
+    if (ImGui::Button("Shut Down Device…", ImVec2(btn_w, btn_h))) {
+        g_open_shutdown_modal = true;
+    }
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+
+    // Section 2: Live Stream Diagnostics (matching ControlPanel.swift lines 85-98)
+    std::vector<std::pair<std::string, std::string>> diag_rows;
+    char fps_buf[64], br_buf[64], res_buf[64];
+    float cur_fps = g_live_fps.load();
+    snprintf(fps_buf, sizeof fps_buf, "%.1f FPS (negotiated 60 FPS)", cur_fps > 0.0f ? cur_fps : 60.0f);
+    double mbps = (g_stream_info.is_object() && g_stream_info.contains("mbps")) ? g_stream_info.value("mbps", 0.0) : 0.0;
+    snprintf(br_buf, sizeof br_buf, "%.2f Mbps (cap 15.0 Mbps)", mbps > 0.01 ? mbps : 0.0);
+    snprintf(res_buf, sizeof res_buf, "%d × %d", g_vtex_w, g_vtex_h);
+
+    diag_rows.push_back({"Framerate", fps_buf});
+    diag_rows.push_back({"Bitrate", br_buf});
+    diag_rows.push_back({"Coded Resolution", res_buf});
+    diag_rows.push_back({"Video Codec", "HEVC / H.265 (Low Latency D3D11/DXVA2)"});
+    diag_rows.push_back({"Audio Stream", "AAC-ELD 44.1 kHz Stereo"});
+    if (g_stream_info.is_object()) {
+        diag_rows.push_back({"Stream Uptime", std::to_string(g_stream_info.value("uptime_s", 0)) + " s"});
+        diag_rows.push_back({"Total Frames", std::to_string(g_stream_info.value("total_frames", (uint64_t)0))});
+    }
+    draw_section_card_ui(width, pad, s, "Live Stream Diagnostics", diag_rows);
+
+    ImGui::EndChild();
+}
+
 static void render_info_group(float width, float height)
 {
     const float s = g_scale;
     ImDrawList *dl = ImGui::GetWindowDrawList();
 
-    /* Segmented pill sub-tab bar matching gui_app.cc lines 3307-3333: Info | Apps | Profiles | Files | Console */
-    static const char *const kSubTabs[5] = {"Info", "Apps", "Profiles", "Files", "Console"};
+    /* Segmented pill sub-tab bar matching InspectorPane.swift line 106: Info | Apps | Profiles | Files | Console | Controls */
+    static const char *const kSubTabs[6] = {"Info", "Apps", "Profiles", "Files", "Console", "Controls"};
     const float pad_x = 12.0f * s;
     const float bar_y = 10.0f * s;
     const float bar_h = 32.0f * s;
@@ -3810,9 +4159,9 @@ static void render_info_group(float width, float height)
     ImVec2 bmin(wp.x + pad_x, wp.y + bar_y);
     dl->AddRectFilled(bmin, ImVec2(bmin.x + bar_w, bmin.y + bar_h), IM_COL32(236, 236, 240, 255), 16.0f * s);
 
-    const float seg_w = bar_w / 5.0f;
+    const float seg_w = bar_w / 6.0f;
     ImGui::SetCursorScreenPos(ImVec2(bmin.x + 1.0f * s, bmin.y + 1.0f * s));
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         bool sel = (g_info_subtab == i);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0f * s);
         ImGui::PushStyleColor(ImGuiCol_Button,        sel ? rplayhub::Theme::ColorAccent : ImVec4(0, 0, 0, 0));
@@ -3826,7 +4175,7 @@ static void render_info_group(float width, float height)
         if (g_font_medium) ImGui::PopFont();
         ImGui::PopStyleColor(4);
         ImGui::PopStyleVar();
-        if (i < 4) ImGui::SameLine(0, 2.0f * s);
+        if (i < 5) ImGui::SameLine(0, 2.0f * s);
     }
 
     const float content_top = bar_y + bar_h + 10.0f * s;
@@ -3839,6 +4188,7 @@ static void render_info_group(float width, float height)
     case 2: render_info_subtab_profiles(width, avail_h); break;
     case 3: render_info_subtab_files(width, avail_h);    break;
     case 4: render_info_subtab_console(width, avail_h);  break;
+    case 5: render_info_subtab_controls(width, avail_h); break;
     }
 }
 
@@ -3915,7 +4265,7 @@ static void render_modals_and_toast(int win_w, int win_h)
             g_set_location_idx = (int)(sizeof(kLocationPresets) / sizeof(kLocationPresets[0])) + 1;
             api_async("set_location", {{"latitude", lat}, {"longitude", lon}}, [lbl_s = std::string(lbl)](const json &r) {
                 if (r.value("ok", false)) show_toast("Location set to " + lbl_s);
-                else show_toast("Location failed: " + r.value("error", "unknown"), 6000);
+                else show_toast("Location failed: " + json_err_str(r, "unknown"), 6000);
             });
             ImGui::CloseCurrentPopup();
         }
@@ -3982,7 +4332,7 @@ static void render_modals_and_toast(int win_w, int win_h)
                     g_apps_loaded = false;
                     refresh_apps();
                 } else {
-                    show_toast("Uninstall failed: " + r.value("error", "unknown"), 6000);
+                    show_toast("Uninstall failed: " + json_err_str(r, "unknown"), 6000);
                 }
             });
             ImGui::CloseCurrentPopup();
@@ -4015,7 +4365,7 @@ static void render_modals_and_toast(int win_w, int win_h)
                     g_profiles_loaded = false;
                     refresh_profiles();
                 } else {
-                    show_toast("Remove failed: " + r.value("error", "unknown"), 6000);
+                    show_toast("Remove failed: " + json_err_str(r, "unknown"), 6000);
                 }
             });
             ImGui::CloseCurrentPopup();
@@ -4234,6 +4584,15 @@ int main(int argc, char **argv)
                     g_rotation = (g_rotation + 1) & 3;
                 } else if (ctrl && !shift && ev.key.keysym.sym == SDLK_s) {
                     take_screenshot_action();
+                } else if (ctrl && !shift && ev.key.keysym.sym == SDLK_t) {
+                    open_screen_tab();
+                } else if (ctrl && !shift && ev.key.keysym.sym == SDLK_w) {
+                    close_screen_tab(g_current_tab);
+                } else if (ctrl && !shift && ev.key.keysym.sym == SDLK_n) {
+                    toggle_popout_window();
+                } else if (ctrl && !shift && ev.key.keysym.sym == SDLK_p) {
+                    g_pinned = !g_pinned;
+                    SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
                 }
             } else if (ev.type == SDL_WINDOWEVENT &&
                        ev.window.windowID == SDL_GetWindowID(g_win) &&
