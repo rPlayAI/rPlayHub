@@ -2,20 +2,23 @@
 
 #include <plist/plist.h>
 
-#include <arpa/inet.h>
+#include "compat.h"
 #include <errno.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
+#include <sys/stat.h>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/select.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#endif
 #include <pthread.h>
 #include <signal.h>
 
@@ -2175,7 +2178,7 @@ static void viewers_write(const uint8_t *data, size_t len)
         while (off < len) {
             ssize_t w = send(viewers[i].fd, data + off, len - off, 0);
             if (w > 0) { off += (size_t)w; continue; }
-            if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) { dropped = 1; break; }
+            if (w < 0 && is_sock_wouldblock()) { dropped = 1; break; }
             dead = 1;
             break;
         }
@@ -2208,9 +2211,14 @@ static void on_media_nal(void *ctx, const uint8_t *annexb, size_t len,
                          int is_parameter_set, int is_keyframe, int end_of_frame)
 {
     (void)ctx;
-    /* End-of-frame is a signal, not data: no bytes, nothing to cache or forward. The proxy
-     * stream is Annex-B, which carries no frame boundaries anyway. */
-    if (end_of_frame || !annexb || !len) return;
+    if (end_of_frame) {
+        /* Send Access Unit Delimiter (AUD) so Annex-B players (rplay-gui, ffplay)
+         * immediately complete the preceding slice and present the frame without 1-frame delay. */
+        static const uint8_t hevc_aud[7] = { 0, 0, 0, 1, 0x46, 0x01, 0x50 };
+        viewers_write(hevc_aud, sizeof hevc_aud);
+        return;
+    }
+    if (!annexb || !len) return;
     if (is_parameter_set) {
         int slot = ps_slot(annexb, len);
         if (slot >= 0 && len <= sizeof ps_cache[0]) {
@@ -2227,12 +2235,11 @@ static void on_media_nal(void *ctx, const uint8_t *annexb, size_t len,
 static void viewer_add(int fd)
 {
     /* Non-blocking, so a viewer can never stall the RTP thread. */
-    int fl = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    set_nonblocking(fd);
     /* A generous socket buffer absorbs bursts -- a keyframe is ~120 kB arriving at once -- so a
      * viewer only loses data if it is genuinely not reading. */
     int sndbuf = 4 * 1024 * 1024;
-    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof sndbuf);
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (const char *)&sndbuf, sizeof sndbuf);
 
     pthread_mutex_lock(&viewers_lock);
     if (viewer_count >= MAX_VIEWERS) { pthread_mutex_unlock(&viewers_lock); close(fd); return; }
@@ -2291,7 +2298,7 @@ static void on_media_audio(void *ctx, const uint8_t *frame, size_t len, uint32_t
     pthread_mutex_lock(&audio_lock);
     for (int i = 0; i < audio_count; ) {
         ssize_t w = send(audio_fds[i], rec, len + 6, 0);
-        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        if (w < 0 && !is_sock_wouldblock()) {
             close(audio_fds[i]);
             audio_fds[i] = audio_fds[--audio_count];
             continue;
@@ -2310,10 +2317,9 @@ static void on_media_audio(void *ctx, const uint8_t *frame, size_t len, uint32_t
 
 static void audio_add(int fd)
 {
-    int fl = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    set_nonblocking(fd);
     int sndbuf = 256 * 1024;
-    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof sndbuf);
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (const char *)&sndbuf, sizeof sndbuf);
     pthread_mutex_lock(&audio_lock);
     if (audio_count >= MAX_VIEWERS) { pthread_mutex_unlock(&audio_lock); close(fd); return; }
     audio_fds[audio_count++] = fd;
@@ -2674,7 +2680,7 @@ static int listen_on(int port)
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
@@ -2784,7 +2790,9 @@ static void spawn_client(int fd)
 int api_serve(api_session *session)
 {
     g_session = session;
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);      /* a viewer closing mid-write must not kill the daemon */
+#endif
 
     /* The Annex-B fan-out is optional now that a player can take RTP directly.
      *
@@ -2832,7 +2840,7 @@ int api_serve(api_session *session)
             int fd = accept(api_fd, NULL, NULL);
             if (fd >= 0) {
                 int one = 1;
-                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
                 printf("  client connected\n");
                 spawn_client(fd);
             }
@@ -2844,7 +2852,7 @@ int api_serve(api_session *session)
             int fd = accept(video_fd, NULL, NULL);
             if (fd >= 0) {
                 int one = 1;
-                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
                 printf("  viewer connected (%d total)\n", viewer_count + 1);
                 ensure_media();
                 viewer_add(fd);
@@ -2855,7 +2863,7 @@ int api_serve(api_session *session)
             int fd = accept(audio_fd, NULL, NULL);
             if (fd >= 0) {
                 int one = 1;
-                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
                 printf("  audio listener connected (%d total)\n", audio_count + 1);
                 ensure_audio();
                 audio_add(fd);

@@ -36,6 +36,10 @@ extern "C" {
 #include "ui/png_decode.h"
 
 #include <SDL2/SDL.h>
+#ifdef _WIN32
+#include <SDL2/SDL_syswm.h>
+#include <timeapi.h>
+#endif
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "backends/imgui_impl_sdl2.h"
@@ -60,13 +64,90 @@ extern "C" {
 #include <mutex>
 #include <set>
 #include <sstream>
-#include <string>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <shellapi.h>
+#include <commdlg.h>
+#include <io.h>
+#include <direct.h>
+typedef intptr_t ssize_t;
+#define usleep(x) Sleep((DWORD)((x)/1000))
+#define sleep(x) Sleep((DWORD)((x)*1000))
+#define close closesocket
+#define popen _popen
+#define pclose _pclose
+#define mkdir(p, m) _mkdir(p)
+static inline int setenv_win(const char *n, const char *v, int o) {
+    (void)o;
+    _putenv_s(n, v);
+    SetEnvironmentVariableA(n, v);
+    return 0;
+}
+#define setenv(n, v, o) setenv_win(n, v, o)
+#ifndef SHUT_RDWR
+#define SHUT_RDWR SD_BOTH
+#endif
+#ifndef R_OK
+#define R_OK 4
+#endif
+#ifndef W_OK
+#define W_OK 2
+#endif
+#ifndef F_OK
+#define F_OK 0
+#endif
+#define access _access
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+static inline const char *strcasestr(const char *haystack, const char *needle) {
+    if (!haystack || !needle) return nullptr;
+    if (!*needle) return haystack;
+    size_t nlen = strlen(needle);
+    for (; *haystack; ++haystack) {
+        if (_strnicmp(haystack, needle, nlen) == 0) return haystack;
+    }
+    return nullptr;
+}
+static inline char *strcasestr(char *haystack, const char *needle) {
+    return const_cast<char *>(strcasestr(static_cast<const char *>(haystack), needle));
+}
+static inline void set_sock_timeout(int fd, int timeout_ms) {
+    DWORD tv = (DWORD)timeout_ms;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof tv);
+}
+static inline bool is_sock_wouldblock() {
+    int err = WSAGetLastError();
+    return err == WSAEWOULDBLOCK || err == WSAETIMEDOUT || err == WSAEINTR;
+}
+#else
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
-#include <thread>
+#include <netinet/tcp.h>
 #include <unistd.h>
+static inline void set_sock_timeout(int fd, int timeout_ms) {
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+}
+static inline bool is_sock_wouldblock() {
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+}
+#endif
+#include <thread>
 #include <vector>
 
 using json = nlohmann::json;
@@ -170,6 +251,12 @@ static rplayhub::DecodedFrame g_popout_frame;
 
 static void on_decoded_frame(AVFrame *f, int active_w, int active_h)
 {
+    static bool logged_first = false;
+    if (!logged_first) {
+        printf("video: first frame decoded (%dx%d, active %dx%d)\n", f->width, f->height, active_w, active_h);
+        fflush(stdout);
+        logged_first = true;
+    }
     std::lock_guard<std::mutex> lk(g_frame_mu);
     if (!g_latest_frame) g_latest_frame = av_frame_alloc();
     av_frame_unref(g_latest_frame);
@@ -192,14 +279,18 @@ static void video_thread_main()
             for (int i = 0; i < 10 && !g_quit; i++) usleep(100 * 1000);
             continue;
         }
-        struct timeval tv = { 0, 10 * 1000 };
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        /* Disable Nagle's algorithm for immediate transmission and set timeout */
+        int nodelay = 1;
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&nodelay, sizeof nodelay);
+        set_sock_timeout(fd, 2000);
 
         stream_state st = {};
         st.awaiting_keyframe = 1;
         st.on_frame = on_decoded_frame;
         st.dec = avcodec_alloc_context3(codec);
         st.dec->thread_count = 1; /* RVRA resampling requires single-thread decode */
+        st.dec->flags |= AV_CODEC_FLAG_LOW_DELAY;
+        st.dec->flags2 |= AV_CODEC_FLAG2_FAST;
         if (avcodec_open2(st.dec, codec, nullptr) < 0) {
             avcodec_free_context(&st.dec);
             close(fd);
@@ -210,17 +301,33 @@ static void video_thread_main()
         annexb_parser parser = {};
         uint8_t buf[65536];
         while (!g_quit) {
-            ssize_t r = recv(fd, buf, sizeof buf, 0);
+            ssize_t r = recv(fd, (char *)buf, (int)sizeof buf, 0);
             if (r > 0) {
                 annexb_feed(&parser, buf, (size_t)r, handle_nal, &st);
+                /* Drain any remaining packets from the current burst */
+                for (;;) {
+                    u_long avail = 0;
+#ifdef _WIN32
+                    if (ioctlsocket(fd, FIONREAD, &avail) != 0 || avail == 0) break;
+#else
+                    if (ioctl(fd, FIONREAD, &avail) != 0 || avail == 0) break;
+#endif
+                    ssize_t more = recv(fd, (char *)buf, (int)std::min<size_t>(sizeof buf, (size_t)avail), 0);
+                    if (more <= 0) break;
+                    annexb_feed(&parser, buf, (size_t)more, handle_nal, &st);
+                }
+                /* Network burst complete: finish the pending NAL and flush AU immediately.
+                 * This eliminates the 1-frame buffering lag and stop-and-go timer stalls! */
+                if (parser.len >= 4) {
+                    annexb_finish(&parser, handle_nal, &st);
+                }
+                if (st.au_len) {
+                    flush_au(&st);
+                }
             } else if (r == 0) {
                 break;
-            } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            } else if (!is_sock_wouldblock()) {
                 break;
-            }
-            if (st.au_len && now_ms() - st.last_nal_ms >= 8) {
-                annexb_finish(&parser, handle_nal, &st);
-                flush_au(&st);
             }
             g_frames_decoded = st.frames_decoded;
             g_decode_errors  = st.decode_errors;
@@ -238,20 +345,58 @@ static void video_thread_main()
 /* =========================================================================
  * 3. Engine JSON API client (port 9876) & async worker pool
  * ========================================================================= */
+static inline std::string json_get_str(const json &j, const std::string &key, const std::string &fallback = "") {
+    if (!j.is_object() || !j.contains(key)) return fallback;
+    const auto &val = j[key];
+    if (val.is_string()) return val.get<std::string>();
+    if (val.is_number()) return std::to_string(val.get<int64_t>());
+    if (val.is_boolean()) return val.get<bool>() ? "true" : "false";
+    return fallback;
+}
+
+static inline bool json_get_bool(const json &j, const std::string &key, bool fallback = false) {
+    if (!j.is_object() || !j.contains(key)) return fallback;
+    const auto &val = j[key];
+    if (val.is_boolean()) return val.get<bool>();
+    if (val.is_number()) return val.get<int64_t>() != 0;
+    if (val.is_string()) return val.get<std::string>() == "true" || val.get<std::string>() == "1";
+    return fallback;
+}
+
+static inline int64_t json_get_int(const json &j, const std::string &key, int64_t fallback = 0) {
+    if (!j.is_object() || !j.contains(key)) return fallback;
+    const auto &val = j[key];
+    if (val.is_number()) return val.get<int64_t>();
+    if (val.is_string()) {
+        try { return std::stoll(val.get<std::string>()); } catch (...) { return fallback; }
+    }
+    return fallback;
+}
+
+static inline std::string json_err_str(const json &r, const std::string &fallback = "failed") {
+    if (!r.is_object() || !r.contains("error")) return fallback;
+    const auto &err = r["error"];
+    if (err.is_string()) return err.get<std::string>();
+    if (err.is_object()) {
+        std::string msg = json_get_str(err, "message", "");
+        if (msg.empty()) msg = json_get_str(err, "code", fallback);
+        return msg.empty() ? fallback : msg;
+    }
+    return err.dump();
+}
+
 static json api_call(const std::string &method, const json &params = json::object(), int timeout_s = 15)
 {
     int fd = tcp_connect(g_host, g_api_port);
     if (fd < 0) return {{"ok", false}, {"error", "cannot connect to cdhost:9876"}};
 
-    struct timeval tv = { timeout_s, 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    set_sock_timeout(fd, timeout_s * 1000);
 
     json req = {{"id", 1}, {"method", method}};
     if (!params.empty()) req["params"] = params;
     std::string line = req.dump() + "\n";
 
-    ssize_t sent = send(fd, line.data(), line.size(), 0);
+    ssize_t sent = send(fd, line.data(), (int)line.size(), 0);
     if (sent != (ssize_t)line.size()) {
         close(fd);
         return {{"ok", false}, {"error", "send failed"}};
@@ -270,12 +415,17 @@ static json api_call(const std::string &method, const json &params = json::objec
         /* The engine reports failures as {"error": {"code": ..., "message": ...}}; every caller
          * reads r["error"] as a string, so lift the message out here and keep the code beside
          * it. Leaves a string error (our own, above) as it is. */
-        if (r.contains("error") && r["error"].is_object()) {
-            json err = r["error"];
-            r["error_code"] = err.value("code", "");
-            std::string msg = err.value("message", "");
-            if (msg.empty()) msg = err.value("code", "error");
-            r["error"] = msg;
+        if (r.contains("error")) {
+            if (r["error"].is_object()) {
+                json err = r["error"];
+                std::string code = json_get_str(err, "code", "");
+                std::string msg  = json_get_str(err, "message", "");
+                r["error_code"]  = code;
+                if (msg.empty()) msg = code.empty() ? "error" : code;
+                r["error"] = msg;
+            } else if (!r["error"].is_string()) {
+                r["error"] = r["error"].dump();
+            }
         }
         return r;
     } catch (const std::exception &e) {
@@ -359,21 +509,35 @@ static std::vector<uint8_t> b64_decode(const std::string &in)
 
 static std::string ensure_media_dir(const char *subdir)
 {
+#ifdef _WIN32
+    const char *home = getenv("USERPROFILE");
+    if (!home) home = getenv("TEMP");
+    std::string base = home ? home : ".";
+#else
     const char *home = getenv("HOME");
     std::string base = home ? home : "/tmp";
+#endif
     std::string dir = base + "/" + subdir;
     mkdir(dir.c_str(), 0755);
     std::string sub = dir + "/rPlayHub";
     if (mkdir(sub.c_str(), 0755) == 0 || access(sub.c_str(), W_OK) == 0) return sub;
     if (access(dir.c_str(), W_OK) == 0) return dir;
+#ifdef _WIN32
+    return base;
+#else
     return "/tmp";
+#endif
 }
 
 static std::string timestamp_filename(const char *prefix, const char *ext)
 {
     time_t t = time(nullptr);
     struct tm tm = {};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
     localtime_r(&t, &tm);
+#endif
     char buf[64];
     strftime(buf, sizeof buf, "%Y-%m-%d_%H-%M-%S", &tm);
     return std::string(prefix) + "_" + buf + ext;
@@ -396,8 +560,13 @@ static std::string format_relative_time(int64_t mtime)
     int64_t diff = (int64_t)now - mtime;
     struct tm tm_file = {}, tm_now = {};
     time_t mt = (time_t)mtime;
+#ifdef _WIN32
+    localtime_s(&tm_file, &mt);
+    localtime_s(&tm_now, &now);
+#else
     localtime_r(&mt, &tm_file);
     localtime_r(&now, &tm_now);
+#endif
     char tbuf[32];
     if (diff >= 0 && diff < 86400 && tm_file.tm_yday == tm_now.tm_yday && tm_file.tm_year == tm_now.tm_year) {
         strftime(tbuf, sizeof tbuf, "Today, %H:%M", &tm_file);
@@ -411,10 +580,30 @@ static std::string format_relative_time(int64_t mtime)
     return tbuf;
 }
 
-/* Native desktop file dialog helper (zenity on GNOME, kdialog on KDE) run on a worker thread. */
+/* Native desktop file dialog helper (zenity on GNOME, kdialog on KDE, GetOpenFileName on Windows) run on a worker thread. */
 static void pick_file_async(const char *title, const char *zenity_filter, const char *kdialog_filter,
                             std::function<void(const std::string &)> on_picked)
 {
+#ifdef _WIN32
+    (void)zenity_filter; (void)kdialog_filter;
+    std::string wtitle = title ? title : "Select File";
+    std::thread([wtitle, on_picked]() {
+        char filename[MAX_PATH] = { 0 };
+        OPENFILENAMEA ofn = {};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = NULL;
+        ofn.lpstrFile = filename;
+        ofn.nMaxFile = sizeof(filename);
+        ofn.lpstrTitle = wtitle.c_str();
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (GetOpenFileNameA(&ofn)) {
+            std::string out = filename;
+            post_to_ui([on_picked, out]() { on_picked(out); });
+        } else {
+            post_to_ui([on_picked]() { on_picked(""); });
+        }
+    }).detach();
+#else
     std::string zcmd = std::string("zenity --file-selection --title='") + title +
                        "' --file-filter='" + zenity_filter + "' 2>/dev/null";
     std::string kcmd = std::string("kdialog --getopenfilename . '") + kdialog_filter + "' 2>/dev/null";
@@ -439,6 +628,7 @@ static void pick_file_async(const char *title, const char *zenity_filter, const 
         }
         post_to_ui([on_picked]() { on_picked("!nodialog"); });
     }).detach();
+#endif
 }
 
 /* =========================================================================
@@ -538,7 +728,11 @@ static SDL_Window   *g_win      = nullptr;
 static SDL_Renderer *g_ren      = nullptr;
 static float         g_scale    = 1.0f;
 static bool          g_argb     = false;
+#ifdef _WIN32
+static bool          g_system_titlebar = true;
+#else
 static bool          g_system_titlebar = false;
+#endif
 static bool          g_pinned   = false;
 static float         g_menu_h   = 52.0f;
 static std::vector<ImVec4> g_no_drag_rects;
@@ -592,10 +786,18 @@ static bool                   g_switching_device = false;
 static uint64_t               g_last_dev_poll_ms = 0;
 
 /* Center stage & mirror state */
+#ifdef _WIN32
+static bool          g_view_screen   = true;  /* Auto-start mirror on Windows */
+#else
 static bool          g_view_screen   = false; /* Gated by "View Screen" pill button on mockup */
+#endif
 static SDL_Texture  *g_vtex          = nullptr;
 static int           g_vtex_w        = 0;
 static int           g_vtex_h        = 0;
+static int           g_live_w        = 0;
+static int           g_live_h        = 0;
+static ImVec2        g_vtex_uv0      = ImVec2(0.0f, 0.0f);
+static ImVec2        g_vtex_uv1      = ImVec2(1.0f, 1.0f);
 static int           g_rotation      = 0; /* 0..3 quadrants */
 static bool          g_recording     = false;
 static std::string   g_recording_path;
@@ -1097,12 +1299,14 @@ static void refresh_device_info()
 static void refresh_processes()
 {
     api_async("list_processes", {}, [](const json &r) {
-        if (!r.value("ok", false)) return;
+        if (!r.value("ok", false) || !r.contains("result")) return;
         std::map<std::string, int> pids;
-        for (const auto &p : r["result"].value("processTokens", json::array())) {
-            int pid = p.value("pid", 0);
-            std::string url = p.value("executableURL", "");
-            if (pid <= 0 || url.empty()) continue;
+        const auto &res = r["result"];
+        auto process_token = [&](const json &p) {
+            if (!p.is_object()) return;
+            int pid = (int)json_get_int(p, "pid", json_get_int(p, "processIdentifier", 0));
+            std::string url = json_get_str(p, "executableURL", json_get_str(p, "executable", ""));
+            if (pid <= 0 || url.empty()) return;
             auto slash = url.rfind('/');
             std::string exe = (slash != std::string::npos) ? url.substr(slash + 1) : url;
             /* Decode %20 in executable URLs */
@@ -1116,6 +1320,13 @@ static void refresh_processes()
                 }
             }
             pids[clean] = pid;
+        };
+        if (res.is_array()) {
+            for (const auto &p : res) process_token(p);
+        } else if (res.is_object()) {
+            if (res.contains("processTokens") && res["processTokens"].is_array()) {
+                for (const auto &p : res["processTokens"]) process_token(p);
+            }
         }
         g_running_pids = std::move(pids);
     });
@@ -1128,19 +1339,20 @@ static void refresh_apps()
     api_async("list_apps", {}, [](const json &r) {
         g_apps_loading = false;
         g_apps_loaded  = true;
-        if (!r.value("ok", false) || !r["result"].is_array()) {
-            show_toast("list_apps: " + r.value("error", "failed"), 5000);
+        if (!r.value("ok", false) || !r.contains("result") || !r["result"].is_array()) {
+            show_toast("list_apps: " + json_err_str(r, "failed"), 5000);
             return;
         }
         std::vector<AppRow> rows;
         for (const auto &a : r["result"]) {
+            if (!a.is_object()) continue;
             AppRow row;
-            row.bundle_id   = a.value("bundleIdentifier", "");
-            row.name        = a.value("name", row.bundle_id);
-            row.version     = a.value("version", "");
-            row.first_party = a.value("isFirstParty", false);
-            row.developer   = a.value("isDeveloper", false);
-            row.app_clip    = a.value("isAppClip", false);
+            row.bundle_id   = json_get_str(a, "bundleIdentifier", "");
+            row.name        = json_get_str(a, "name", row.bundle_id);
+            row.version     = json_get_str(a, "version", "");
+            row.first_party = json_get_bool(a, "isFirstParty", false);
+            row.developer   = json_get_bool(a, "isDeveloper", false);
+            row.app_clip    = json_get_bool(a, "isAppClip", false);
             auto it = g_app_icon_cache.find(row.bundle_id);
             if (it != g_app_icon_cache.end()) {
                 row.icon_tex = it->second;
@@ -1289,9 +1501,13 @@ static void save_remote_file(const std::string &service, const std::string &remo
         fclose(fp);
         show_toast("Saved " + out_path + " (" + format_bytes((int64_t)bytes.size()) + ")", 5000);
         if (open_after) {
+#ifdef _WIN32
+            ShellExecuteA(NULL, "open", out_path.c_str(), NULL, NULL, SW_SHOWNORMAL);
+#else
             std::string cmd = "xdg-open '" + out_path + "' >/dev/null 2>&1 &";
             int rc = system(cmd.c_str());
             (void)rc;
+#endif
         }
     }, 60);
 }
@@ -1311,7 +1527,7 @@ static void start_syslog()
         std::string line;
         char buf[4096];
         ssize_t n;
-        while (g_syslog_running && (n = recv(fd, buf, sizeof buf, 0)) > 0) {
+        while (g_syslog_running && (n = recv(fd, (char *)buf, (int)sizeof buf, 0)) > 0) {
             for (ssize_t i = 0; i < n; i++) {
                 if (buf[i] == '\n') {
                     try {
@@ -1585,90 +1801,291 @@ static void update_resize_cursor()
 /* =========================================================================
  * 10. UI Rendering — Titlebar / Unified Toolbar
  * ========================================================================= */
+static void render_device_menu_items()
+{
+    if (rplayhub::MenuItemWithIcon("Refresh Devices", "Ctrl+R", rplayhub::Icons::drawRefresh, g_scale))
+        refresh_devices();
+    ImGui::Separator();
+    if (rplayhub::MenuItemWithIcon("Home Button", "Ctrl+Shift+H", rplayhub::Icons::drawHome, g_scale))
+        api_async("press_button", {{"button", "home"}});
+    if (rplayhub::MenuItemWithIcon("Rotate View", "Ctrl+L", rplayhub::Icons::drawRotate, g_scale))
+        g_rotation = (g_rotation + 1) & 3;
+    if (rplayhub::MenuItemWithIcon("Take Screenshot", "Ctrl+S", rplayhub::Icons::drawCamera, g_scale))
+        take_screenshot_action();
+    if (rplayhub::MenuItemWithIcon(g_recording ? "Stop Recording" : "Start Recording", nullptr,
+                                   rplayhub::Icons::drawRecord, g_scale))
+        toggle_recording_action();
+    ImGui::Separator();
+    if (rplayhub::MenuItemWithIcon("Sleep / Wake", nullptr, rplayhub::Icons::drawPower, g_scale))
+        api_async("device_action", {{"action", "sleep"}});
+    if (rplayhub::MenuItemWithIcon("Restart Device", nullptr, rplayhub::Icons::drawRefresh, g_scale))
+        api_async("device_action", {{"action", "restart"}});
+    if (rplayhub::MenuItemWithIcon("Shut Down Device…", nullptr, rplayhub::Icons::drawDisconnect, g_scale))
+        g_open_shutdown_modal = true;
+}
+
+static void render_view_menu_items()
+{
+    if (ImGui::MenuItem("Show Devices Sidebar", nullptr, !g_sidebar_hidden))
+        g_sidebar_hidden = !g_sidebar_hidden;
+    if (ImGui::MenuItem("Show Inspector Pane", nullptr, g_inspector_visible))
+        g_inspector_visible = !g_inspector_visible;
+    ImGui::Separator();
+    if (ImGui::MenuItem("Settings Inspector", nullptr, g_inspector_visible && g_inspector_group == 0)) {
+        g_inspector_visible = true; g_inspector_group = 0;
+    }
+    if (ImGui::MenuItem("Report Inspector", nullptr, g_inspector_visible && g_inspector_group == 1)) {
+        g_inspector_visible = true; g_inspector_group = 1;
+    }
+    if (ImGui::MenuItem("Info Inspector", nullptr, g_inspector_visible && g_inspector_group == 2)) {
+        g_inspector_visible = true; g_inspector_group = 2;
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("3D Device View", nullptr, g_twin_mode)) {
+        g_twin_mode = !g_twin_mode;
+        if (g_twin_mode) { g_fold_only_view = false; g_twin.setFoldOnly(false); }
+    }
+    if (ImGui::MenuItem("Fold View", nullptr, g_fold_only_view)) {
+        g_fold_only_view = !g_fold_only_view;
+        if (g_fold_only_view) { g_twin_mode = false; g_twin_demo = false; g_twin.setFoldOnly(true); g_twin.noteShown(); }
+        else g_twin.setFoldOnly(false);
+    }
+    if (ImGui::BeginMenu("Fold Look")) {
+        if (ImGui::MenuItem("1  Hard cut (glued to glass)", "1", g_twin.renderMode() == 0)) g_twin.setRenderMode(0);
+        if (ImGui::MenuItem("2  Locked (content plane fixed)", "2", g_twin.renderMode() == 1)) g_twin.setRenderMode(1);
+        if (ImGui::MenuItem("3  Stylized (iPhone Duo look)", "3", g_twin.renderMode() == 2)) g_twin.setRenderMode(2);
+        ImGui::EndMenu();
+    }
+    if (ImGui::MenuItem("Show 3D Demo", nullptr, g_twin_demo)) {
+        g_twin_demo = !g_twin_demo;
+        if (g_twin_demo) {
+            g_twin_mode = true;
+            g_fold_only_view = false;
+            g_twin.setFoldOnly(false);
+            g_twin_demo_start = std::chrono::steady_clock::now();
+        }
+    }
+}
+
+static void render_window_menu_items()
+{
+    if (ImGui::MenuItem("Always on Top", nullptr, g_pinned)) {
+        g_pinned = !g_pinned;
+        SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
+    }
+    const bool popped = g_popout_win && !g_popout_win->closeRequested();
+    if (ImGui::MenuItem(popped ? "Bring Screen Back" : "Open Screen in New Window")) {
+        toggle_popout_window();
+    }
+}
+
 static void render_menus_popup()
 {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f * g_scale, 8.0f * g_scale));
     ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 8.0f * g_scale);
     if (ImGui::BeginPopup("##MainMenusPopup")) {
-        if (ImGui::BeginMenu("Device")) {
-            if (rplayhub::MenuItemWithIcon("Refresh Devices", "Ctrl+R", rplayhub::Icons::drawRefresh, g_scale))
-                refresh_devices();
-            ImGui::Separator();
-            if (rplayhub::MenuItemWithIcon("Home Button", "Ctrl+Shift+H", rplayhub::Icons::drawHome, g_scale))
-                api_async("press_button", {{"button", "home"}});
-            if (rplayhub::MenuItemWithIcon("Rotate View", "Ctrl+L", rplayhub::Icons::drawRotate, g_scale))
-                g_rotation = (g_rotation + 1) & 3;
-            if (rplayhub::MenuItemWithIcon("Take Screenshot", "Ctrl+S", rplayhub::Icons::drawCamera, g_scale))
-                take_screenshot_action();
-            if (rplayhub::MenuItemWithIcon(g_recording ? "Stop Recording" : "Start Recording", nullptr,
-                                           rplayhub::Icons::drawRecord, g_scale))
-                toggle_recording_action();
-            ImGui::Separator();
-            if (rplayhub::MenuItemWithIcon("Sleep / Wake", nullptr, rplayhub::Icons::drawPower, g_scale))
-                api_async("device_action", {{"action", "sleep"}});
-            if (rplayhub::MenuItemWithIcon("Restart Device", nullptr, rplayhub::Icons::drawRefresh, g_scale))
-                api_async("device_action", {{"action", "restart"}});
-            if (rplayhub::MenuItemWithIcon("Shut Down Device…", nullptr, rplayhub::Icons::drawDisconnect, g_scale))
-                g_open_shutdown_modal = true;
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("View")) {
-            if (ImGui::MenuItem("Show Devices Sidebar", nullptr, !g_sidebar_hidden))
-                g_sidebar_hidden = !g_sidebar_hidden;
-            if (ImGui::MenuItem("Show Inspector Pane", nullptr, g_inspector_visible))
-                g_inspector_visible = !g_inspector_visible;
-            ImGui::Separator();
-            if (ImGui::MenuItem("Settings Inspector", nullptr, g_inspector_visible && g_inspector_group == 0)) {
-                g_inspector_visible = true; g_inspector_group = 0;
-            }
-            if (ImGui::MenuItem("Report Inspector", nullptr, g_inspector_visible && g_inspector_group == 1)) {
-                g_inspector_visible = true; g_inspector_group = 1;
-            }
-            if (ImGui::MenuItem("Info Inspector", nullptr, g_inspector_visible && g_inspector_group == 2)) {
-                g_inspector_visible = true; g_inspector_group = 2;
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem("3D Device View", nullptr, g_twin_mode)) {
-                g_twin_mode = !g_twin_mode;
-                if (g_twin_mode) { g_fold_only_view = false; g_twin.setFoldOnly(false); }
-            }
-            if (ImGui::MenuItem("Fold View", nullptr, g_fold_only_view)) {
-                g_fold_only_view = !g_fold_only_view;
-                if (g_fold_only_view) { g_twin_mode = false; g_twin_demo = false; g_twin.setFoldOnly(true); g_twin.noteShown(); }
-                else g_twin.setFoldOnly(false);
-            }
-            if (ImGui::BeginMenu("Fold Look")) {
-                if (ImGui::MenuItem("1  Hard cut (glued to glass)", "1", g_twin.renderMode() == 0)) g_twin.setRenderMode(0);
-                if (ImGui::MenuItem("2  Locked (content plane fixed)", "2", g_twin.renderMode() == 1)) g_twin.setRenderMode(1);
-                if (ImGui::MenuItem("3  Stylized (iPhone Duo look)", "3", g_twin.renderMode() == 2)) g_twin.setRenderMode(2);
-                ImGui::EndMenu();
-            }
-            if (ImGui::MenuItem("Show 3D Demo", nullptr, g_twin_demo)) {
-                g_twin_demo = !g_twin_demo;
-                if (g_twin_demo) {
-                    g_twin_mode = true;
-                    g_fold_only_view = false;
-                    g_twin.setFoldOnly(false);
-                    g_twin_demo_start = std::chrono::steady_clock::now();
-                }
-            }
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("Window")) {
-            if (ImGui::MenuItem("Always on Top", nullptr, g_pinned)) {
-                g_pinned = !g_pinned;
-                SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
-            }
-            const bool popped = g_popout_win && !g_popout_win->closeRequested();
-            if (ImGui::MenuItem(popped ? "Bring Screen Back" : "Open Screen in New Window")) {
-                toggle_popout_window();
-            }
-            ImGui::EndMenu();
-        }
+        if (ImGui::BeginMenu("Device")) { render_device_menu_items(); ImGui::EndMenu(); }
+        if (ImGui::BeginMenu("View"))   { render_view_menu_items();   ImGui::EndMenu(); }
+        if (ImGui::BeginMenu("Window")) { render_window_menu_items(); ImGui::EndMenu(); }
         ImGui::EndPopup();
     }
     ImGui::PopStyleVar(2);
 }
+
+#ifdef _WIN32
+enum WinMenuId {
+    IDM_DEV_REFRESH = 1001,
+    IDM_DEV_HOME,
+    IDM_DEV_ROTATE,
+    IDM_DEV_SCREENSHOT,
+    IDM_DEV_RECORD,
+    IDM_DEV_SLEEP,
+    IDM_DEV_RESTART,
+    IDM_DEV_SHUTDOWN,
+
+    IDM_VIEW_SIDEBAR = 1020,
+    IDM_VIEW_INSPECTOR,
+    IDM_VIEW_INSP_SETTINGS,
+    IDM_VIEW_INSP_REPORT,
+    IDM_VIEW_INSP_INFO,
+    IDM_VIEW_TWIN_3D,
+    IDM_VIEW_FOLD,
+    IDM_VIEW_FOLD_LOOK_1,
+    IDM_VIEW_FOLD_LOOK_2,
+    IDM_VIEW_FOLD_LOOK_3,
+    IDM_VIEW_TWIN_DEMO,
+
+    IDM_WIN_ALWAYS_ON_TOP = 1040,
+    IDM_WIN_POPOUT,
+
+    IDM_HELP_ABOUT = 1060,
+};
+
+static WNDPROC g_win32_orig_wndproc = nullptr;
+
+static LRESULT CALLBACK Win32MenuSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    if (uMsg == WM_INITMENUPOPUP) {
+        HMENU hMenu = (HMENU)wParam;
+        CheckMenuItem(hMenu, IDM_VIEW_SIDEBAR, MF_BYCOMMAND | (!g_sidebar_hidden ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_INSPECTOR, MF_BYCOMMAND | (g_inspector_visible ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_INSP_SETTINGS, MF_BYCOMMAND | (g_inspector_visible && g_inspector_group == 0 ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_INSP_REPORT, MF_BYCOMMAND | (g_inspector_visible && g_inspector_group == 1 ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_INSP_INFO, MF_BYCOMMAND | (g_inspector_visible && g_inspector_group == 2 ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_TWIN_3D, MF_BYCOMMAND | (g_twin_mode ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_FOLD, MF_BYCOMMAND | (g_fold_only_view ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_FOLD_LOOK_1, MF_BYCOMMAND | (g_twin.renderMode() == 0 ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_FOLD_LOOK_2, MF_BYCOMMAND | (g_twin.renderMode() == 1 ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_FOLD_LOOK_3, MF_BYCOMMAND | (g_twin.renderMode() == 2 ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_VIEW_TWIN_DEMO, MF_BYCOMMAND | (g_twin_demo ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(hMenu, IDM_WIN_ALWAYS_ON_TOP, MF_BYCOMMAND | (g_pinned ? MF_CHECKED : MF_UNCHECKED));
+
+        const bool popped = g_popout_win && !g_popout_win->closeRequested();
+        ModifyMenuW(hMenu, IDM_WIN_POPOUT, MF_BYCOMMAND | MF_STRING, IDM_WIN_POPOUT,
+                    popped ? L"Bring Screen &Back" : L"&Open Screen in New Window");
+        ModifyMenuW(hMenu, IDM_DEV_RECORD, MF_BYCOMMAND | MF_STRING, IDM_DEV_RECORD,
+                    g_recording ? L"Stop &Recording" : L"Start &Recording");
+    } else if (uMsg == WM_COMMAND) {
+        int id = LOWORD(wParam);
+        switch (id) {
+        case IDM_DEV_REFRESH:
+            refresh_devices();
+            break;
+        case IDM_DEV_HOME:
+            api_async("press_button", {{"button", "home"}});
+            break;
+        case IDM_DEV_ROTATE:
+            g_rotation = (g_rotation + 1) & 3;
+            break;
+        case IDM_DEV_SCREENSHOT:
+            take_screenshot_action();
+            break;
+        case IDM_DEV_RECORD:
+            toggle_recording_action();
+            break;
+        case IDM_DEV_SLEEP:
+            api_async("device_action", {{"action", "sleep"}});
+            break;
+        case IDM_DEV_RESTART:
+            api_async("device_action", {{"action", "restart"}});
+            break;
+        case IDM_DEV_SHUTDOWN:
+            g_open_shutdown_modal = true;
+            break;
+        case IDM_VIEW_SIDEBAR:
+            g_sidebar_hidden = !g_sidebar_hidden;
+            break;
+        case IDM_VIEW_INSPECTOR:
+            g_inspector_visible = !g_inspector_visible;
+            break;
+        case IDM_VIEW_INSP_SETTINGS:
+            g_inspector_visible = true; g_inspector_group = 0;
+            break;
+        case IDM_VIEW_INSP_REPORT:
+            g_inspector_visible = true; g_inspector_group = 1;
+            break;
+        case IDM_VIEW_INSP_INFO:
+            g_inspector_visible = true; g_inspector_group = 2;
+            break;
+        case IDM_VIEW_TWIN_3D:
+            g_twin_mode = !g_twin_mode;
+            if (g_twin_mode) { g_fold_only_view = false; g_twin.setFoldOnly(false); }
+            break;
+        case IDM_VIEW_FOLD:
+            g_fold_only_view = !g_fold_only_view;
+            if (g_fold_only_view) { g_twin_mode = false; g_twin_demo = false; g_twin.setFoldOnly(true); g_twin.noteShown(); }
+            else g_twin.setFoldOnly(false);
+            break;
+        case IDM_VIEW_FOLD_LOOK_1:
+            g_twin.setRenderMode(0);
+            break;
+        case IDM_VIEW_FOLD_LOOK_2:
+            g_twin.setRenderMode(1);
+            break;
+        case IDM_VIEW_FOLD_LOOK_3:
+            g_twin.setRenderMode(2);
+            break;
+        case IDM_VIEW_TWIN_DEMO:
+            g_twin_demo = !g_twin_demo;
+            if (g_twin_demo) {
+                g_twin_mode = true;
+                g_fold_only_view = false;
+                g_twin.setFoldOnly(false);
+                g_twin_demo_start = std::chrono::steady_clock::now();
+            }
+            break;
+        case IDM_WIN_ALWAYS_ON_TOP:
+            g_pinned = !g_pinned;
+            SDL_SetWindowAlwaysOnTop(g_win, g_pinned ? SDL_TRUE : SDL_FALSE);
+            break;
+        case IDM_WIN_POPOUT:
+            toggle_popout_window();
+            break;
+        case IDM_HELP_ABOUT:
+            MessageBoxW(hWnd, L"rPlayHub \xe2\x80\x94 High-performance iOS Screen Mirroring & Control\nVersion 1.0.0\n\nCopyright \xc2\xa9 2026 rPlayAI Team", L"About rPlayHub", MB_OK | MB_ICONINFORMATION);
+            break;
+        }
+        return 0;
+    }
+    return CallWindowProc(g_win32_orig_wndproc, hWnd, uMsg, wParam, lParam);
+}
+
+static void setup_win32_native_menu(HWND hwnd)
+{
+    HMENU hMenuBar = CreateMenu();
+
+    // Device Menu
+    HMENU hMenuDev = CreatePopupMenu();
+    AppendMenuW(hMenuDev, MF_STRING, IDM_DEV_REFRESH, L"&Refresh Devices\tCtrl+R");
+    AppendMenuW(hMenuDev, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenuDev, MF_STRING, IDM_DEV_HOME, L"&Home Button\tCtrl+Shift+H");
+    AppendMenuW(hMenuDev, MF_STRING, IDM_DEV_ROTATE, L"Ro&tate View\tCtrl+L");
+    AppendMenuW(hMenuDev, MF_STRING, IDM_DEV_SCREENSHOT, L"Take &Screenshot\tCtrl+S");
+    AppendMenuW(hMenuDev, MF_STRING, IDM_DEV_RECORD, L"Start &Recording");
+    AppendMenuW(hMenuDev, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenuDev, MF_STRING, IDM_DEV_SLEEP, L"&Sleep / Wake");
+    AppendMenuW(hMenuDev, MF_STRING, IDM_DEV_RESTART, L"Res&tart Device");
+    AppendMenuW(hMenuDev, MF_STRING, IDM_DEV_SHUTDOWN, L"Shut &Down Device…");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hMenuDev, L"&Device");
+
+    // View Menu
+    HMENU hMenuView = CreatePopupMenu();
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_SIDEBAR, L"Show Devices &Sidebar");
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_INSPECTOR, L"Show &Inspector Pane");
+    AppendMenuW(hMenuView, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_INSP_SETTINGS, L"&Settings Inspector");
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_INSP_REPORT, L"&Report Inspector");
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_INSP_INFO, L"&Info Inspector");
+    AppendMenuW(hMenuView, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_TWIN_3D, L"&3D Device View");
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_FOLD, L"&Fold View");
+
+    HMENU hMenuFoldLook = CreatePopupMenu();
+    AppendMenuW(hMenuFoldLook, MF_STRING, IDM_VIEW_FOLD_LOOK_1, L"&1  Hard cut (glued to glass)");
+    AppendMenuW(hMenuFoldLook, MF_STRING, IDM_VIEW_FOLD_LOOK_2, L"&2  Locked (content plane fixed)");
+    AppendMenuW(hMenuFoldLook, MF_STRING, IDM_VIEW_FOLD_LOOK_3, L"&3  Stylized (iPhone Duo look)");
+    AppendMenuW(hMenuView, MF_POPUP, (UINT_PTR)hMenuFoldLook, L"Fold &Look");
+
+    AppendMenuW(hMenuView, MF_STRING, IDM_VIEW_TWIN_DEMO, L"Show 3D &Demo");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hMenuView, L"&View");
+
+    // Window Menu
+    HMENU hMenuWin = CreatePopupMenu();
+    AppendMenuW(hMenuWin, MF_STRING, IDM_WIN_ALWAYS_ON_TOP, L"&Always on Top");
+    AppendMenuW(hMenuWin, MF_STRING, IDM_WIN_POPOUT, L"&Open Screen in New Window");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hMenuWin, L"&Window");
+
+    // Help Menu
+    HMENU hMenuHelp = CreatePopupMenu();
+    AppendMenuW(hMenuHelp, MF_STRING, IDM_HELP_ABOUT, L"&About rPlayHub");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hMenuHelp, L"&Help");
+
+    SetMenu(hwnd, hMenuBar);
+    DrawMenuBar(hwnd);
+
+    g_win32_orig_wndproc = (WNDPROC)SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)Win32MenuSubclassProc);
+}
+#endif
 
 static char g_device_search_filter[128] = "";
 
@@ -1822,7 +2239,7 @@ static void render_titlebar(float win_w)
 
     /* 3. Right Toolbar: Inspector Group Icons (Settings, Report, Info) + Primary Menu (3 dots) */
     const float insp_group_w = tb.x * 3 + 4.0f * s;
-    const ImVec2 insp_g0(win_w - insp_group_w - tb.x - 28.0f * s, bar_y);
+    const ImVec2 insp_g0(win_w - insp_group_w - (g_system_titlebar ? 12.0f * s : (tb.x + 28.0f * s)), bar_y);
 
     /* Inspector Group pill: Settings | Report | Info (matching gui_app.cc lines 1281-1295) */
     dl->AddRectFilled(ImVec2(insp_g0.x - 4.0f * s, insp_g0.y - 3.0f * s),
@@ -1858,8 +2275,8 @@ static void render_titlebar(float win_w)
         note_no_drag();
     }
 
-    /* Primary Menu (three vertical dots at far right, matching gui_app.cc lines 1298-1315) */
-    {
+    /* Primary Menu (three vertical dots at far right, omitted on Windows where native menu bar is used) */
+    if (!g_system_titlebar) {
         ImGui::SetCursorScreenPos(ImVec2(win_w - tb.x - 10.0f * s, bar_y));
         auto dots = [](ImDrawList *d, ImVec2 p, float sz, ImU32 col) {
             float r = sz * 0.075f;
@@ -2094,28 +2511,19 @@ static void upload_latest_video_frame()
             model_h = m->screen_h;
         }
     }
-    int crop_w = f->width, crop_h = f->height;
-    if (g_active_w > 0 && g_active_h > 0 && g_active_w <= f->width && g_active_h <= f->height) {
-        crop_w = g_active_w;
-        crop_h = g_active_h;
-    }
-    if (model_w > 0 && model_h > 0 && model_w <= crop_w && model_h <= crop_h &&
-        (crop_w - model_w) <= 64 && (crop_h - model_h) <= 64) {
-        crop_w = model_w;
-        crop_h = model_h;
-    }
-    /* IYUV requires even dimensions */
-    crop_w &= ~1;
-    crop_h &= ~1;
-    if (crop_w <= 0) crop_w = f->width;
-    if (crop_h <= 0) crop_h = f->height;
 
-    if (!g_vtex || g_vtex_w != crop_w || g_vtex_h != crop_h) {
+    int fw = f->width;
+    int fh = f->height;
+    if (fw <= 0 || fh <= 0) return;
+
+    /* g_vtex is created with the full decoded frame size (SPS dimensions, e.g. 1184x2576).
+     * It is never destroyed on resolution downshifts, avoiding DirectX texture recreation stalls. */
+    if (!g_vtex || g_vtex_w != fw || g_vtex_h != fh) {
         if (g_vtex) SDL_DestroyTexture(g_vtex);
-        g_vtex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, crop_w, crop_h);
+        g_vtex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, fw, fh);
         if (g_vtex) SDL_SetTextureBlendMode(g_vtex, SDL_BLENDMODE_BLEND);
-        g_vtex_w = crop_w;
-        g_vtex_h = crop_h;
+        g_vtex_w = fw;
+        g_vtex_h = fh;
     }
     if (g_vtex) {
         SDL_UpdateYUVTexture(g_vtex, nullptr,
@@ -2124,26 +2532,50 @@ static void upload_latest_video_frame()
                              f->data[2], f->linesize[2]);
     }
 
+    /* As documented in doc/RENDERING-HANDOFF.md:
+     * - Full-size tier (g_active_w >= fw or g_active_w <= 0):
+     *   The frame is screen plus alignment padding (e.g. 1170x2532 inside 1184x2576).
+     *   The live region is model_w x model_h.
+     * - Reduced tiers (g_active_w < fw):
+     *   The encoder squeezes the whole screen into top-left activeSize (1088x1920 or 720x1280)
+     *   with ZERO padding. Conflating them causes the picture to twitch/vibrate on downshifts! */
+    int live_w = fw;
+    int live_h = fh;
+    if (g_active_w > 0 && g_active_h > 0 && (g_active_w < fw || g_active_h < fh)) {
+        live_w = g_active_w;
+        live_h = g_active_h;
+    } else if (model_w > 0 && model_h > 0 && model_w <= fw && model_h <= fh) {
+        live_w = model_w;
+        live_h = model_h;
+    }
+    g_live_w = live_w;
+    g_live_h = live_h;
+
+    g_vtex_uv0 = ImVec2(0.0f, 0.0f);
+    g_vtex_uv1 = ImVec2((float)live_w / (float)fw, (float)live_h / (float)fh);
+
     /* If pop-out DisplayWindow is active, copy planes into g_popout_frame */
     if (g_popout_win && !g_popout_win->closeRequested()) {
-        g_popout_frame.width = crop_w;
-        g_popout_frame.height = crop_h;
-        g_popout_frame.displayWidth = crop_w;
-        g_popout_frame.displayHeight = crop_h;
+        int pw = live_w & ~1;
+        int ph = live_h & ~1;
+        g_popout_frame.width = pw;
+        g_popout_frame.height = ph;
+        g_popout_frame.displayWidth = pw;
+        g_popout_frame.displayHeight = ph;
         g_popout_frame.displayOrientation = g_rotation;
         g_popout_frame.displayOrientationCorrection = g_rotation;
         g_popout_frame.format = rplayhub::FrameFormat::I420;
-        g_popout_frame.pitch[0] = crop_w;
-        g_popout_frame.pitch[1] = crop_w / 2;
-        g_popout_frame.pitch[2] = crop_w / 2;
-        g_popout_frame.planes[0].resize((size_t)crop_w * crop_h);
-        g_popout_frame.planes[1].resize((size_t)(crop_w / 2) * (crop_h / 2));
-        g_popout_frame.planes[2].resize((size_t)(crop_w / 2) * (crop_h / 2));
-        for (int y = 0; y < crop_h; y++)
-            memcpy(&g_popout_frame.planes[0][(size_t)y * crop_w], f->data[0] + y * f->linesize[0], (size_t)crop_w);
-        for (int y = 0; y < crop_h / 2; y++) {
-            memcpy(&g_popout_frame.planes[1][(size_t)y * (crop_w / 2)], f->data[1] + y * f->linesize[1], (size_t)(crop_w / 2));
-            memcpy(&g_popout_frame.planes[2][(size_t)y * (crop_w / 2)], f->data[2] + y * f->linesize[2], (size_t)(crop_w / 2));
+        g_popout_frame.pitch[0] = pw;
+        g_popout_frame.pitch[1] = pw / 2;
+        g_popout_frame.pitch[2] = pw / 2;
+        g_popout_frame.planes[0].resize((size_t)pw * ph);
+        g_popout_frame.planes[1].resize((size_t)(pw / 2) * (ph / 2));
+        g_popout_frame.planes[2].resize((size_t)(pw / 2) * (ph / 2));
+        for (int y = 0; y < ph; y++)
+            memcpy(&g_popout_frame.planes[0][(size_t)y * pw], f->data[0] + y * f->linesize[0], (size_t)pw);
+        for (int y = 0; y < ph / 2; y++) {
+            memcpy(&g_popout_frame.planes[1][(size_t)y * (pw / 2)], f->data[1] + y * f->linesize[1], (size_t)(pw / 2));
+            memcpy(&g_popout_frame.planes[2][(size_t)y * (pw / 2)], f->data[2] + y * f->linesize[2], (size_t)(pw / 2));
         }
         g_popout_frame.frameNumber = g_frame_seq;
     }
@@ -2268,9 +2700,26 @@ static void render_live_mirror(ImVec2 origin, ImVec2 size)
     const float s = g_scale;
     ImDrawList *dl = ImGui::GetWindowDrawList();
 
-    int disp_w = (g_rotation & 1) ? g_vtex_h : g_vtex_w;
-    int disp_h = (g_rotation & 1) ? g_vtex_w : g_vtex_h;
-    float aspect = (disp_w > 0 && disp_h > 0) ? ((float)disp_w / (float)disp_h) : (9.0f / 19.5f);
+    /* Presentation aspect ratio: always keep the device's physical screen aspect ratio
+     * (or the full coded frame aspect ratio), NOT the anamorphic downshift tier ratio.
+     * Downshift tiers (1088x1920, 720x1280) are a 16:9 anamorphic squeeze of the full 19.5:9 screen. */
+    int model_w = g_bound_screen_w, model_h = g_bound_screen_h;
+    if ((model_w <= 0 || model_h <= 0) && !g_bound_product_type.empty()) {
+        if (const auto *m = lookup_device_model(g_bound_product_type)) {
+            model_w = m->screen_w;
+            model_h = m->screen_h;
+        }
+    }
+    float native_aspect = 9.0f / 19.5f;
+    if (model_w > 0 && model_h > 0) {
+        native_aspect = (float)model_w / (float)model_h;
+    } else {
+        std::lock_guard<std::mutex> lk(g_frame_mu);
+        if (g_latest_frame && g_latest_frame->width > 0 && g_latest_frame->height > 0) {
+            native_aspect = (float)g_latest_frame->width / (float)g_latest_frame->height;
+        }
+    }
+    float aspect = (g_rotation & 1) ? (1.0f / native_aspect) : native_aspect;
 
     const float bezel  = 10.0f * s;
     const float margin = bezel + 4.0f * s;
@@ -2289,11 +2738,9 @@ static void render_live_mirror(ImVec2 origin, ImVec2 size)
                       ImVec2(px + target_w + bezel, py + target_h + bezel),
                       IM_COL32(18, 18, 22, 255), 28.0f * s);
 
-    ImVec2 uv0, uv1;
-    rplayhub::VideoUvInset(g_vtex_w, g_vtex_h, uv0, uv1, 1.0f);
     rplayhub::DrawImageTurned(dl, (ImTextureID)(intptr_t)g_vtex,
                               ImVec2(px, py), ImVec2(px + target_w, py + target_h),
-                              g_rotation, IM_COL32_WHITE, 20.0f * s, uv0, uv1);
+                              g_rotation, IM_COL32_WHITE, 20.0f * s, g_vtex_uv0, g_vtex_uv1);
 
     /* Notch / Dynamic Island cutout in portrait mode (ported from DeviceModel.cutoutRect) */
     if ((g_rotation & 3) == 0) {
@@ -3628,9 +4075,15 @@ int main(int argc, char **argv)
         g_scale = 1.5f;   /* 4K / HiDPI display */
     } else if (dm.w >= 2400 || dm.h >= 1400) {
         g_scale = 1.3f;   /* QHD / 1440p display */
+#ifdef _WIN32
+    } else {
+        g_scale = 1.0f;
+    }
+#else
     } else {
         g_scale = 1.15f;  /* 1080p display — slightly boosted for crispness */
     }
+#endif
 
     int init_w = (int)std::lround(1350.0f * g_scale);
     int init_h = (int)std::lround(840.0f * g_scale);
@@ -3661,7 +4114,31 @@ int main(int argc, char **argv)
         fprintf(stderr, "SDL window/renderer failed: %s\n", SDL_GetError());
         return 1;
     }
+    bool has_vsync = false;
+    SDL_RendererInfo rinfo;
+    if (SDL_GetRendererInfo(g_ren, &rinfo) == 0) {
+        has_vsync = (rinfo.flags & SDL_RENDERER_PRESENTVSYNC) != 0;
+    }
     SDL_SetWindowMinimumSize(g_win, (int)std::lround(760.0f * g_scale), (int)std::lround(520.0f * g_scale));
+    SDL_ShowWindow(g_win);
+    SDL_RaiseWindow(g_win);
+#ifdef _WIN32
+    timeBeginPeriod(1);
+    SDL_SysWMinfo wmInfo;
+    SDL_VERSION(&wmInfo.version);
+    if (SDL_GetWindowWMInfo(g_win, &wmInfo)) {
+        HWND hwnd = wmInfo.info.win.window;
+        HINSTANCE hInst = GetModuleHandle(NULL);
+        HICON hIcon = LoadIcon(hInst, MAKEINTRESOURCE(1));
+        if (hIcon) {
+            SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
+            SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+        }
+        if (g_system_titlebar) {
+            setup_win32_native_menu(hwnd);
+        }
+    }
+#endif
 
     if (!g_system_titlebar) {
         SDL_SetWindowHitTest(g_win, window_hit_test, nullptr);
@@ -3730,6 +4207,19 @@ int main(int argc, char **argv)
             ImGui_ImplSDL2_ProcessEvent(&ev);
             if (ev.type == SDL_QUIT) {
                 g_quit = true;
+            } else if (ev.type == SDL_KEYDOWN && !ImGui::GetIO().WantTextInput) {
+                SDL_Keymod mod = SDL_GetModState();
+                bool ctrl = (mod & KMOD_CTRL) != 0;
+                bool shift = (mod & KMOD_SHIFT) != 0;
+                if (ctrl && !shift && ev.key.keysym.sym == SDLK_r) {
+                    refresh_devices();
+                } else if (ctrl && shift && ev.key.keysym.sym == SDLK_h) {
+                    api_async("press_button", {{"button", "home"}});
+                } else if (ctrl && !shift && ev.key.keysym.sym == SDLK_l) {
+                    g_rotation = (g_rotation + 1) & 3;
+                } else if (ctrl && !shift && ev.key.keysym.sym == SDLK_s) {
+                    take_screenshot_action();
+                }
             } else if (ev.type == SDL_WINDOWEVENT &&
                        ev.window.windowID == SDL_GetWindowID(g_win) &&
                        ev.window.event == SDL_WINDOWEVENT_CLOSE) {
@@ -3810,8 +4300,10 @@ int main(int argc, char **argv)
             rplayhub::cutCorners(g_ren, out_w, out_h, radius * px);
         }
         SDL_RenderPresent(g_ren);
-        uint64_t frame_ms = now_ms() - now;
-        if (frame_ms < 16) SDL_Delay((Uint32)(16 - frame_ms));
+        if (!has_vsync) {
+            uint64_t frame_ms = now_ms() - now;
+            if (frame_ms < 16) SDL_Delay((Uint32)(16 - frame_ms));
+        }
     }
 
     stop_syslog();
@@ -3835,6 +4327,9 @@ int main(int argc, char **argv)
     ImGui::DestroyContext();
     SDL_DestroyRenderer(g_ren);
     SDL_DestroyWindow(g_win);
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
     SDL_Quit();
     return 0;
 }

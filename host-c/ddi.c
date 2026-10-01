@@ -5,19 +5,22 @@
  * the pre-migration CoreFoundation version) -- verified by diff. */
 #include "ddi.h"
 
-#include <arpa/inet.h>
+#include "compat.h"
 #include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/select.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <time.h>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/select.h>
+#include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <plist/plist.h>
 #include "usernet.h"
@@ -52,6 +55,18 @@ static int dget_str(plist_t d, const char *k, char *out, size_t cap)
 static int recvn(int fd, uint8_t *buf, size_t n)
 { size_t g = 0; while (g < n) { long r = tun_read(fd, buf + g, n - g); if (r <= 0) return -1; g += (size_t)r; } return 0; }
 
+static int write_all(int fd, const void *buf, size_t n)
+{
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t sent = 0;
+    while (sent < n) {
+        long w = tun_write(fd, p + sent, n - sent);
+        if (w <= 0) return -1;
+        sent += (size_t)w;
+    }
+    return 0;
+}
+
 static int mounter_connect(const char *addr, long port)
 {
     return tun_connect(addr, (int)port, 15);   /* tunnel: kernel socket or lwIP per userspace mode */
@@ -64,7 +79,7 @@ static int send_plist(int fd, plist_t d)
     plist_to_xml(d, &xml, &xlen);
     if (!xml) return -1;
     uint8_t hdr[4] = { (uint8_t)(xlen >> 24), (uint8_t)(xlen >> 16), (uint8_t)(xlen >> 8), (uint8_t)xlen };
-    int rc = (send(fd, hdr, 4, 0) == 4 && send(fd, xml, xlen, 0) == (ssize_t)xlen) ? 0 : -1;
+    int rc = (write_all(fd, hdr, 4) == 0 && write_all(fd, xml, xlen) == 0) ? 0 : -1;
     plist_mem_free(xml);
     return rc;
 }
@@ -92,15 +107,18 @@ static int rsd_checkin(int fd)
     dset_str(req, "Request", "RSDCheckin");
     int ok = send_plist(fd, req) == 0;
     plist_free(req);
-    if (!ok) return -1;
+    if (!ok) { fprintf(stderr, "  rsd_checkin: send_plist failed\n"); return -1; }
     plist_t r = recv_plist(fd);
-    if (!r) return -1;
-    char v[32]; int good = dget_str(r, "Request", v, sizeof v) == 0 && !strcmp(v, "RSDCheckin");
+    if (!r) { fprintf(stderr, "  rsd_checkin: recv_plist 1 failed\n"); return -1; }
+    char v[32] = ""; int good = dget_str(r, "Request", v, sizeof v) == 0 && !strcmp(v, "RSDCheckin");
+    if (!good) { fprintf(stderr, "  rsd_checkin: expected RSDCheckin, got '%s'\n", v); }
     plist_free(r);
     if (!good) return -1;
     r = recv_plist(fd);
-    if (!r) return -1;
+    if (!r) { fprintf(stderr, "  rsd_checkin: recv_plist 2 failed\n"); return -1; }
+    v[0] = 0;
     good = dget_str(r, "Request", v, sizeof v) == 0 && !strcmp(v, "StartService");
+    if (!good) { fprintf(stderr, "  rsd_checkin: expected StartService, got '%s'\n", v); }
     plist_free(r);
     return good ? 0 : -1;
 }
@@ -326,9 +344,15 @@ static char *tss_post(const uint8_t *body, size_t blen, size_t *rlen)
     for (struct addrinfo *a = res; a; a = a->ai_next) {
         fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
         if (fd < 0) continue;
+#ifdef _WIN32
+        DWORD ms = 30000;
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&ms, sizeof ms);
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&ms, sizeof ms);
+#else
         struct timeval tv = { .tv_sec = 30, .tv_usec = 0 };
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+#endif
         if (connect(fd, a->ai_addr, a->ai_addrlen) == 0) break;
         close(fd); fd = -1;
     }
@@ -488,7 +512,7 @@ int cdhost_ddi_activate(const char *addr, long port, const char *ddi_dir_in)
         goto done;
     }
     plist_free(ack);
-    if (tun_write(fd, dmg, dmg_n) != (ssize_t)dmg_n) { fprintf(stderr, "  upload failed\n"); goto done; }
+    if (write_all(fd, dmg, dmg_n) != 0) { fprintf(stderr, "  upload failed\n"); goto done; }
     { plist_t up = recv_plist(fd); char s2[32] = "";
       int good = up && dget_str(up, "Status", s2, sizeof s2) == 0 && !strcmp(s2, "Complete");
       if (up) plist_free(up);

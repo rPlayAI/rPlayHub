@@ -18,6 +18,7 @@ __pycache__/
 # recordings and run logs (logs/ also holds device UDIDs)
 recordings/
 logs/
+*.log
 replay-recording.h265
 
 .DS_Store
@@ -44,9 +45,16 @@ refs/
 
 # compiled output that lives next to its source rather than in build/
 *.o
+*.obj
 *.a
+*.lib
 *.so
 *.dylib
+*.dll
+*.exe
+*.pdb
+*.res
+/rplay-gui.ico
 host-c/cdhost
 core/test_rp_xpc
 core/test_rp_video_stream

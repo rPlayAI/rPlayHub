@@ -4,12 +4,15 @@
  * (lwIP) only through the plain functions in usernet.h. */
 #include "usernet.h"
 
+#include "compat.h"
+#include <string.h>
+#ifndef _WIN32
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#endif
 
 static int g_on;
 void usernet_enable(int on) { g_on = on; }
@@ -25,9 +28,15 @@ int tun_connect(const char *addr, int port, int timeout_s)
     if (inet_pton(AF_INET6, addr, &sa.sin6_addr) != 1) return -1;
     int fd = socket(AF_INET6, SOCK_STREAM, 0);
     if (fd < 0) return -1;
+#ifdef _WIN32
+    DWORD ms = (timeout_s > 0 ? timeout_s : 10) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&ms, sizeof ms);
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&ms, sizeof ms);
+#else
     struct timeval tv = { .tv_sec = timeout_s > 0 ? timeout_s : 10, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+#endif
     if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
     return fd;
 }

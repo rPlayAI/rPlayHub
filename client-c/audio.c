@@ -1,16 +1,28 @@
 #include "audio.h"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+typedef intptr_t ssize_t;
+#define sleep(x) Sleep((x)*1000)
+#define close closesocket
+#else
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <pthread.h>
-#include <stdio.h>
-#include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#endif
+#include <stdio.h>
+#include <string.h>
 
 #include <SDL.h>
 #include <libavcodec/avcodec.h>
@@ -43,6 +55,14 @@ void audio_stats(uint64_t *received, uint64_t *undecodable, uint64_t *dropped)
 
 static int connect_to(const char *host, int port)
 {
+#ifdef _WIN32
+    static int wsa_init = 0;
+    if (!wsa_init) {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        wsa_init = 1;
+    }
+#endif
     char ps[16];
     snprintf(ps, sizeof ps, "%d", port);
     struct addrinfo hints = { 0 }, *res = NULL;
@@ -50,16 +70,16 @@ static int connect_to(const char *host, int port)
     if (getaddrinfo(host, ps, &hints, &res) != 0) return -1;
     int fd = -1;
     for (struct addrinfo *a = res; a; a = a->ai_next) {
-        fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+        fd = (int)socket(a->ai_family, a->ai_socktype, a->ai_protocol);
         if (fd < 0) continue;
-        if (connect(fd, a->ai_addr, a->ai_addrlen) == 0) break;
+        if (connect(fd, a->ai_addr, (int)a->ai_addrlen) == 0) break;
         close(fd);
         fd = -1;
     }
     freeaddrinfo(res);
     if (fd >= 0) {
         int one = 1;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
     }
     return fd;
 }
@@ -109,7 +129,7 @@ static void run_connection(int fd, AVCodecContext *dec, AVPacket *pkt, AVFrame *
     static uint8_t buf[1 << 16];
     size_t have = 0;
     for (;;) {
-        ssize_t r = recv(fd, buf + have, sizeof buf - have, 0);
+        ssize_t r = recv(fd, (char *)buf + have, (int)(sizeof buf - have), 0);
         if (r <= 0) return;
         have += (size_t)r;
         size_t off = 0;
@@ -133,13 +153,13 @@ static void run_connection(int fd, AVCodecContext *dec, AVPacket *pkt, AVFrame *
     }
 }
 
-static void *audio_thread(void *arg)
+static int SDLCALL audio_thread_fn(void *arg)
 {
     (void)arg;
     AVCodecContext *dec = open_decoder();
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
-    if (!dec || !pkt || !frame) return NULL;
+    if (!dec || !pkt || !frame) return 0;
     int said = 0;
     for (;;) {
         int fd = connect_to(g_host, g_port);
@@ -151,7 +171,7 @@ static void *audio_thread(void *arg)
         avcodec_flush_buffers(dec);
         sleep(2);
     }
-    return NULL;
+    return 0;
 }
 
 int audio_start(const char *host, int port)
@@ -172,8 +192,8 @@ int audio_start(const char *host, int port)
         fprintf(stderr, "audio: no output device: %s\n", SDL_GetError());
         return -1;
     }
-    pthread_t t;
-    if (pthread_create(&t, NULL, audio_thread, NULL) != 0) return -1;
-    pthread_detach(t);
+    SDL_Thread *t = SDL_CreateThread(audio_thread_fn, "audio_thread", NULL);
+    if (!t) return -1;
+    SDL_DetachThread(t);
     return 0;
 }

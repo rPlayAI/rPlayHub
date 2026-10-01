@@ -13,7 +13,7 @@ Verified against a real device via probe.py.
 """
 import plistlib, socket, struct, sys
 
-USBMUXD_SOCKET = "/var/run/usbmuxd"
+USBMUXD_SOCKET = ("127.0.0.1", 27015) if sys.platform == "win32" else "/var/run/usbmuxd"
 
 _TYPE_PLIST = 8
 _RESULT_OK = 0
@@ -27,8 +27,19 @@ class UsbmuxConnection:
     """One connection to usbmuxd. After connect_to_port() it BECOMES the device pipe."""
 
     def __init__(self, address=USBMUXD_SOCKET):
-        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._sock.connect(address)
+        if isinstance(address, (tuple, list)):
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._sock.connect(tuple(address))
+        elif sys.platform == "win32":
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if ":" in str(address):
+                host, port = str(address).split(":")
+                self._sock.connect((host, int(port)))
+            else:
+                self._sock.connect(("127.0.0.1", 27015))
+        else:
+            self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._sock.connect(address)
         self._tag = 0
 
     # --- framed plist exchange with usbmuxd itself ---

@@ -69,6 +69,11 @@ LDFLAGS += $(IMD_LIBS)
 ifneq ($(UNAME),Darwin)
   LDFLAGS += -lpthread
 endif
+ifeq ($(OS),Windows_NT)
+  LDFLAGS += -lws2_32
+else ifneq (,$(findstring NT,$(UNAME)))
+  LDFLAGS += -lws2_32
+endif
 
 ifeq ($(TLS),mbedtls)
   # Compiled from the vendored source rather than linked against a system library, so the same
@@ -125,8 +130,8 @@ all: cdhost
 
 cdhost: cdhost.c api_server.c media.c ddi.c imd.c usernet.c tunio.c $(CORE_SRC) $(LWIP_SRC) $(TLS_SRC)
 	@echo "  TLS backend: $(TLS)"
-	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c ddi.c imd.c usernet.c tunio.c $(CORE_SRC) $(LWIP_SRC) $(TLS_SRC) $(LDFLAGS) -lz
-	$(if $(filter 1,$(STATIC)),strip $@,)   # full symbol strip on the shipped static build
+	$(CC) $(CFLAGS) -o $@ cdhost.c api_server.c media.c ddi.c imd.c usernet.c tunio.c $(CORE_SRC) $(LWIP_SRC) $(TLS_SRC) $(LDFLAGS) -lz $(if $(filter Windows_NT,$(OS)),-lws2_32,)
+	$(if $(filter 1,$(STATIC)),strip $@)
 
 clean:
 	rm -f cdhost

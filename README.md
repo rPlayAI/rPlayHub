@@ -38,6 +38,10 @@ and storage on the right.
 
 ![rPlayHub on Linux mirroring an iPhone 13 Pro, with the Info tab alongside](doc/images/rplayhub-linux-gui.png)
 
+The Windows client, with native desktop menus and live mirroring:
+
+![rPlayHub on Windows mirroring an iPhone with native menus and inspector](doc/images/rPlayHub-windows.png)
+
 ## Requirements
 
 - **iOS 27 or later on the iPhone — for every version of rPlayHub**, on every platform. rPlayHub

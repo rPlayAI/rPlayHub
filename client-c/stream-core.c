@@ -3,22 +3,46 @@
  * HEVCStream.parseActiveRectTrailer). */
 #include "stream-core.h"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <io.h>
+typedef intptr_t ssize_t;
+#define close closesocket
+#else
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/time.h>
 #include <time.h>
-#include <unistd.h>
 
 uint64_t now_ms(void)
 {
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    static int init = 0;
+    if (!init) {
+        QueryPerformanceFrequency(&freq);
+        init = 1;
+    }
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    return (uint64_t)((counter.QuadPart * 1000) / freq.QuadPart);
+#else
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint64_t)t.tv_sec * 1000 + (uint64_t)(t.tv_nsec / 1000000);
+#endif
 }
 
 /* ------------------------------------------------------------------ Annex-B splitter
@@ -94,6 +118,7 @@ static int nal_type(const uint8_t *nal)      { return g_h264 ? (nal[0] & 0x1F) :
 static int is_param_set(int t)               { return g_h264 ? (t == 7 || t == 8) : (t >= 32 && t <= 34); }
 static int is_vcl(int t)                     { return g_h264 ? (t >= 1 && t <= 5) : t < 32; }
 static int is_keyframe(int t)                { return g_h264 ? t == 5 : (t >= 16 && t <= 23); }
+static int is_aud(int t)                     { return g_h264 ? (t == 9) : (t == 35); }
 static int header_len(void)                  { return g_h264 ? 1 : 2; }
 
 /* ------------------------------------------------------------------ active-rect trailer
@@ -207,7 +232,11 @@ void handle_nal(void *ctx, const uint8_t *nal, size_t len)
         au_append(s, nal, len);   /* in-band is fine: libavcodec picks parameter sets out of the packet */
         return;
     }
-    if (!is_vcl(t)) return;       /* SEI, AUD, end-of-sequence — nothing to display */
+    if (is_aud(t)) {
+        flush_au(s);
+        return;
+    }
+    if (!is_vcl(t)) return;       /* SEI, end-of-sequence — nothing to display */
 
     int first_slice = (nal[header_len()] & 0x80) != 0;
     if (first_slice) flush_au(s);
@@ -227,6 +256,14 @@ void handle_nal(void *ctx, const uint8_t *nal, size_t len)
 
 int tcp_connect(const char *host, int port)
 {
+#ifdef _WIN32
+    static int wsa_init = 0;
+    if (!wsa_init) {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        wsa_init = 1;
+    }
+#endif
     struct sockaddr_in sa;
     memset(&sa, 0, sizeof sa);
     sa.sin_family = AF_INET;
@@ -235,10 +272,19 @@ int tcp_connect(const char *host, int port)
         fprintf(stderr, "%s: not an IPv4 address (spike limitation)\n", host);
         return -1;
     }
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
-        fprintf(stderr, "connect %s:%d: %s\n", host, port, strerror(errno));
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        if (err != WSAECONNREFUSED) {
+            fprintf(stderr, "connect %s:%d: error %d\n", host, port, err);
+        }
+#else
+        if (errno != ECONNREFUSED) {
+            fprintf(stderr, "connect %s:%d: %s\n", host, port, strerror(errno));
+        }
+#endif
         close(fd);
         return -1;
     }
@@ -252,14 +298,19 @@ int stream_says_h264(const char *host, int api_port)
 {
     int fd = tcp_connect(host, api_port);
     if (fd < 0) return 0;
+#ifdef _WIN32
+    DWORD tv = 2000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+#else
     struct timeval tv = { 2, 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+#endif
     const char req[] = "{\"id\":1,\"method\":\"stream_info\"}\n";
     if (send(fd, req, sizeof req - 1, 0) != (ssize_t)(sizeof req - 1)) { close(fd); return 0; }
     char reply[2048];
     ssize_t got = 0, n;
     while (got < (ssize_t)sizeof reply - 1 &&
-           (n = recv(fd, reply + got, sizeof reply - 1 - got, 0)) > 0) {
+           (n = recv(fd, reply + got, (int)(sizeof reply - 1 - got), 0)) > 0) {
         got += n;
         if (memchr(reply, '\n', (size_t)got)) break;
     }

@@ -39,7 +39,10 @@ static int write_all(rp_rxpc_session *s, const uint8_t *p, size_t n)
 {
     while (n) {
         long w = s->io.write(s->io.ctx, p, n);
-        if (w <= 0) return -1;
+        if (w <= 0) {
+            fprintf(stderr, "  rxpc: write_all failed (w=%ld)\n", w);
+            return -1;
+        }
         p += (size_t)w;
         n -= (size_t)w;
     }
@@ -65,9 +68,15 @@ static int read_frame(rp_rxpc_session *s, rp_h2_frame *frame)
             s->pending_consume = consumed;
             return 0;
         }
-        if (s->raw_len == s->raw_cap) return -1;             /* a frame bigger than the buffer */
+        if (s->raw_len == s->raw_cap) {
+            fprintf(stderr, "  rxpc: read_frame overflowed raw_cap (%zu)\n", s->raw_cap);
+            return -1;
+        }
         long r = s->io.read(s->io.ctx, s->raw + s->raw_len, s->raw_cap - s->raw_len);
-        if (r <= 0) return -1;
+        if (r <= 0) {
+            fprintf(stderr, "  rxpc: read_frame io.read failed (r=%ld)\n", r);
+            return -1;
+        }
         s->raw_len += (size_t)r;
     }
 }
@@ -120,8 +129,16 @@ int rp_rxpc_handshake(rp_rxpc_session *s)
 
     for (;;) {
         rp_h2_frame f;
-        if (read_frame(s, &f) != 0) return -1;
-        if (f.type == H2_GOAWAY || f.type == H2_RST_STREAM) return -1;
+        if (read_frame(s, &f) != 0) {
+            fprintf(stderr, "  rp_rxpc_handshake: read_frame failed\n");
+            return -1;
+        }
+        fprintf(stderr, "  rxpc handshake frame: type=%d flags=0x%x len=%u stream=%u\n",
+                f.type, f.flags, (unsigned)f.length, (unsigned)f.stream);
+        if (f.type == H2_GOAWAY || f.type == H2_RST_STREAM) {
+            fprintf(stderr, "  rp_rxpc_handshake: got GOAWAY or RST_STREAM (type=%d)\n", f.type);
+            return -1;
+        }
         if (f.type == H2_SETTINGS && !(f.flags & H2_FLAG_ACK)) {
             if (!(n = rp_h2_write_settings_ack(out, sizeof out))) return -1;
             return write_all(s, out, n);

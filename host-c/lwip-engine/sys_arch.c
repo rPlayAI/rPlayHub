@@ -479,7 +479,7 @@ sys_sem_new_internal(u8_t count)
   if (sem != NULL) {
     sem->c = count;
     pthread_condattr_init(&(sem->condattr));
-#if !(defined(LWIP_UNIX_MACH) || (defined(LWIP_UNIX_ANDROID) && __ANDROID_API__ < 21))
+#if !(defined(LWIP_UNIX_MACH) || (defined(LWIP_UNIX_ANDROID) && __ANDROID_API__ < 21) || defined(_WIN32))
     pthread_condattr_setclock(&(sem->condattr), CLOCK_MONOTONIC);
 #endif
     pthread_cond_init(&(sem->cond), &(sem->condattr));
@@ -522,7 +522,11 @@ cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex, u32_t timeout)
   }
 
   /* Get a timestamp and add the timeout value. */
+#ifdef _WIN32
+  clock_gettime(CLOCK_REALTIME, &rtime1);
+#else
   get_monotonic_time(&rtime1);
+#endif
 #if defined(LWIP_UNIX_MACH) || (defined(LWIP_UNIX_ANDROID) && __ANDROID_API__ < 21)
   ts.tv_sec = timeout / 1000L;
   ts.tv_nsec = (timeout % 1000L) * 1000000L;
@@ -548,7 +552,11 @@ cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex, u32_t timeout)
   }
 
   /* Calculate for how long we waited for the cond. */
+#ifdef _WIN32
+  clock_gettime(CLOCK_REALTIME, &rtime2);
+#else
   get_monotonic_time(&rtime2);
+#endif
   ts.tv_sec = rtime2.tv_sec - rtime1.tv_sec;
   ts.tv_nsec = rtime2.tv_nsec - rtime1.tv_nsec;
   if (ts.tv_nsec < 0) {
@@ -839,10 +847,14 @@ sys_arch_unprotect(sys_prot_t pval)
 int
 lwip_unix_keypressed(void)
 {
+#ifdef _WIN32
+  return 0;
+#else
   struct timeval tv = { 0L, 0L };
   fd_set fds;
   FD_ZERO(&fds);
   FD_SET(0, &fds);
   return select(1, &fds, NULL, NULL, &tv);
+#endif
 }
 #endif /* !NO_SYS */

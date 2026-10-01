@@ -228,8 +228,10 @@ static void imd_bringup_timeout(int sig)
 int imd_bringup(void **out_conn, char *udid_out, size_t udidlen,
                 char *devname, size_t dnlen, char *prodver, size_t pvlen)
 {
+#ifndef _WIN32
     signal(SIGALRM, imd_bringup_timeout);
     alarm(30);
+#endif
     printf("== Layer 0: usbmux (libusbmuxd) ==\n");
     api_device devs[API_MAX_DEVICES];
     int n = usbmux_enumerate(devs, API_MAX_DEVICES);
@@ -293,7 +295,9 @@ int imd_bringup(void **out_conn, char *udid_out, size_t udidlen,
     lockdownd_service_descriptor_free(svc);
     lockdownd_client_free(lk);          /* the service is started; the client is no longer needed */
     /* dev is intentionally NOT freed: the connection rides on it for the daemon's life. */
+#ifndef _WIN32
     alarm(0);            /* bringup done; the pump has its own (blocking) timeout handling */
+#endif
     *out_conn = conn;
     return 0;
 }

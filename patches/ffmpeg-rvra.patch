@@ -270,12 +270,20 @@
      s->sei.picture_timing.picture_struct = 0;
      s->eos = 1;
  
-+    /* RVRA is opt-in and single-threaded: the resample mutates DPB frames in place, which
-+     * frame threading would race with (and adds latency the target use, live mirroring,
-+     * cannot spend anyway). */
++    /* RVRA is opt-in (default enabled unless RPLAY_RVRA=0) and single-threaded: the resample
++     * mutates DPB frames in place, which frame threading would race with (and adds latency the
++     * target use, live mirroring, cannot spend anyway). */
 +    {
 +        const char *e = getenv("RPLAY_RVRA");
-+        s->rvra_enable = e && e[0] == '1';
++#if defined(_WIN32)
++        char win_env[32] = {0};
++        if (!e) {
++            __declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA(const char *, char *, unsigned long);
++            if (GetEnvironmentVariableA("RPLAY_RVRA", win_env, sizeof(win_env)) > 0)
++                e = win_env;
++        }
++#endif
++        s->rvra_enable = (e != NULL) ? (e[0] != '0') : 1;
 +        if (s->rvra_enable && avctx->thread_count != 1) {
 +            av_log(avctx, AV_LOG_WARNING,
 +                   "RVRA requires -threads 1; disabling RVRA reference resampling\n");
@@ -286,6 +294,14 @@
 +             * bilinear (default) | bicubic | lanczos | area, with an "_aa" suffix to
 +             * stretch the kernel by the downscale ratio (antialiasing). */
 +            const char *f = getenv("RPLAY_RVRA_FILTER");
++#if defined(_WIN32)
++            char win_f[32] = {0};
++            if (!f) {
++                __declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA(const char *, char *, unsigned long);
++                if (GetEnvironmentVariableA("RPLAY_RVRA_FILTER", win_f, sizeof(win_f)) > 0)
++                    f = win_f;
++            }
++#endif
 +            s->rvra_kernel = RVRA_KERNEL_BILINEAR;
 +            s->rvra_antialias = 0;
 +            if (f) {

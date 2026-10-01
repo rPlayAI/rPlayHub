@@ -8,6 +8,9 @@
 #include <fstream>
 #include <iostream>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 namespace rplayhub {
 
@@ -347,10 +350,18 @@ void TwinView::addOrbit(float dyaw, float dpitch) {
 }
 
 std::string TwinView::referencePath() {
+#ifdef _WIN32
+    const char* home = std::getenv("USERPROFILE");
+    if (!home) home = std::getenv("APPDATA");
+    std::string dir = std::string(home ? home : ".") + "/.config/rplayhub-android";
+    _mkdir((std::string(home ? home : ".") + "/.config").c_str());
+    _mkdir(dir.c_str());
+#else
     const char* home = std::getenv("HOME");
     std::string dir = std::string(home ? home : ".") + "/.config/rplayhub-android";
     ::mkdir((std::string(home ? home : ".") + "/.config").c_str(), 0755);
     ::mkdir(dir.c_str(), 0755);
+#endif
     return dir + "/twin-facing-me";
 }
 

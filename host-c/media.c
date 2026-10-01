@@ -2,20 +2,23 @@
 #include "rp_rtp_assembler.h"
 #include "usernet.h"
 
-#include <arpa/inet.h>
+#include "compat.h"
 #include <errno.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#ifndef _WIN32
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/select.h>
-#include <pthread.h>
-#include <stdio.h>
 #include <fcntl.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <time.h>
 #include <unistd.h>
+#endif
 
 #include "../core/rp_coredevice.h"
 #include "../core/rp_media_offer.h"
@@ -497,9 +500,9 @@ static int kernel_udp_socket(int *recv_port)
      * one is actually granted. */
     int rcvbuf = 0;
     for (int want = 4 * 1024 * 1024; want >= 512 * 1024; want /= 2) {
-        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &want, sizeof want) != 0) continue;
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (const char *)&want, sizeof want) != 0) continue;
         int got = 0; socklen_t glen = sizeof got;
-        if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &got, &glen) == 0 && got >= want / 2) {
+        if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char *)&got, &glen) == 0 && got >= want / 2) {
             rcvbuf = got;
             break;
         }
@@ -519,8 +522,13 @@ static int kernel_udp_socket(int *recv_port)
     setsockopt(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE, &(int){ NET_SERVICE_TYPE_VI }, sizeof(int));
 #endif
 
+#ifdef _WIN32
+    DWORD ms = 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&ms, sizeof ms);
+#else
     struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+#endif
     return fd;
 }
 
@@ -541,9 +549,8 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
             m->fwd_addr.sin_port = htons((uint16_t)atoi(fwd));
             /* Never let the copy stall the receive thread: non-blocking, and a send buffer big
              * enough that a bursty consumer does not push back within one frame. */
-            int fl = fcntl(m->fwd_fd, F_GETFL, 0);
-            if (fl >= 0) fcntl(m->fwd_fd, F_SETFL, fl | O_NONBLOCK);
-            setsockopt(m->fwd_fd, SOL_SOCKET, SO_SNDBUF, &(int){ 4 * 1024 * 1024 }, sizeof(int));
+            set_nonblocking(m->fwd_fd);
+            setsockopt(m->fwd_fd, SOL_SOCKET, SO_SNDBUF, (const char *)&(int){ 4 * 1024 * 1024 }, sizeof(int));
             fprintf(stderr, "  mirroring RTP to 127.0.0.1:%s for an independent receiver\n", fwd);
         }
     }
@@ -596,7 +603,11 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
         if (m->udp < 0) goto fail;
     }
 
-    if (connect_service(m, cfg->device_addr, cfg->display_port) != 0) goto fail;
+    if (connect_service(m, cfg->device_addr, cfg->display_port) != 0) {
+        fprintf(stderr, "  media_start: connect_service failed (addr=%s, port=%ld)\n",
+                cfg->device_addr, cfg->display_port);
+        goto fail;
+    }
 
     /* The offer, and the request that carries it. */
     static uint8_t offer[2048];
@@ -621,7 +632,10 @@ media_session *media_start(const media_config *cfg, media_nal_fn on_nal, void *c
     op.ltrp_enabled = 1;
     op.audio = cfg->audio;
     size_t offer_len = rp_build_offer(&op, offer, sizeof offer);
-    if (!offer_len) goto fail;
+    if (!offer_len) {
+        fprintf(stderr, "  media_start: rp_build_offer failed\n");
+        goto fail;
+    }
 
     static uint8_t input[4096];
     rp_xpc_writer w;
@@ -751,7 +765,10 @@ static int connect_service(media_session *m, const char *addr, long port)
          * SYN-retry deadline, so the SYN_SENT hang the kernel path guards against below cannot
          * pin the caller; the read deadline matches the kernel path's. */
         m->svc = usernet_connect(addr, (int)port);
-        if (m->svc < 0) return -1;
+        if (m->svc < 0) {
+            fprintf(stderr, "  connect_service: usernet_connect([%s]:%ld) failed\n", addr, port);
+            return -1;
+        }
         usernet_set_recv_timeout_ms(m->svc, 10000);
         goto handshake;
     }
@@ -764,6 +781,11 @@ static int connect_service(media_session *m, const char *addr, long port)
     if (inet_pton(AF_INET6, addr, &sa.sin6_addr) != 1) return -1;
     m->svc = socket(AF_INET6, SOCK_STREAM, 0);
     if (m->svc < 0) return -1;
+#ifdef _WIN32
+    DWORD ms = 10000;
+    setsockopt(m->svc, SOL_SOCKET, SO_RCVTIMEO, (const char *)&ms, sizeof ms);
+    setsockopt(m->svc, IPPROTO_TCP, TCP_NODELAY, (const char *)&(int){ 1 }, sizeof(int));
+#else
     struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
     setsockopt(m->svc, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     /* No Nagle: every write here is one complete request that the device must answer before we
@@ -774,10 +796,12 @@ static int connect_service(media_session *m, const char *addr, long port)
 #ifdef SO_NOSIGPIPE
     setsockopt(m->svc, SOL_SOCKET, SO_NOSIGPIPE, &(int){ 1 }, sizeof(int));
 #endif
+#endif
 
     /* Connect with a deadline. The app runs this on its main thread, and a stale tunnel address
      * (daemon restarted between tunnel_info and here) otherwise leaves it in SYN_SENT for the
      * kernel's ~75 s -- a frozen GUI that looks like a hang in whatever was clicked last. */
+#ifndef _WIN32
     int flags = fcntl(m->svc, F_GETFL, 0);
     fcntl(m->svc, F_SETFL, flags | O_NONBLOCK);
     if (connect(m->svc, (struct sockaddr *)&sa, sizeof sa) != 0) {
@@ -792,6 +816,9 @@ static int connect_service(media_session *m, const char *addr, long port)
         if (getsockopt(m->svc, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) return -1;
     }
     fcntl(m->svc, F_SETFL, flags);
+#else
+    if (connect(m->svc, (struct sockaddr *)&sa, sizeof sa) != 0) return -1;
+#endif
 
 #ifdef HAVE_USERNET
 handshake:;
@@ -800,15 +827,37 @@ handshake:;
     extern long media_sock_write(void *ctx, const void *buf, size_t len);
     rp_rxpc_io io = { media_sock_read, media_sock_write, &m->svc };
     rp_rxpc_init(&m->rxpc, io, m->rxpc_reassembly, 1 << 20, m->rxpc_raw, 1 << 16);
-    return rp_rxpc_handshake(&m->rxpc);
+    int hrc = rp_rxpc_handshake(&m->rxpc);
+    if (hrc != 0) {
+        fprintf(stderr, "  connect_service: rp_rxpc_handshake failed (rc=%d)\n", hrc);
+    }
+    return hrc;
 }
 
 /* When userspace networking is compiled in (the engine), tunnel I/O routes through tun_*, which
  * dispatches to lwIP for lwIP fds. The app compiles media.c without usernet/lwIP and only ever
  * runs the kernel path, so there it is a plain recv/send. */
 #ifdef HAVE_USERNET
-long media_sock_read(void *ctx, void *buf, size_t len)  { return tun_read(*(int *)ctx, buf, len); }
-long media_sock_write(void *ctx, const void *buf, size_t len) { return tun_write(*(int *)ctx, buf, len); }
+long media_sock_read(void *ctx, void *buf, size_t len)
+{
+    int fd = *(int *)ctx;
+    long r = tun_read(fd, buf, len);
+    if (r < 0) {
+        fprintf(stderr, "  media_sock_read: fd=%d tun_read returned %ld (errno=%d: %s)\n",
+                fd, r, errno, strerror(errno));
+    }
+    return r;
+}
+long media_sock_write(void *ctx, const void *buf, size_t len)
+{
+    int fd = *(int *)ctx;
+    long r = tun_write(fd, buf, len);
+    if (r < 0) {
+        fprintf(stderr, "  media_sock_write: fd=%d tun_write returned %ld (errno=%d: %s)\n",
+                fd, r, errno, strerror(errno));
+    }
+    return r;
+}
 #else
 long media_sock_read(void *ctx, void *buf, size_t len)  { return (long)recv(*(int *)ctx, buf, len, 0); }
 long media_sock_write(void *ctx, const void *buf, size_t len) { return (long)send(*(int *)ctx, buf, len, 0); }

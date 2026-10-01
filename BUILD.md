@@ -16,6 +16,9 @@ both as a `.deb`. The dependencies, the three `scripts/` that build FFmpeg (RVRA
 libimobiledevice stack, the `make` lines and `scripts/package-deb.sh` are all in
 [doc/LINUX.md](doc/LINUX.md).
 
+**Windows** builds the SDL2 + Dear ImGui GUI in `client-c/` using MSVC and the RVRA-patched
+FFmpeg library. See [doc/WINDOWS.md](doc/WINDOWS.md) for prerequisites and build instructions.
+
 ---
 
 ## The daemon

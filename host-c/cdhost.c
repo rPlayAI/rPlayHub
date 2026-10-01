@@ -8,31 +8,35 @@
 //
 // Build:  make            (macOS)      Run:  ./cdhost
 
-#include <arpa/inet.h>
+#include "compat.h"
 #include "tls.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <string.h>
 #include <errno.h>
+
+#ifndef _WIN32
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <poll.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
-#endif
-#include <limits.h>
-#include <sys/un.h>
-#include <unistd.h>
-
-#include <stdarg.h>
-#ifdef __APPLE__
 #include <sys/kern_control.h>
 #include <sys/sys_domain.h>
 #endif
+#include <sys/un.h>
+#include <unistd.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+#else
+static inline int setenv(const char *name, const char *value, int overwrite) {
+    (void)overwrite;
+    return _putenv_s(name, value);
+}
+#endif
 #include <pthread.h>
 #include <signal.h>
 
@@ -306,6 +310,10 @@ static int find_coredevice_tunnel(char *ours, size_t ours_len, char *device, siz
 /* Non-blocking connect sweep. Fills `out` with open ports, ascending, and returns how many. */
 static int scan_open_ports(const char *host, int lo, int hi, int *out, int max)
 {
+#ifdef _WIN32
+    (void)host; (void)lo; (void)hi; (void)out; (void)max;
+    return 0;
+#else
     int found = 0;
     const int BATCH = 256;
     for (int base = lo; base <= hi && found < max; base += BATCH) {
@@ -336,6 +344,7 @@ static int scan_open_ports(const char *host, int lo, int hi, int *out, int max)
         }
     }
     return found;
+#endif
 }
 
 /* Bring up a session on a tunnel someone else built. Returns 0 and fills addr/rsd on success. */
@@ -392,8 +401,13 @@ static int rsd_reachable(const char *device, long rsd_port) {
     if (inet_pton(AF_INET6, device, &sa.sin6_addr) != 1) return -1;
     int fd = socket(AF_INET6, SOCK_STREAM, 0);
     if (fd < 0) return -1;
+#ifdef _WIN32
+    DWORD ms = 5000;
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&ms, sizeof ms);
+#else
     struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+#endif
     int rc = connect(fd, (struct sockaddr *)&sa, sizeof sa);
     close(fd);
     return rc;
@@ -433,8 +447,13 @@ static int rsd_connect(const char *addr, long port)
     if (inet_pton(AF_INET6, addr, &sa.sin6_addr) != 1) return -1;
     int fd = socket(AF_INET6, SOCK_STREAM, 0);
     if (fd < 0) return -1;
+#ifdef _WIN32
+    DWORD ms = 8000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&ms, sizeof ms);
+#else
     struct timeval tv = { .tv_sec = 8, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+#endif
     if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
     return fd;
 }
@@ -453,7 +472,7 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
 
     if (rp_rxpc_handshake(&s) != 0) {
         fprintf(stderr, "  RemoteXPC handshake failed\n");
-        close(fd);
+        tun_close(fd);
         return -1;
     }
 
@@ -478,11 +497,11 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
     rp_xpc_dict_begin(&w);
     rp_xpc_dict_end(&w);
     rp_xpc_dict_end(&w);
-    if (w.overflow) { fprintf(stderr, "  handshake message overflowed\n"); close(fd); return -1; }
+    if (w.overflow) { fprintf(stderr, "  handshake message overflowed\n"); tun_close(fd); return -1; }
 
     if (rp_rxpc_send(&s, body, w.len, 0) != 0) {
         fprintf(stderr, "  could not send the RSD handshake\n");
-        close(fd);
+        tun_close(fd);
         return -1;
     }
 
@@ -494,7 +513,7 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
             /* Say what came back before giving up. "No answer" and "an answer without the key we
              * wanted" are different faults and were previously indistinguishable. */
             fprintf(stderr, "  no RSD answer after %d message(s)\n", replies);
-            close(fd);
+            tun_close(fd);
             return -1;
         }
         replies++;
@@ -510,7 +529,7 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
         }
         if (replies > 20) {
             fprintf(stderr, "  gave up after %d messages without a Services map\n", replies);
-            close(fd);
+            tun_close(fd);
             return -1;
         }
     }
@@ -603,7 +622,7 @@ static int rsd_enumerate(const char *addr, long port, api_session *out)
         }
     }
 
-    close(fd);
+    tun_close(fd);
     return count;
 }
 
@@ -668,7 +687,11 @@ void cdhost_rebind(const char *udid)
      * Closing from 3 upward is blunt and exactly right here: the process is about to be replaced,
      * so there is nothing left to preserve, and stdin/stdout/stderr must stay for the new image
      * to report anything. */
+#ifdef _WIN32
+    int maxfd = 4096;
+#else
     int maxfd = getdtablesize();
+#endif
     if (maxfd < 3 || maxfd > 65536) maxfd = 4096;
     for (int fd = 3; fd < maxfd; fd++) close(fd);
 
@@ -695,6 +718,10 @@ static void on_terminate(int sig)
 
 static void own_signals(void)
 {
+#ifdef _WIN32
+    signal(SIGINT, on_terminate);
+    signal(SIGTERM, on_terminate);
+#else
     sigset_t none;
     sigemptyset(&none);
     pthread_sigmask(SIG_SETMASK, &none, NULL);
@@ -710,10 +737,15 @@ static void own_signals(void)
      * looks exactly like the bug #7 self-exit from outside but is not it. Disposition is
      * process-wide, so setting it once here covers every thread and every layer. */
     signal(SIGPIPE, SIG_IGN);
+#endif
 }
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: a daemon's layer log should appear live */
+#ifdef _WIN32
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
     own_signals();
 
     /* Flags rather than environment only, because sudo strips the environment.
@@ -728,19 +760,24 @@ int main(int argc, char **argv) {
      * execv then gets "No such file or directory". _NSGetExecutablePath always returns the real
      * path. */
     {
-#ifdef __APPLE__
+#ifdef _WIN32
+        if (!GetModuleFileNameA(NULL, g_self, sizeof(g_self))) {
+            snprintf(g_self, sizeof g_self, "%s", argv[0]);
+        }
+#elif defined(__APPLE__)
         char raw[PATH_MAX];
         uint32_t sz = sizeof raw;
         if (_NSGetExecutablePath(raw, &sz) == 0 && realpath(raw, g_self)) {
             /* got it */
-        } else
-#else
-        /* Linux: /proc/self/exe is the same always-real path the dyld call provides on macOS. */
-        if (!realpath("/proc/self/exe", g_self))
-#endif
-        if (!realpath(argv[0], g_self)) {
+        } else if (!realpath(argv[0], g_self)) {
             snprintf(g_self, sizeof g_self, "%s", argv[0]);
         }
+#else
+        /* Linux: /proc/self/exe is the same always-real path the dyld call provides on macOS. */
+        if (!realpath("/proc/self/exe", g_self)) {
+            if (!realpath(argv[0], g_self)) snprintf(g_self, sizeof g_self, "%s", argv[0]);
+        }
+#endif
     }
 
     for (int i = 1; i < argc; i++) {
