@@ -45,6 +45,8 @@ typedef struct {
     uint64_t nals, frames_submitted, frames_before_keyframe, trailers;
 
     AVCodecContext *dec;
+    AVPacket       *pkt;
+    AVFrame        *frame;
     void (*on_frame)(AVFrame *f, int active_w, int active_h);
     uint64_t frames_decoded, decode_errors;
 } stream_state;

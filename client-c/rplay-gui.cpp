@@ -39,6 +39,7 @@ extern "C" {
 #ifdef _WIN32
 #include <SDL2/SDL_syswm.h>
 #include <timeapi.h>
+#include <dwmapi.h>
 #endif
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -281,6 +282,9 @@ static void on_decoded_frame(AVFrame *f, int active_w, int active_h)
 
 static void video_thread_main()
 {
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#endif
     while (!g_quit) {
         g_h264 = stream_says_h264(g_host, g_api_port);
         const AVCodec *codec = avcodec_find_decoder(g_h264 ? AV_CODEC_ID_H264 : AV_CODEC_ID_HEVC);
@@ -341,6 +345,8 @@ static void video_thread_main()
         g_stream_connected = false;
         free(parser.buf);
         free(st.au);
+        if (st.pkt) av_packet_free(&st.pkt);
+        if (st.frame) av_frame_free(&st.frame);
         avcodec_free_context(&st.dec);
         close(fd);
     }
@@ -4454,7 +4460,10 @@ int main(int argc, char **argv)
     int init_h = (int)std::lround(840.0f * g_scale);
     if (dm.w > 0 && init_w > dm.w - 80) init_w = dm.w - 80;
     if (dm.h > 0 && init_h > dm.h - 80) init_h = dm.h - 80;
-    Uint32 win_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_OPENGL;
+    Uint32 win_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+#ifndef _WIN32
+    if (!g_system_titlebar && !argb_vis.empty()) win_flags |= SDL_WINDOW_OPENGL;
+#endif
     if (!g_system_titlebar) win_flags |= SDL_WINDOW_BORDERLESS;
 
     const std::string argb_vis = g_system_titlebar ? "" : rplayhub::argbVisualId();
@@ -4483,6 +4492,10 @@ int main(int argc, char **argv)
     SDL_RendererInfo rinfo;
     if (SDL_GetRendererInfo(g_ren, &rinfo) == 0) {
         has_vsync = (rinfo.flags & SDL_RENDERER_PRESENTVSYNC) != 0;
+        printf("SDL renderer: %s%s, video driver: %s\n",
+               rinfo.name ? rinfo.name : "unknown",
+               has_vsync ? " (vsync)" : "",
+               SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "unknown");
     }
     SDL_SetWindowMinimumSize(g_win, (int)std::lround(760.0f * g_scale), (int)std::lround(520.0f * g_scale));
     SDL_ShowWindow(g_win);
@@ -4493,6 +4506,8 @@ int main(int argc, char **argv)
     SDL_VERSION(&wmInfo.version);
     if (SDL_GetWindowWMInfo(g_win, &wmInfo)) {
         HWND hwnd = wmInfo.info.win.window;
+        MARGINS margins = { -1, -1, -1, -1 };
+        DwmExtendFrameIntoClientArea(hwnd, &margins);
         HINSTANCE hInst = GetModuleHandle(NULL);
         HICON hIcon = LoadIcon(hInst, MAKEINTRESOURCE(1));
         if (hIcon) {

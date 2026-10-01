@@ -50,7 +50,7 @@ DisplayWindow::DisplayWindow(int32_t display_id, const std::string& title, int w
         if (argb) SDL_SetHint(SDL_HINT_VIDEO_X11_WINDOW_VISUALID, argb_visual.c_str());
         window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, flags);
         if (window_) {
-            renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+            renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
             if (!renderer_) renderer_ = SDL_CreateRenderer(window_, -1, 0);
         }
         if (argb) SDL_SetHint(SDL_HINT_VIDEO_X11_WINDOW_VISUALID, "");

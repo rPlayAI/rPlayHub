@@ -192,24 +192,27 @@ static void au_append(stream_state *s, const uint8_t *nal, size_t len)
 
 static void decode_au(stream_state *s, const uint8_t *data, size_t len)
 {
-    AVPacket *pkt = av_packet_alloc();
-    if (!pkt || av_new_packet(pkt, (int)len) != 0) { av_packet_free(&pkt); return; }
-    memcpy(pkt->data, data, len);
-    int rc = avcodec_send_packet(s->dec, pkt);
-    av_packet_free(&pkt);
+    if (!s->pkt) s->pkt = av_packet_alloc();
+    if (!s->frame) s->frame = av_frame_alloc();
+    if (!s->pkt || !s->frame) return;
+
+    s->pkt->data = (uint8_t *)data;
+    s->pkt->size = (int)len;
+    int rc = avcodec_send_packet(s->dec, s->pkt);
+    s->pkt->data = NULL;
+    s->pkt->size = 0;
+
     if (rc != 0 && rc != AVERROR(EAGAIN)) {
         s->decode_errors++;
         char err[64];
         av_strerror(rc, err, sizeof err);
         fprintf(stderr, "decode: %s\n", err);
     }
-    AVFrame *f = av_frame_alloc();
-    while (f && avcodec_receive_frame(s->dec, f) == 0) {
+    while (avcodec_receive_frame(s->dec, s->frame) == 0) {
         s->frames_decoded++;
-        if (s->on_frame) s->on_frame(f, s->active_w, s->active_h);
-        av_frame_unref(f);
+        if (s->on_frame) s->on_frame(s->frame, s->active_w, s->active_h);
+        av_frame_unref(s->frame);
     }
-    av_frame_free(&f);
 }
 
 void flush_au(stream_state *s)
