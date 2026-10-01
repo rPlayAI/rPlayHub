@@ -45,11 +45,24 @@ uint64_t now_ms(void)
 #endif
 }
 
+/* ------------------------------------------------------------------ codec model
+ *
+ * HEVC has a 2-byte NAL header with the type in bits 1-6; H.264 a 1-byte header, bits 0-4. */
+
+int g_h264;
+static inline int nal_type(const uint8_t *nal)      { return g_h264 ? (nal[0] & 0x1F) : ((nal[0] >> 1) & 0x3F); }
+static inline int is_param_set(int t)               { return g_h264 ? (t == 7 || t == 8) : (t >= 32 && t <= 34); }
+static inline int is_vcl(int t)                     { return g_h264 ? (t >= 1 && t <= 5) : t < 32; }
+static inline int is_keyframe(int t)                { return g_h264 ? t == 5 : (t >= 16 && t <= 23); }
+static inline int is_aud(int t)                     { return g_h264 ? (t == 9) : (t == 35); }
+static inline int header_len(void)                  { return g_h264 ? 1 : 2; }
+
 /* ------------------------------------------------------------------ Annex-B splitter
  *
  * Splits a byte stream into NAL units, tolerating reads that land anywhere — including inside a
  * start code. Everything from the last start code onward stays buffered until the next start code
- * proves the NAL complete. */
+ * proves the NAL complete. Access Unit Delimiters (AUD) are complete upon arrival and emitted
+ * immediately to present frames without buffering lag. */
 
 void annexb_feed(annexb_parser *p, const uint8_t *chunk, size_t n, nal_fn on_nal, void *ctx)
 {
@@ -89,6 +102,21 @@ void annexb_feed(annexb_parser *p, const uint8_t *chunk, size_t n, nal_fn on_nal
     if (have_any) {
         memmove(p->buf, p->buf + kept_from, p->len - kept_from);
         p->len -= kept_from;
+        /* If the remaining buffered NAL is a complete AUD, emit it immediately
+         * so the Access Unit is flushed without waiting for the next frame. */
+        if (p->len >= 4 && p->buf[0] == 0 && p->buf[1] == 0) {
+            size_t c_len = p->buf[2] == 1 ? 3 : (p->buf[2] == 0 && p->buf[3] == 1 ? 4 : 0);
+            if (c_len && p->len >= c_len + 1) {
+                int t = nal_type(p->buf + c_len);
+                if (is_aud(t)) {
+                    size_t aud_len = g_h264 ? 2 : 3;
+                    if (p->len >= c_len + aud_len) {
+                        on_nal(ctx, p->buf + c_len, aud_len);
+                        p->len = 0;
+                    }
+                }
+            }
+        }
     } else if (p->len > 1 << 20) {
         /* No start code in a megabyte: not our stream. Keep a tail so a split code survives. */
         memmove(p->buf, p->buf + p->len - 3, 3);
@@ -108,18 +136,6 @@ void annexb_finish(annexb_parser *p, nal_fn on_nal, void *ctx)
     if (e > code_len) on_nal(ctx, p->buf + code_len, e - code_len);
     p->len = 0;
 }
-
-/* ------------------------------------------------------------------ codec model
- *
- * HEVC has a 2-byte NAL header with the type in bits 1-6; H.264 a 1-byte header, bits 0-4. */
-
-int g_h264;
-static int nal_type(const uint8_t *nal)      { return g_h264 ? (nal[0] & 0x1F) : ((nal[0] >> 1) & 0x3F); }
-static int is_param_set(int t)               { return g_h264 ? (t == 7 || t == 8) : (t >= 32 && t <= 34); }
-static int is_vcl(int t)                     { return g_h264 ? (t >= 1 && t <= 5) : t < 32; }
-static int is_keyframe(int t)                { return g_h264 ? t == 5 : (t >= 16 && t <= 23); }
-static int is_aud(int t)                     { return g_h264 ? (t == 9) : (t == 35); }
-static int header_len(void)                  { return g_h264 ? 1 : 2; }
 
 /* ------------------------------------------------------------------ active-rect trailer
  *

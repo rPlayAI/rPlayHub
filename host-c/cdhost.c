@@ -921,7 +921,7 @@ int main(int argc, char **argv) {
     if (!session.ssrc) session.ssrc = 1;
     {
         const char *k = getenv("RPLAY_KEYFRAME_EVERY_S");
-        session.keyframe_every_s = k ? atof(k) : 3.0;
+        session.keyframe_every_s = k ? atof(k) : 0.0;
     }
     if (rsd_enumerate(addr, rsd, &session) < 0)
         fprintf(stderr, "  service discovery failed\n");

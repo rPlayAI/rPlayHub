@@ -2143,6 +2143,8 @@ static size_t  ps_len[3];
 static uint8_t keyframe_cache[RP_RTP_MAX_NAL + 4];
 static size_t  keyframe_len;
 
+static int g_is_h264 = 0;
+
 /* Which slot a parameter-set NAL belongs in. `annexb` starts with the 4-byte start code. Both
  * grammars are tried; the HEVC read of an h264 SPS/PPS lands outside 32..34 and vice versa, so
  * the classification is unambiguous for NALs media.c already flagged as parameter sets. */
@@ -2150,10 +2152,10 @@ static int ps_slot(const uint8_t *annexb, size_t len)
 {
     if (len < 5) return -1;
     int hevc_t = (annexb[4] >> 1) & 0x3F;
-    if (hevc_t >= 32 && hevc_t <= 34) return hevc_t - 32;
+    if (hevc_t >= 32 && hevc_t <= 34) { g_is_h264 = 0; return hevc_t - 32; }
     int avc_t = annexb[4] & 0x1F;
-    if (avc_t == 7) return 1;
-    if (avc_t == 8) return 2;
+    if (avc_t == 7) { g_is_h264 = 1; return 1; }
+    if (avc_t == 8) { g_is_h264 = 1; return 2; }
     return -1;
 }
 
@@ -2212,10 +2214,12 @@ static void on_media_nal(void *ctx, const uint8_t *annexb, size_t len,
 {
     (void)ctx;
     if (end_of_frame) {
-        /* Send Access Unit Delimiter (AUD) so Annex-B players (rplay-gui, ffplay)
+        /* Send Access Unit Delimiter (AUD) with trailing start code so Annex-B players (rplay-gui, ffplay)
          * immediately complete the preceding slice and present the frame without 1-frame delay. */
-        static const uint8_t hevc_aud[7] = { 0, 0, 0, 1, 0x46, 0x01, 0x50 };
-        viewers_write(hevc_aud, sizeof hevc_aud);
+        static const uint8_t hevc_aud[11] = { 0, 0, 0, 1, 0x46, 0x01, 0x50, 0, 0, 0, 1 };
+        static const uint8_t h264_aud[10] = { 0, 0, 0, 1, 0x09, 0x10, 0, 0, 0, 1 };
+        if (g_is_h264) viewers_write(h264_aud, sizeof h264_aud);
+        else           viewers_write(hevc_aud, sizeof hevc_aud);
         return;
     }
     if (!annexb || !len) return;

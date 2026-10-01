@@ -245,6 +245,7 @@ static std::atomic<uint64_t> g_frames_decoded{0};
 static std::atomic<uint64_t> g_decode_errors{0};
 static std::atomic<uint64_t> g_nals_total{0};
 static std::atomic<uint64_t> g_trailers_total{0};
+static std::atomic<float>    g_live_fps{0.0f};
 
 /* Also populate a DecodedFrame for DisplayWindow (pop-out window) when active. */
 static rplayhub::DecodedFrame g_popout_frame;
@@ -256,6 +257,17 @@ static void on_decoded_frame(AVFrame *f, int active_w, int active_h)
         printf("video: first frame decoded (%dx%d, active %dx%d)\n", f->width, f->height, active_w, active_h);
         fflush(stdout);
         logged_first = true;
+    }
+    static uint32_t s_fps_frames = 0;
+    static uint64_t s_fps_last_ms = 0;
+    s_fps_frames++;
+    uint64_t now = now_ms();
+    if (now - s_fps_last_ms >= 500) {
+        if (s_fps_last_ms > 0) {
+            g_live_fps = (float)s_fps_frames * 1000.0f / (float)(now - s_fps_last_ms);
+        }
+        s_fps_frames = 0;
+        s_fps_last_ms = now;
     }
     std::lock_guard<std::mutex> lk(g_frame_mu);
     if (!g_latest_frame) g_latest_frame = av_frame_alloc();
@@ -315,14 +327,6 @@ static void video_thread_main()
                     ssize_t more = recv(fd, (char *)buf, (int)std::min<size_t>(sizeof buf, (size_t)avail), 0);
                     if (more <= 0) break;
                     annexb_feed(&parser, buf, (size_t)more, handle_nal, &st);
-                }
-                /* Network burst complete: finish the pending NAL and flush AU immediately.
-                 * This eliminates the 1-frame buffering lag and stop-and-go timer stalls! */
-                if (parser.len >= 4) {
-                    annexb_finish(&parser, handle_nal, &st);
-                }
-                if (st.au_len) {
-                    flush_au(&st);
                 }
             } else if (r == 0) {
                 break;
@@ -2225,7 +2229,12 @@ static void render_titlebar(float win_w)
     } else if (g_stream_connected && g_vtex_w > 0) {
         char sbuf[128];
         double mbps = g_stream_info.is_object() ? g_stream_info.value("mbps", 0.0) : 0.0;
-        snprintf(sbuf, sizeof sbuf, "%s \xc2\xb7 %.1f Mbps", g_h264 ? "H.264" : "HEVC", mbps);
+        float fps = g_live_fps.load();
+        if (fps > 0.0f) {
+            snprintf(sbuf, sizeof sbuf, "%s \xc2\xb7 %.1f Mbps \xc2\xb7 %.0f FPS", g_h264 ? "H.264" : "HEVC", mbps, fps);
+        } else {
+            snprintf(sbuf, sizeof sbuf, "%s \xc2\xb7 %.1f Mbps", g_h264 ? "H.264" : "HEVC", mbps);
+        }
         status_str = sbuf;
         status_col = IM_COL32(52, 160, 90, 255);
     } else if (!g_bound_udid.empty()) {
@@ -3337,6 +3346,12 @@ static void render_info_subtab_device(float width, float avail_h)
         stream_rows.push_back({"Active Picture", std::to_string(g_vtex_w) + "\xc3\x97" + std::to_string(g_vtex_h)});
     }
     stream_rows.push_back({"Frames Decoded", std::to_string(g_frames_decoded.load())});
+    float cur_fps = g_live_fps.load();
+    if (cur_fps > 0.0f) {
+        char fbuf[32];
+        snprintf(fbuf, sizeof fbuf, "%.1f FPS", cur_fps);
+        stream_rows.push_back({"Framerate", fbuf});
+    }
     if (g_stream_info.is_object() && !g_stream_info.empty()) {
         char mbuf[32];
         snprintf(mbuf, sizeof mbuf, "%.2f Mbps", g_stream_info.value("mbps", 0.0));
